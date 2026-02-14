@@ -1,4 +1,5 @@
 mod scanner;
+mod metadata;
 
 // Learn more about Tauri commands at https://tauri.app/develop/calling-rust/
 #[tauri::command]
@@ -14,7 +15,8 @@ pub fn run() {
         .plugin(tauri_plugin_fs::init())
         .invoke_handler(tauri::generate_handler![
             greet,
-            scanner::scan_directory
+            scanner::scan_directory,
+            metadata::get_metadata
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

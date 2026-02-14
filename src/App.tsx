@@ -1,11 +1,14 @@
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import { invoke, convertFileSrc } from "@tauri-apps/api/core";
 import { open } from "@tauri-apps/plugin-dialog";
-import { useAppStore } from "./store/useAppStore";
-import { FolderOpen, Image as ImageIcon } from "lucide-react";
+import { useAppStore, ImageMetadata } from "./store/useAppStore";
+import { FolderOpen, Image as ImageIcon, Info } from "lucide-react";
 
 function App() {
-  const { folderPath, images, currentIndex, setFolderPath, setImages, setCurrentIndex } = useAppStore();
+  const { 
+    folderPath, images, currentIndex, currentMetadata,
+    setFolderPath, setImages, setCurrentIndex, setCurrentMetadata 
+  } = useAppStore();
   const [loading, setLoading] = useState(false);
 
   const handleOpenFolder = async () => {
@@ -26,6 +29,20 @@ function App() {
       setLoading(false);
     }
   };
+
+  useEffect(() => {
+    if (images.length > 0 && images[currentIndex]) {
+      const fetchMetadata = async () => {
+        try {
+          const meta = await invoke("get_metadata", { path: images[currentIndex].path });
+          setCurrentMetadata(meta as ImageMetadata);
+        } catch (error) {
+          console.error("Failed to fetch metadata:", error);
+        }
+      };
+      fetchMetadata();
+    }
+  }, [currentIndex, images]);
 
   const currentImage = images[currentIndex];
 
@@ -49,7 +66,7 @@ function App() {
       {/* Main Content */}
       <main className="flex-1 overflow-hidden flex">
         {/* Sidebar / List */}
-        <aside className="w-64 border-r border-neutral-700 bg-neutral-800/50 overflow-y-auto">
+        <aside className="w-64 border-r border-neutral-700 bg-neutral-800/50 overflow-y-auto shrink-0">
           {loading ? (
             <div className="p-4 text-neutral-400 text-sm italic">Scanning...</div>
           ) : images.length > 0 ? (
@@ -72,13 +89,14 @@ function App() {
         </aside>
 
         {/* Viewer */}
-        <section className="flex-1 flex flex-col items-center justify-center p-4 bg-black overflow-hidden">
+        <section className="flex-1 flex flex-col items-center justify-center p-4 bg-black overflow-hidden relative">
           {images.length > 0 ? (
             <div className="relative w-full h-full flex items-center justify-center">
                <img 
+                 key={currentImage.path}
                  src={convertFileSrc(currentImage.path)} 
                  alt={currentImage.name}
-                 className="max-w-full max-h-full object-contain shadow-2xl"
+                 className="max-w-full max-h-full object-contain shadow-2xl transition-opacity duration-200"
                />
             </div>
           ) : (
@@ -88,14 +106,70 @@ function App() {
             </div>
           )}
         </section>
+
+        {/* Metadata Sidebar */}
+        <aside className="w-80 border-l border-neutral-700 bg-neutral-800 overflow-y-auto shrink-0 p-4">
+          <div className="flex items-center gap-2 mb-4 text-neutral-300 font-bold border-b border-neutral-700 pb-2">
+            <Info className="w-4 h-4" />
+            Metadata
+          </div>
+          {currentMetadata ? (
+            <div className="space-y-4 text-xs">
+              {currentMetadata.prompt && (
+                <div>
+                  <div className="text-blue-400 font-bold mb-1 uppercase tracking-tighter opacity-70">Prompt</div>
+                  <div className="bg-neutral-700/30 p-2 rounded leading-relaxed select-all">
+                    {currentMetadata.prompt}
+                  </div>
+                </div>
+              )}
+              {currentMetadata.negative_prompt && (
+                <div>
+                  <div className="text-red-400 font-bold mb-1 uppercase tracking-tighter opacity-70">Negative Prompt</div>
+                  <div className="bg-neutral-700/30 p-2 rounded leading-relaxed select-all">
+                    {currentMetadata.negative_prompt}
+                  </div>
+                </div>
+              )}
+              <div className="grid grid-cols-2 gap-2">
+                {currentMetadata.steps && (
+                  <div className="bg-neutral-700/30 p-2 rounded">
+                    <div className="text-neutral-500 scale-90 origin-left">Steps</div>
+                    <div className="font-bold">{currentMetadata.steps}</div>
+                  </div>
+                )}
+                {currentMetadata.cfg && (
+                  <div className="bg-neutral-700/30 p-2 rounded">
+                    <div className="text-neutral-500 scale-90 origin-left">CFG</div>
+                    <div className="font-bold">{currentMetadata.cfg}</div>
+                  </div>
+                )}
+                {currentMetadata.sampler && (
+                  <div className="bg-neutral-700/30 p-2 rounded col-span-2">
+                    <div className="text-neutral-500 scale-90 origin-left">Sampler</div>
+                    <div className="font-bold">{currentMetadata.sampler}</div>
+                  </div>
+                )}
+                {currentMetadata.model && (
+                  <div className="bg-neutral-700/30 p-2 rounded col-span-2">
+                    <div className="text-neutral-500 scale-90 origin-left">Model</div>
+                    <div className="font-bold truncate">{currentMetadata.model}</div>
+                  </div>
+                )}
+              </div>
+            </div>
+          ) : (
+            <div className="text-neutral-500 italic text-sm">No metadata found or loading...</div>
+          )}
+        </aside>
       </main>
 
       {/* Footer / Status */}
       <footer className="px-4 py-1 bg-neutral-800 border-t border-neutral-700 text-[10px] text-neutral-500 flex justify-between">
-        <div>
+        <div className="truncate pr-4">
           {folderPath || 'No folder selected'}
         </div>
-        <div>
+        <div className="shrink-0">
           {images.length > 0 ? `${currentIndex + 1} / ${images.length} images` : '0 images'}
         </div>
       </footer>
