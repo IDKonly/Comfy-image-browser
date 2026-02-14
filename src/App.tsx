@@ -1,15 +1,18 @@
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, useMemo } from "react";
 import { invoke, convertFileSrc } from "@tauri-apps/api/core";
 import { open, confirm } from "@tauri-apps/plugin-dialog";
 import { readFile } from "@tauri-apps/plugin-fs";
-import { useAppStore, ImageMetadata } from "./store/useAppStore";
-import { FolderOpen, Image as ImageIcon, Info, Trash2, CheckCircle, Layers, ChevronLeft, ChevronRight, Search, X, FolderInput } from "lucide-react";
+import { LazyStore } from "@tauri-apps/plugin-store";
+import { useAppStore, ImageMetadata, Shortcuts, DEFAULT_SHORTCUTS } from "./store/useAppStore";
+import { FolderOpen, Image as ImageIcon, Info, Trash2, CheckCircle, Layers, ChevronLeft, ChevronRight, Search, X, FolderInput, Settings, Keyboard } from "lucide-react";
 import { useToast } from "./components/Toast";
+
+const store = new LazyStore(".settings.json");
 
 function App() {
   const { 
-    folderPath, images, currentIndex, currentMetadata,
-    setFolderPath, setImages, setCurrentIndex, setCurrentMetadata, removeImage
+    folderPath, images, currentIndex, currentMetadata, shortcuts,
+    setFolderPath, setImages, setCurrentIndex, setCurrentMetadata, removeImages, setShortcuts
   } = useAppStore();
   const [loading, setLoading] = useState(false);
   const [batchMode, setBatchMode] = useState(false);
@@ -17,14 +20,47 @@ function App() {
   const [searchQuery, setSearchQuery] = useState("");
   const [isSearching, setIsSearching] = useState(false);
   const [imageSrc, setImageSrc] = useState<string>("");
+  const [showSettings, setShowSettings] = useState(false);
   const { showToast } = useToast();
+
+  // Persistence: Load State
+  useEffect(() => {
+    const init = async () => {
+      const savedFolder = await store.get<string>("lastFolder");
+      const savedIndex = await store.get<number>("lastIndex");
+      const savedShortcuts = await store.get<Shortcuts>("shortcuts");
+      
+      if (savedShortcuts) setShortcuts(savedShortcuts);
+      if (savedFolder) {
+        setLoading(true);
+        setFolderPath(savedFolder);
+        try {
+          const result = await invoke("scan_directory", { path: savedFolder });
+          setImages(result as any);
+          if (savedIndex !== undefined && (result as any[]).length > savedIndex) {
+            setCurrentIndex(savedIndex);
+          }
+        } catch (e) {
+          console.error("Failed to restore folder", e);
+        }
+        setLoading(false);
+      }
+    };
+    init();
+  }, [setFolderPath, setImages, setCurrentIndex, setShortcuts]);
+
+  // Persistence: Save State
+  useEffect(() => {
+    if (folderPath) {
+      store.set("lastFolder", folderPath);
+      store.set("lastIndex", currentIndex);
+      store.save();
+    }
+  }, [folderPath, currentIndex]);
 
   const handleOpenFolder = async () => {
     try {
-      const selected = await open({
-        directory: true,
-        multiple: false,
-      });
+      const selected = await open({ directory: true, multiple: false });
       if (selected && typeof selected === 'string') {
         setLoading(true);
         setFolderPath(selected);
@@ -34,7 +70,6 @@ function App() {
         showToast(`Loaded ${ (result as any[]).length } images`, 'success');
       }
     } catch (error) {
-      console.error("Failed to open folder:", error);
       setLoading(false);
       showToast("Failed to open folder", 'error');
     }
@@ -48,17 +83,16 @@ function App() {
       setImages(result as any);
       return;
     }
-
     try {
       setLoading(true);
       setIsSearching(true);
       const paths = await invoke("search_images", { folder: folderPath, query: searchQuery }) as string[];
-      const filtered = (await invoke("scan_directory", { path: folderPath }) as any[]).filter(img => paths.includes(img.path));
+      const fullList = await invoke("scan_directory", { path: folderPath }) as any[];
+      const filtered = fullList.filter(img => paths.includes(img.path));
       setImages(filtered);
       setLoading(false);
       showToast(`Found ${filtered.length} matches`, 'info');
     } catch (error) {
-      console.error("Search failed:", error);
       setLoading(false);
     }
   };
@@ -76,15 +110,11 @@ function App() {
 
   const moveSearchResults = async () => {
     if (!isSearching || images.length === 0 || !searchQuery) return;
-    
     const folderName = searchQuery.replace(/[^a-z0-9]/gi, '_').toLowerCase();
     const ok = await confirm(`Move ${images.length} files to folder "${folderName}"?`);
     if (ok) {
       try {
-        await invoke("move_files_to_folder", { 
-          paths: images.map(img => img.path), 
-          folderName 
-        });
+        await invoke("move_files_to_folder", { paths: images.map(img => img.path), folderName });
         showToast(`Moved ${images.length} files to ${folderName}`, 'success');
         clearSearch();
       } catch (error) {
@@ -113,37 +143,50 @@ function App() {
 
   const handleDelete = useCallback(async () => {
     if (images.length === 0) return;
-    const current = images[currentIndex];
-    const ok = await confirm(`Are you sure you want to delete ${current.name}?`, { title: 'Confirm Delete', kind: 'warning' });
+    
+    let targets: number[] = [currentIndex];
+    if (batchMode && batchRange) {
+        targets = [];
+        for (let i = batchRange[0]; i <= batchRange[1]; i++) targets.push(i);
+    }
+
+    const msg = targets.length > 1 ? `Delete BATCH of ${targets.length} images?` : `Delete ${images[currentIndex].name}?`;
+    const ok = await confirm(msg, { title: 'Confirm Delete', kind: 'warning' });
     if (ok) {
       try {
-        await invoke("delete_to_trash", { path: current.path });
-        removeImage(currentIndex);
-        showToast(`Deleted ${current.name}`, 'info');
+        const paths = targets.map(i => images[i].path);
+        await invoke("delete_to_trash", { paths });
+        removeImages(targets);
+        showToast(targets.length > 1 ? `Deleted Batch (${targets.length})` : `Deleted Image`, 'info');
       } catch (error) {
-        console.error("Delete failed:", error);
         showToast("Delete failed", 'error');
       }
     }
-  }, [images, currentIndex, removeImage, showToast]);
+  }, [images, currentIndex, batchMode, batchRange, removeImages, showToast]);
 
   const handleKeep = useCallback(async () => {
     if (images.length === 0) return;
-    const current = images[currentIndex];
+    
+    let targets: number[] = [currentIndex];
+    if (batchMode && batchRange) {
+        targets = [];
+        for (let i = batchRange[0]; i <= batchRange[1]; i++) targets.push(i);
+    }
+
     try {
-      await invoke("move_to_keep", { path: current.path });
-      removeImage(currentIndex);
-      showToast(`Moved ${current.name} to _Keep`, 'success');
+      const paths = targets.map(i => images[i].path);
+      await invoke("move_to_keep", { paths });
+      removeImages(targets);
+      showToast(targets.length > 1 ? `Kept Batch (${targets.length})` : `Kept Image`, 'success');
     } catch (error) {
       showToast("Move failed", 'error');
     }
-  }, [images, currentIndex, removeImage, showToast]);
+  }, [images, currentIndex, batchMode, batchRange, removeImages, showToast]);
 
   const nextImage = useCallback(() => {
     if (images.length === 0) return;
     if (batchMode && batchRange) {
-        const nextIndex = (batchRange[1] + 1) % images.length;
-        setCurrentIndex(nextIndex);
+        setCurrentIndex((batchRange[1] + 1) % images.length);
     } else {
         setCurrentIndex((currentIndex + 1) % images.length);
     }
@@ -152,8 +195,7 @@ function App() {
   const prevImage = useCallback(() => {
     if (images.length === 0) return;
     if (batchMode && batchRange) {
-        let prevIndex = (batchRange[0] - 1 + images.length) % images.length;
-        setCurrentIndex(prevIndex);
+        setCurrentIndex((batchRange[0] - 1 + images.length) % images.length);
     } else {
         setCurrentIndex((currentIndex - 1 + images.length) % images.length);
     }
@@ -161,80 +203,38 @@ function App() {
 
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
-      if (document.activeElement?.tagName === 'INPUT') return;
+      if (document.activeElement?.tagName === 'INPUT' || showSettings) return;
       if (images.length === 0) return;
       
-      switch(e.key) {
-        case 'ArrowRight':
-          nextImage();
-          break;
-        case 'ArrowLeft':
-          prevImage();
-          break;
-        case 'Delete':
-          handleDelete();
-          break;
-        case 'k':
-        case 'K':
-          handleKeep();
-          break;
-        case 'b':
-        case 'B':
-          setBatchMode(prev => !prev);
-          showToast(`Batch Mode ${!batchMode ? 'ON' : 'OFF'}`, 'info');
-          break;
-        case '/':
-          e.preventDefault();
-          document.getElementById('search-input')?.focus();
-          break;
-      }
+      const key = e.key;
+      if (key === shortcuts.next) nextImage();
+      else if (key === shortcuts.prev) prevImage();
+      else if (key === shortcuts.delete) handleDelete();
+      else if (key === shortcuts.keep) handleKeep();
+      else if (key === shortcuts.batch) setBatchMode(p => !p);
+      else if (key === shortcuts.search) { e.preventDefault(); document.getElementById('search-input')?.focus(); }
     };
 
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [images.length, nextImage, prevImage, handleDelete, handleKeep, batchMode, showToast]);
+  }, [images.length, nextImage, prevImage, handleDelete, handleKeep, batchMode, shortcuts, showSettings]);
 
   useEffect(() => {
     if (images.length > 0 && images[currentIndex]) {
       const current = images[currentIndex];
-      
-      // Update metadata
-      const fetchMetadata = async () => {
-        try {
-          const meta = await invoke("get_metadata", { path: current.path });
-          setCurrentMetadata(meta as ImageMetadata);
-        } catch (error) {
-          console.error("Failed to fetch metadata:", error);
-        }
-      };
-      fetchMetadata();
+      invoke("get_metadata", { path: current.path })
+        .then(m => setCurrentMetadata(m as ImageMetadata))
+        .catch(() => {});
 
-      // Update Image Source with fallback
-      const updateImageSource = async () => {
-        try {
-          const assetUrl = convertFileSrc(current.path);
-          setImageSrc(assetUrl);
-        } catch (error) {
-          console.error("Asset URL conversion failed, attempting binary read:", error);
-          try {
-            const data = await readFile(current.path);
-            const blob = new Blob([data], { type: 'image/png' });
-            setImageSrc(URL.createObjectURL(blob));
-          } catch (e) {
-            console.error("Binary read failed:", e);
-          }
-        }
-      };
-      updateImageSource();
+      const assetUrl = convertFileSrc(current.path);
+      setImageSrc(assetUrl);
     }
   }, [currentIndex, images, setCurrentMetadata]);
 
-  const currentImage = images[currentIndex];
-
-  const isInBatch = (idx: number) => {
-    if (!batchRange) return false;
-    return idx >= batchRange[0] && idx <= batchRange[1];
-  };
+  const batchImages = useMemo(() => {
+    if (!batchMode || !batchRange) return [];
+    return images.slice(batchRange[0], batchRange[1] + 1);
+  }, [images, batchMode, batchRange]);
 
   return (
     <div className="flex flex-col h-screen bg-neutral-950 text-neutral-100 font-sans overflow-hidden">
@@ -245,9 +245,7 @@ function App() {
             <div className="w-8 h-8 bg-blue-600 rounded-lg flex items-center justify-center shadow-lg shadow-blue-900/20">
               <ImageIcon className="w-5 h-5 text-white" />
             </div>
-            <h1 className="text-lg font-black tracking-tighter uppercase italic text-white">
-              ComfyView
-            </h1>
+            <h1 className="text-lg font-black tracking-tighter uppercase italic text-white">ComfyView</h1>
           </div>
           
           <div className="h-6 w-px bg-white/5" />
@@ -255,9 +253,7 @@ function App() {
           <button
             onClick={() => setBatchMode(!batchMode)}
             className={`flex items-center gap-2 px-4 py-1.5 rounded-full text-[10px] font-bold uppercase transition-all border ${
-              batchMode 
-                ? 'bg-blue-600 border-blue-500 text-white shadow-[0_0_15px_rgba(37,99,235,0.3)]' 
-                : 'bg-neutral-800 border-neutral-700 text-neutral-400 hover:bg-neutral-700 hover:border-neutral-600'
+              batchMode ? 'bg-blue-600 border-blue-500 text-white shadow-[0_0_15px_rgba(37,99,235,0.3)]' : 'bg-neutral-800 border-neutral-700 text-neutral-400 hover:bg-neutral-700 hover:border-neutral-600'
             }`}
           >
             <Layers className="w-3.5 h-3.5" />
@@ -268,28 +264,12 @@ function App() {
         <div className="flex items-center gap-3">
            {images.length > 0 && (
              <div className="flex items-center gap-2 bg-neutral-800/50 p-1.5 rounded-xl border border-white/5">
-               <button
-                onClick={handleKeep}
-                className="flex items-center gap-2 px-4 py-1.5 bg-neutral-900 hover:bg-green-600 text-neutral-300 hover:text-white rounded-lg text-[10px] font-bold uppercase transition-all shadow-sm"
-                title="Move to _Keep (K)"
-              >
-                <CheckCircle className="w-3.5 h-3.5" />
-                Keep
-              </button>
-              <button
-                onClick={handleDelete}
-                className="flex items-center gap-2 px-4 py-1.5 bg-neutral-900 hover:bg-red-600 text-neutral-300 hover:text-white rounded-lg text-[10px] font-bold uppercase transition-all shadow-sm"
-                title="Delete to _Trash (Del)"
-              >
-                <Trash2 className="w-3.5 h-3.5" />
-                Trash
-              </button>
+               <button onClick={handleKeep} className="px-4 py-1.5 bg-neutral-900 hover:bg-green-600 rounded-lg text-[10px] font-bold uppercase transition-all">Keep</button>
+               <button onClick={handleDelete} className="px-4 py-1.5 bg-neutral-900 hover:bg-red-600 rounded-lg text-[10px] font-bold uppercase transition-all">Trash</button>
              </div>
            )}
-          <button
-            onClick={handleOpenFolder}
-            className="flex items-center gap-2 px-5 py-2 bg-blue-600 hover:bg-blue-500 text-white rounded-xl text-[10px] font-black uppercase transition-all shadow-lg shadow-blue-900/20 active:scale-95"
-          >
+          <button onClick={() => setShowSettings(true)} className="p-2 hover:bg-white/5 rounded-lg transition-colors text-neutral-500 hover:text-white"><Settings className="w-5 h-5" /></button>
+          <button onClick={handleOpenFolder} className="flex items-center gap-2 px-5 py-2 bg-blue-600 hover:bg-blue-500 rounded-xl text-[10px] font-black uppercase transition-all shadow-lg active:scale-95">
             <FolderOpen className="w-4 h-4" />
             Open Folder
           </button>
@@ -298,213 +278,105 @@ function App() {
 
       {/* Main Content */}
       <main className="flex-1 overflow-hidden flex">
-        {/* Sidebar / List */}
+        {/* Sidebar: Thumbnails */}
         <aside className="w-72 border-r border-white/5 bg-neutral-900 flex flex-col shrink-0 overflow-hidden">
-          {/* Search Bar */}
           <div className="p-4 space-y-3">
-            <div className="relative group">
-              <Search className={`absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 transition-colors ${searchQuery ? 'text-blue-500' : 'text-neutral-600'}`} />
-              <input
-                id="search-input"
-                type="text"
-                placeholder="Search prompt or filename... (/)"
-                value={searchQuery}
-                onChange={(e) => setSearchQuery(e.target.value)}
-                onKeyDown={(e) => e.key === 'Enter' && handleSearch()}
-                className="w-full bg-neutral-950 border border-white/5 rounded-xl py-2.5 pl-10 pr-10 text-[11px] text-neutral-200 placeholder:text-neutral-700 focus:outline-none focus:border-blue-500/50 focus:ring-4 focus:ring-blue-500/10 transition-all shadow-inner"
-              />
-              {searchQuery && (
-                <button 
-                  onClick={clearSearch}
-                  className="absolute right-3 top-1/2 -translate-y-1/2 p-1 hover:bg-neutral-800 rounded-full text-neutral-600 hover:text-neutral-300 transition-colors"
-                >
-                  <X className="w-3.5 h-3.5" />
-                </button>
-              )}
+            <div className="relative">
+              <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-neutral-600" />
+              <input id="search-input" type="text" placeholder="Search... (/)" value={searchQuery} onChange={e => setSearchQuery(e.target.value)} onKeyDown={e => e.key === 'Enter' && handleSearch()} className="w-full bg-neutral-950 border border-white/5 rounded-xl py-2.5 pl-10 text-[11px] focus:outline-none focus:border-blue-500/50" />
             </div>
-
-            {isSearching && (
-              <button 
-                onClick={moveSearchResults}
-                className="w-full flex items-center justify-center gap-2 py-2 bg-neutral-800 hover:bg-blue-600/20 border border-white/5 hover:border-blue-500/30 rounded-xl text-[10px] font-bold text-neutral-400 hover:text-blue-400 transition-all"
-              >
-                <FolderInput className="w-3.5 h-3.5" />
-                Classify results to folder
-              </button>
-            )}
+            {isSearching && <button onClick={moveSearchResults} className="w-full py-2 bg-neutral-800 hover:bg-blue-600/20 rounded-xl text-[10px] font-bold text-neutral-400">Classify results</button>}
           </div>
 
-          <div className="flex-1 overflow-y-auto scrollbar-thin px-2 pb-4">
-            {loading ? (
-              <div className="p-12 flex flex-col items-center gap-4 animate-pulse">
-                <div className="w-10 h-10 rounded-full border-2 border-blue-500 border-t-transparent animate-spin" />
-                <div className="text-[10px] text-neutral-500 font-black uppercase tracking-[0.2em]">Processing</div>
+          <div className="flex-1 overflow-y-auto scrollbar-thin px-2 pb-4 grid grid-cols-2 gap-2 content-start">
+            {images.map((img, idx) => (
+              <div key={img.path} onClick={() => setCurrentIndex(idx)} className={`group relative aspect-square cursor-pointer rounded-lg overflow-hidden border-2 transition-all ${idx === currentIndex ? 'border-blue-500 scale-95' : (batchRange && idx >= batchRange[0] && idx <= batchRange[1]) ? 'border-blue-500/30' : 'border-transparent opacity-60 hover:opacity-100'}`}>
+                <img src={convertFileSrc(img.path)} className="w-full h-full object-cover" loading="lazy" />
+                <div className="absolute inset-0 bg-gradient-to-t from-black/80 via-transparent to-transparent opacity-0 group-hover:opacity-100 transition-opacity flex items-end p-2">
+                   <span className="text-[8px] truncate font-mono text-white/70">{img.name}</span>
+                </div>
               </div>
-            ) : images.length > 0 ? (
-              <div className="space-y-0.5">
-                {images.map((img, idx) => (
-                  <div
-                    key={img.path}
-                    onClick={() => setCurrentIndex(idx)}
-                    className={`group px-4 py-2.5 text-[11px] truncate cursor-pointer rounded-xl transition-all border ${
-                      idx === currentIndex 
-                        ? 'bg-blue-600 border-blue-500 text-white shadow-lg shadow-blue-900/20 font-bold' 
-                        : isInBatch(idx)
-                          ? 'bg-blue-500/5 border-blue-500/20 text-blue-300'
-                          : 'border-transparent text-neutral-500 hover:text-neutral-200 hover:bg-white/5'
-                    }`}
-                  >
-                    <div className="flex items-center gap-3">
-                      <span className={`text-[9px] font-mono opacity-40 tabular-nums ${idx === currentIndex ? 'opacity-100' : ''}`}>
-                        {String(idx + 1).padStart(3, '0')}
-                      </span>
-                      <span className="truncate">{img.name}</span>
-                    </div>
+            ))}
+          </div>
+        </aside>
+
+        {/* Viewer / Grid */}
+        <section className="flex-1 flex flex-col bg-neutral-950 overflow-hidden relative group">
+          {images.length > 0 ? (
+            batchMode ? (
+              <div className="w-full h-full p-10 overflow-y-auto grid grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-6 animate-in fade-in zoom-in-95 duration-500 scrollbar-thin">
+                {batchImages.map((img, i) => (
+                  <div key={img.path} className={`aspect-auto group/item relative rounded-xl overflow-hidden border-2 transition-all hover:scale-[1.02] ${images.indexOf(img) === currentIndex ? 'border-blue-500 ring-4 ring-blue-500/20' : 'border-white/5'}`} onClick={() => setCurrentIndex(images.indexOf(img))}>
+                    <img src={convertFileSrc(img.path)} className="w-full object-contain bg-neutral-900" />
+                    <div className="absolute top-2 left-2 bg-black/60 backdrop-blur-md px-2 py-1 rounded text-[8px] font-bold text-white/50">{i + 1}</div>
                   </div>
                 ))}
               </div>
             ) : (
-              <div className="flex flex-col items-center justify-center py-20 opacity-20">
-                <ImageIcon className="w-12 h-12 mb-4" />
-                <div className="text-[10px] font-black uppercase tracking-widest text-center">
-                  {searchQuery ? 'No Matches Found' : 'Select a Folder'}
+              <div className="relative w-full h-full flex items-center justify-center p-10">
+                <img key={images[currentIndex].path} src={imageSrc} className="max-w-full max-h-full object-contain shadow-2xl animate-image-change rounded-sm" />
+                <button onClick={prevImage} className="absolute left-6 p-4 rounded-2xl bg-neutral-900/80 text-white opacity-0 group-hover:opacity-100 transition-all hover:bg-blue-600 hover:scale-110 shadow-2xl backdrop-blur-xl"><ChevronLeft className="w-8 h-8" /></button>
+                <button onClick={nextImage} className="absolute right-6 p-4 rounded-2xl bg-neutral-900/80 text-white opacity-0 group-hover:opacity-100 transition-all hover:bg-blue-600 hover:scale-110 shadow-2xl backdrop-blur-xl"><ChevronRight className="w-8 h-8" /></button>
+                <div className="absolute bottom-8 left-1/2 -translate-x-1/2 bg-neutral-900/90 px-6 py-2 rounded-full text-[11px] font-bold border border-white/10 backdrop-blur-2xl shadow-2xl flex items-center gap-4">
+                  <span className="opacity-50">{images[currentIndex].name}</span>
+                  <div className="w-px h-3 bg-white/10" />
+                  <span className="text-blue-400">{(images[currentIndex].size / 1024 / 1024).toFixed(2)} MB</span>
                 </div>
               </div>
-            )}
-          </div>
-        </aside>
-
-        {/* Viewer */}
-        <section className="flex-1 flex flex-col items-center justify-center p-10 bg-neutral-950 overflow-hidden relative group">
-          {images.length > 0 && currentImage ? (
-            <div className="relative w-full h-full flex items-center justify-center">
-               <img 
-                 key={currentImage.path}
-                 src={imageSrc} 
-                 alt={currentImage.name}
-                 className="max-w-full max-h-full object-contain shadow-[0_0_100px_rgba(0,0,0,0.8)] z-0 animate-image-change rounded-sm"
-                 onError={(e) => {
-                   console.error("Image load failed:", currentImage.path);
-                   (e.target as HTMLImageElement).src = "https://placehold.co/600x400/000/FFF?text=Load+Error";
-                 }}
-               />
-               
-               <button 
-                onClick={prevImage}
-                className="absolute left-6 p-4 rounded-2xl bg-neutral-900/80 border border-white/10 text-white opacity-0 group-hover:opacity-100 transition-all hover:bg-blue-600 hover:border-blue-500 hover:scale-110 shadow-2xl backdrop-blur-xl"
-               >
-                 <ChevronLeft className="w-8 h-8" />
-               </button>
-               <button 
-                onClick={nextImage}
-                className="absolute right-6 p-4 rounded-2xl bg-neutral-900/80 border border-white/10 text-white opacity-0 group-hover:opacity-100 transition-all hover:bg-blue-600 hover:border-blue-500 hover:scale-110 shadow-2xl backdrop-blur-xl"
-               >
-                 <ChevronRight className="w-8 h-8" />
-               </button>
-
-               <div className="absolute bottom-8 left-1/2 -translate-x-1/2">
-                  <div className="bg-neutral-900/90 px-6 py-2 rounded-full text-[11px] font-bold text-neutral-300 border border-white/10 backdrop-blur-2xl shadow-2xl flex items-center gap-4">
-                    <span className="opacity-50">{currentImage.name}</span>
-                    <div className="w-px h-3 bg-white/10" />
-                    <span className="text-blue-400">{(currentImage.size / 1024 / 1024).toFixed(2)} MB</span>
-                  </div>
-               </div>
-            </div>
+            )
           ) : (
-            <div className="flex flex-col items-center gap-8 opacity-10">
-               <ImageIcon className="w-48 h-48 animate-pulse" />
-               <p className="text-sm font-black uppercase tracking-[0.5em]">System Ready</p>
-            </div>
+            <div className="flex-1 flex flex-col items-center justify-center opacity-10"><ImageIcon className="w-48 h-48 animate-pulse" /><p className="text-sm font-black uppercase tracking-[0.5em]">System Ready</p></div>
           )}
         </section>
 
         {/* Metadata Sidebar */}
-        <aside className="w-80 border-l border-white/5 bg-neutral-900 flex flex-col shrink-0 overflow-hidden">
-          <div className="p-6 border-b border-white/5 flex items-center justify-between">
-            <div className="flex items-center gap-2 text-white text-[11px] font-black uppercase tracking-widest">
-              <Info className="w-4 h-4 text-blue-500" />
-              Inspector
-            </div>
-            {currentMetadata && (
-              <button 
-                onClick={() => { navigator.clipboard.writeText(currentMetadata.raw); showToast('Raw Meta Copied', 'success'); }}
-                className="text-[9px] font-bold text-neutral-500 hover:text-white transition-colors uppercase"
-              >
-                Copy Raw
-              </button>
-            )}
-          </div>
-          
+        <aside className="w-80 border-l border-white/5 bg-neutral-900 flex flex-col shrink-0">
+          <div className="p-6 border-b border-white/5 flex items-center justify-between font-black uppercase tracking-widest text-[11px]"><span>Inspector</span>{currentMetadata && <button onClick={() => { navigator.clipboard.writeText(currentMetadata.raw); showToast('Raw Copied', 'success'); }} className="text-[9px] text-neutral-500 hover:text-white uppercase">Raw</button>}</div>
           <div className="flex-1 overflow-y-auto p-6 space-y-8 scrollbar-thin">
             {currentMetadata ? (
-              <div className="space-y-8">
-                {currentMetadata.prompt && (
-                  <div className="space-y-3">
-                    <div className="flex justify-between items-center">
-                      <div className="text-blue-500 text-[9px] font-black uppercase tracking-widest">Positive Prompt</div>
-                      <button 
-                        onClick={() => { navigator.clipboard.writeText(currentMetadata.prompt!); showToast('Prompt Copied', 'success'); }} 
-                        className="text-[9px] text-neutral-600 hover:text-white transition-colors font-bold"
-                      >
-                        Copy
-                      </button>
-                    </div>
-                    <div className="bg-neutral-950 p-4 rounded-2xl leading-relaxed text-neutral-300 text-[11px] border border-white/5 hover:border-blue-500/20 transition-all shadow-inner select-text">
-                      {currentMetadata.prompt}
-                    </div>
-                  </div>
-                )}
-                
-                {currentMetadata.negative_prompt && (
-                  <div className="space-y-3">
-                    <div className="text-red-500 text-[9px] font-black uppercase tracking-widest">Negative Prompt</div>
-                    <div className="bg-neutral-950 p-4 rounded-2xl leading-relaxed text-neutral-400 text-[11px] border border-white/5 hover:border-red-500/20 transition-all shadow-inner select-text">
-                      {currentMetadata.negative_prompt}
-                    </div>
-                  </div>
-                )}
-
+              <>
+                {currentMetadata.prompt && <div className="space-y-3"><div className="text-blue-500 text-[9px] font-black uppercase tracking-widest">Prompt</div><div className="bg-neutral-950 p-4 rounded-2xl leading-relaxed text-[11px] border border-white/5 select-text">{currentMetadata.prompt}</div></div>}
+                {currentMetadata.negative_prompt && <div className="space-y-3"><div className="text-red-500 text-[9px] font-black uppercase tracking-widest">Negative</div><div className="bg-neutral-950 p-4 rounded-2xl leading-relaxed text-[11px] border border-white/5 select-text">{currentMetadata.negative_prompt}</div></div>}
                 <div className="grid grid-cols-2 gap-3">
-                  {[
-                    { label: 'Steps', value: currentMetadata.steps },
-                    { label: 'CFG', value: currentMetadata.cfg },
-                    { label: 'Sampler', value: currentMetadata.sampler, full: true },
-                    { label: 'Model', value: currentMetadata.model, full: true }
-                  ].map((item, i) => item.value && (
-                    <div key={i} className={`bg-neutral-950 p-4 rounded-2xl border border-white/5 hover:border-white/10 transition-all ${item.full ? 'col-span-2' : ''}`}>
-                      <div className="text-neutral-600 text-[9px] font-black uppercase tracking-tighter mb-1">{item.label}</div>
-                      <div className="font-bold text-neutral-200 text-[11px] truncate select-text" title={String(item.value)}>{item.value}</div>
-                    </div>
+                  {[ { label: 'Steps', value: currentMetadata.steps }, { label: 'CFG', value: currentMetadata.cfg }, { label: 'Sampler', value: currentMetadata.sampler, full: true }, { label: 'Model', value: currentMetadata.model, full: true } ].map((item, i) => item.value && (
+                    <div key={i} className={`bg-neutral-950 p-4 rounded-2xl border border-white/5 ${item.full ? 'col-span-2' : ''}`}><div className="text-neutral-600 text-[9px] font-black uppercase mb-1">{item.label}</div><div className="font-bold text-[11px] truncate select-text">{item.value}</div></div>
                   ))}
                 </div>
-              </div>
-            ) : (
-              <div className="flex flex-col items-center justify-center py-20 opacity-20 italic text-[10px]">
-                 No Metadata Available
-              </div>
-            )}
+              </>
+            ) : <div className="flex-1 flex items-center justify-center opacity-20 italic text-[10px]">No Data</div>}
           </div>
         </aside>
       </main>
 
-      {/* Footer / Status */}
-      <footer className="px-6 h-10 bg-neutral-950 border-t border-white/5 text-[10px] text-neutral-600 flex items-center justify-between shrink-0 z-10 font-medium">
-        <div className="truncate pr-10 font-mono italic opacity-50">
-          {folderPath || '---'}
+      {/* Settings Modal */}
+      {showSettings && (
+        <div className="fixed inset-0 z-50 bg-black/80 backdrop-blur-md flex items-center justify-center p-10 animate-in fade-in duration-300">
+          <div className="bg-neutral-900 border border-white/10 rounded-3xl w-full max-w-md shadow-2xl overflow-hidden animate-in slide-in-from-bottom-10">
+            <div className="p-6 border-b border-white/5 flex items-center justify-between">
+              <div className="flex items-center gap-3 font-black uppercase tracking-widest text-sm text-white"><Keyboard className="w-5 h-5 text-blue-500" /> Shortcuts</div>
+              <button onClick={() => setShowSettings(false)} className="p-2 hover:bg-white/5 rounded-full transition-colors"><X className="w-5 h-5" /></button>
+            </div>
+            <div className="p-8 space-y-6">
+              {(Object.keys(shortcuts) as (keyof Shortcuts)[]).map(key => (
+                <div key={key} className="flex items-center justify-between group">
+                  <span className="text-[10px] font-black uppercase tracking-widest text-neutral-500 group-hover:text-neutral-300 transition-colors">{key}</span>
+                  <input value={shortcuts[key]} onKeyDown={e => { e.preventDefault(); const newShortcuts = {...shortcuts, [key]: e.key}; setShortcuts(newShortcuts); store.set("shortcuts", newShortcuts); store.save(); }} readOnly className="bg-neutral-950 border border-white/5 rounded-xl px-4 py-2 text-center text-[11px] font-mono text-blue-400 w-32 focus:border-blue-500 focus:ring-4 focus:ring-blue-500/10 transition-all cursor-default" />
+                </div>
+              ))}
+              <button onClick={() => { setShortcuts(DEFAULT_SHORTCUTS); store.set("shortcuts", DEFAULT_SHORTCUTS); store.save(); showToast('Shortcuts Reset', 'info'); }} className="w-full py-3 bg-white/5 hover:bg-red-900/20 rounded-2xl text-[10px] font-black uppercase tracking-widest text-neutral-500 hover:text-red-400 transition-all border border-transparent hover:border-red-900/30">Reset to Default</button>
+            </div>
+          </div>
         </div>
+      )}
+
+      {/* Footer */}
+      <footer className="px-6 h-10 bg-neutral-950 border-t border-white/5 text-[10px] text-neutral-600 flex items-center justify-between shrink-0 z-10">
+        <div className="truncate font-mono italic opacity-50">{folderPath || 'No Folder Selected'}</div>
         <div className="flex gap-8 items-center">
           {images.length > 0 && (
             <>
-              {batchMode && batchRange && (
-                <div className="flex items-center gap-2 px-3 py-1 bg-blue-600/10 border border-blue-500/20 rounded-full text-blue-500 font-black text-[9px] animate-pulse">
-                   BATCH: {batchRange[1] - batchRange[0] + 1} IMAGES
-                </div>
-              )}
-              <div className="flex items-center gap-2">
-                <span className="text-white/60 font-black tracking-tighter">{currentIndex + 1}</span>
-                <span className="opacity-20 text-[8px] uppercase font-black">of</span>
-                <span className="text-neutral-400 font-black tracking-tighter">{images.length}</span>
-              </div>
+              {batchMode && batchRange && <div className="px-3 py-1 bg-blue-600/10 border border-blue-500/20 rounded-full text-blue-500 font-black text-[9px]">BATCH: {batchRange[1] - batchRange[0] + 1} IMAGES</div>}
+              <div className="flex gap-2"><span className="text-white/60 font-black">{currentIndex + 1}</span><span className="opacity-20 uppercase text-[8px] font-black">of</span><span className="text-neutral-400 font-black">{images.length}</span></div>
             </>
           )}
         </div>
