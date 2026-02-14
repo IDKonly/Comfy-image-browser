@@ -5,7 +5,7 @@ import { LazyStore } from "@tauri-apps/plugin-store";
 import { useAppStore, ImageMetadata, Shortcuts, DEFAULT_SHORTCUTS } from "./store/useAppStore";
 import { FolderOpen, Image as ImageIcon, Layers, ChevronLeft, ChevronRight, Search, X, Settings, Keyboard } from "lucide-react";
 import { useToast } from "./components/Toast";
-import { FixedSizeList as List } from "react-window";
+import { List } from "react-window";
 import { AutoSizer } from "react-virtualized-auto-sizer";
 
 const store = new LazyStore(".settings.json");
@@ -59,7 +59,7 @@ function App() {
   const [imageSrc, setImageSrc] = useState<string | null>(null);
   const [showSettings, setShowSettings] = useState(false);
   const { showToast } = useToast();
-  const listRef = useRef<any>(null);
+  const listRef = useRef<List>(null);
 
   useEffect(() => {
     const init = async () => {
