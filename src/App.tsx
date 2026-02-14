@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback, useMemo, useRef } from "react";
+import { useState, useEffect, useCallback, useRef } from "react";
 import { invoke, convertFileSrc } from "@tauri-apps/api/core";
 import { open, confirm } from "@tauri-apps/plugin-dialog";
 import { LazyStore } from "@tauri-apps/plugin-store";
@@ -6,14 +6,14 @@ import { useAppStore, ImageMetadata, Shortcuts, DEFAULT_SHORTCUTS } from "./stor
 import { FolderOpen, Image as ImageIcon, Layers, ChevronLeft, ChevronRight, Search, X, Settings, Keyboard } from "lucide-react";
 import { useToast } from "./components/Toast";
 
-// Robust library interop
-import * as RW from "react-window";
-import * as AS from "react-virtualized-auto-sizer";
-
+// Use direct imports which are more reliable in Vite 7
 // @ts-ignore
-const List = RW.FixedSizeList || RW.List || (RW.default && (RW.default as any).FixedSizeList) || (RW.default && (RW.default as any).List);
+import * as ReactWindow from "react-window";
+const List = ReactWindow.FixedSizeList || (ReactWindow as any).default?.FixedSizeList || ReactWindow;
 // @ts-ignore
-const AutoSizer = AS.AutoSizer || AS.default || (AS.default && (AS.default as any).AutoSizer);
+import * as AutoSizerPkg from "react-virtualized-auto-sizer";
+// @ts-ignore
+const AutoSizer = AutoSizerPkg.default || AutoSizerPkg;
 
 const store = new LazyStore(".settings.json");
 
@@ -23,7 +23,8 @@ const Thumbnail = ({ path, className, onClick, fit = "cover" }: { path: string, 
     let active = true;
     invoke("get_thumbnail", { path }).then(res => {
       if (active) setSrc(convertFileSrc(res as string));
-    }).catch(() => {
+    }).catch((err) => {
+      console.error("Thumbnail generation failed for", path, err);
       if (active) setSrc(convertFileSrc(path));
     });
     return () => { active = false; };
@@ -83,7 +84,7 @@ function App() {
   }, [folderPath, currentIndex]);
 
   useEffect(() => {
-    if (listRef.current && typeof listRef.current.scrollToItem === 'function') {
+    if (listRef.current) {
       listRef.current.scrollToItem(Math.floor(currentIndex / 2));
     }
   }, [currentIndex]);
@@ -199,7 +200,7 @@ function App() {
     } else setImageSrc(null);
   }, [currentIndex, images]);
 
-  const Row = ({ index, style }: any) => {
+  const Row = useCallback(({ index, style }: any) => {
     const i1 = index * 2, i2 = index * 2 + 1;
     return (
       <div style={style} className="flex gap-2 p-1">
@@ -210,7 +211,7 @@ function App() {
         ))}
       </div>
     );
-  };
+  }, [images, currentIndex, batchRange, setCurrentIndex]);
 
   return (
     <div className="flex flex-col h-screen bg-neutral-950 text-neutral-100 font-sans overflow-hidden">
@@ -227,13 +228,23 @@ function App() {
           <div className="p-4 space-y-3 shrink-0"><div className="relative group"><Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-neutral-600 group-focus-within:text-blue-500" />
           <input id="search-input" type="text" placeholder="Search... (/)" value={searchQuery} onChange={e => setSearchQuery(e.target.value)} onKeyDown={e => e.key === 'Enter' && handleSearch()} className="w-full bg-neutral-950 border border-white/5 rounded-xl py-2.5 pl-10 text-[11px] focus:outline-none focus:border-blue-500/50 transition-all" /></div>
           {isSearching && <button onClick={moveSearchResults} className="w-full py-2 bg-neutral-800 hover:bg-blue-600/20 border border-blue-500/10 rounded-xl text-[10px] font-bold text-neutral-400">Classify results</button>}</div>
-          <div className="flex-1 relative">
+          
+          <div className="flex-1 relative min-h-0">
             {images.length > 0 && List && AutoSizer ? (
-              <AutoSizer>{({ height, width }: any) => (
-                <List ref={listRef} height={height} itemCount={Math.ceil(images.length / 2)} itemSize={width / 2} width={width} className="scrollbar-thin">
-                  {Row}
-                </List>
-              )}</AutoSizer>
+              <AutoSizer>
+                {({ height, width }: any) => (
+                  <List
+                    ref={listRef}
+                    height={height}
+                    itemCount={Math.ceil(images.length / 2)}
+                    itemSize={width / 2}
+                    width={width}
+                    className="scrollbar-thin absolute inset-0"
+                  >
+                    {Row}
+                  </List>
+                )}
+              </AutoSizer>
             ) : <div className="flex items-center justify-center h-full opacity-20 italic text-[10px]">No Images</div>}
           </div>
         </aside>
@@ -241,7 +252,7 @@ function App() {
         <section className="flex-1 flex flex-col bg-[#050505] overflow-hidden relative group">
           {images.length > 0 && images[currentIndex] ? (
             batchMode ? (
-              <div className="w-full h-full p-8 overflow-y-auto grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4 animate-in fade-in duration-500 scrollbar-thin content-center justify-items-center">
+              <div className="w-full h-full p-8 overflow-y-auto grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4 animate-in fade-in zoom-in-95 duration-500 scrollbar-thin content-center justify-items-center">
                 {images.slice(batchRange?.[0] || currentIndex, (batchRange?.[1] || currentIndex) + 1).map((img) => (
                   <Thumbnail key={img.path} path={img.path} fit="contain" onClick={() => setCurrentIndex(images.indexOf(img))}
                     className={`w-full aspect-[3/4] max-h-[80vh] cursor-pointer rounded-2xl border-4 transition-all duration-500 hover:scale-[1.02] shadow-2xl ${images.indexOf(img) === currentIndex ? 'border-blue-500 ring-[12px] ring-blue-500/10' : 'border-white/5 hover:border-white/10'}`}
@@ -259,16 +270,16 @@ function App() {
           ) : <div className="flex-1 flex flex-col items-center justify-center opacity-10"><ImageIcon className="w-48 h-48 animate-pulse" /><p className="text-sm font-black uppercase tracking-[0.5em]">System Ready</p></div>}
         </section>
 
-        <aside className="w-80 border-l border-white/5 bg-neutral-900 flex flex-col shrink-0">
+        <aside className="w-80 border-l border-white/5 bg-neutral-900 flex flex-col shrink-0 overflow-hidden text-left">
           <div className="p-6 border-b border-white/5 flex items-center justify-between font-black uppercase tracking-widest text-[11px]"><span>Inspector</span>{currentMetadata && <button onClick={() => { navigator.clipboard.writeText(currentMetadata.raw); showToast('Raw Copied', 'success'); }} className="text-[9px] text-neutral-500 hover:text-white uppercase">Raw</button>}</div>
           <div className="flex-1 overflow-y-auto p-6 space-y-8 scrollbar-thin">
             {currentMetadata ? (
               <>
-                {currentMetadata.prompt && <div className="space-y-3"><div className="text-blue-500 text-[9px] font-black uppercase tracking-widest">Prompt</div><div className="bg-neutral-950 p-4 rounded-2xl leading-relaxed text-[11px] border border-white/5 select-text shadow-inner">{currentMetadata.prompt}</div></div>}
-                {currentMetadata.negative_prompt && <div className="space-y-3"><div className="text-red-500 text-[9px] font-black uppercase tracking-widest">Negative</div><div className="bg-neutral-950 p-4 rounded-2xl leading-relaxed text-[11px] border border-white/5 select-text shadow-inner">{currentMetadata.negative_prompt}</div></div>}
-                <div className="grid grid-cols-2 gap-3">
+                {currentMetadata.prompt && <div className="space-y-3"><div className="text-blue-500 text-[9px] font-black uppercase tracking-widest text-left">Prompt</div><div className="bg-neutral-950 p-4 rounded-2xl leading-relaxed text-[11px] border border-white/5 select-text shadow-inner text-left">{currentMetadata.prompt}</div></div>}
+                {currentMetadata.negative_prompt && <div className="space-y-3"><div className="text-red-500 text-[9px] font-black uppercase tracking-widest text-left">Negative</div><div className="bg-neutral-950 p-4 rounded-2xl leading-relaxed text-[11px] border border-white/5 select-text shadow-inner text-left">{currentMetadata.negative_prompt}</div></div>}
+                <div className="grid grid-cols-2 gap-3 text-left">
                   {[ { label: 'Steps', value: currentMetadata.steps }, { label: 'CFG', value: currentMetadata.cfg }, { label: 'Sampler', value: currentMetadata.sampler, full: true }, { label: 'Model', value: currentMetadata.model, full: true } ].map((item, i) => item.value && (
-                    <div key={i} className={`bg-neutral-950 p-4 rounded-2xl border border-white/5 ${item.full ? 'col-span-2' : ''}`}><div className="text-neutral-600 text-[9px] font-black uppercase mb-1">{item.label}</div><div className="font-bold text-[11px] truncate select-text text-neutral-200">{item.value}</div></div>
+                    <div key={i} className={`bg-neutral-950 p-4 rounded-2xl border border-white/5 ${item.full ? 'col-span-2' : ''}`}><div className="text-neutral-600 text-[9px] font-black uppercase mb-1 text-left">{item.label}</div><div className="font-bold text-[11px] truncate select-text text-neutral-200 text-left">{item.value}</div></div>
                   ))}
                 </div>
               </>
@@ -280,7 +291,7 @@ function App() {
       {showSettings && (
         <div className="fixed inset-0 z-50 bg-black/80 backdrop-blur-md flex items-center justify-center p-10 animate-in fade-in duration-300">
           <div className="bg-neutral-900 border border-white/10 rounded-3xl w-full max-w-md shadow-2xl overflow-hidden">
-            <div className="p-6 border-b border-white/5 flex items-center justify-between"><div className="flex items-center gap-3 font-black uppercase tracking-widest text-sm text-white"><Keyboard className="w-5 h-5 text-blue-500" /> Shortcuts</div>
+            <div className="p-6 border-b border-white/5 flex items-center justify-between"><div className="flex items-center gap-3 font-black uppercase tracking-widest text-sm text-white text-left"><Keyboard className="w-5 h-5 text-blue-500" /> Shortcuts</div>
             <button onClick={() => setShowSettings(false)} className="p-2 hover:bg-white/5 rounded-full transition-colors"><X className="w-5 h-5" /></button></div>
             <div className="p-8 space-y-6">{(Object.keys(shortcuts) as (keyof Shortcuts)[]).map(key => (<div key={key} className="flex items-center justify-between group"><span className="text-[10px] font-black uppercase tracking-widest text-neutral-500 group-hover:text-neutral-300">{key}</span>
             <input value={shortcuts[key]} onKeyDown={e => { e.preventDefault(); const newShortcuts = {...shortcuts, [key]: e.key}; setShortcuts(newShortcuts); store.set("shortcuts", newShortcuts); store.save(); }} readOnly className="bg-neutral-950 border border-white/5 rounded-xl px-4 py-2 text-center text-[11px] font-mono text-blue-400 w-32 focus:border-blue-500 focus:ring-4 focus:ring-blue-500/10 transition-all cursor-default" /></div>))}

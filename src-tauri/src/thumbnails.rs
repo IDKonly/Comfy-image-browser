@@ -1,5 +1,8 @@
 use std::path::Path;
 use std::fs;
+use std::hash::{Hash, Hasher};
+use std::time::SystemTime;
+use image::ImageFormat;
 
 #[tauri::command]
 pub async fn get_thumbnail(path: String) -> Result<String, String> {
@@ -8,10 +11,16 @@ pub async fn get_thumbnail(path: String) -> Result<String, String> {
         return Err("File not found".to_string());
     }
 
-    // Use system temp dir for high-speed cache
+    // Get file metadata for cache invalidation
+    let metadata = fs::metadata(p).map_err(|e| e.to_string())?;
+    let size = metadata.len();
+    let mtime = metadata.modified().unwrap_or(SystemTime::UNIX_EPOCH);
+
+    // Create a unique hash based on path, size, and modification time
     let mut hasher = std::collections::hash_map::DefaultHasher::new();
-    use std::hash::{Hash, Hasher};
     path.hash(&mut hasher);
+    size.hash(&mut hasher);
+    mtime.hash(&mut hasher);
     let hash = hasher.finish();
     
     let cache_dir = std::env::temp_dir().join("comfyview_v2_cache");
@@ -21,33 +30,35 @@ pub async fn get_thumbnail(path: String) -> Result<String, String> {
     
     let cache_path = cache_dir.join(format!("{}.jpg", hash));
 
-    // Return path if already cached
+    // Return path if already cached and exists
     if cache_path.exists() {
         return Ok(cache_path.to_string_lossy().to_string());
     }
-
-    println!("Generating thumbnail for: {}", path);
 
     // Optimization: Use faster resize for initial thumbnailing
     let path_clone = path.clone();
     let cache_path_clone = cache_path.clone();
     
+    // Process image in a blocking thread to avoid blocking the async runtime
     tauri::async_runtime::spawn_blocking(move || {
+        // Open image
         let img = image::open(Path::new(&path_clone)).map_err(|e| {
-            println!("Failed to open image: {}", e);
-            e.to_string()
+            format!("Failed to open image {}: {}", path_clone, e)
         })?;
-        // 400px is enough for grid/sidebar and looks better on high-DPI
-        let thumbnail = img.thumbnail(400, 400); // .thumbnail is much faster than .resize
         
-        thumbnail.save_with_format(&cache_path_clone, image::ImageFormat::Jpeg)
+        // Resize: 400px is enough for grid/sidebar and looks better on high-DPI
+        // thumbnails() is faster than resize() as it's optimized for downscaling
+        let thumbnail = img.thumbnail(400, 400); 
+        
+        // Save as JPEG with default quality (usually 75)
+        thumbnail.save_with_format(&cache_path_clone, ImageFormat::Jpeg)
             .map_err(|e| {
-                println!("Failed to save thumbnail: {}", e);
-                e.to_string()
+                format!("Failed to save thumbnail to {:?}: {}", cache_path_clone, e)
             })?;
-        println!("Thumbnail saved to: {:?}", cache_path_clone);
+            
         Ok::<(), String>(())
-    }).await.map_err(|e| e.to_string())??;
+    }).await
+        .map_err(|e| format!("Task join error: {}", e))??; // Unwrap outer Result (JoinError) then inner Result
 
     Ok(cache_path.to_string_lossy().to_string())
 }
