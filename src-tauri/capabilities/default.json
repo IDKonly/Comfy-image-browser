@@ -7,6 +7,6 @@
     "core:default",
     "opener:default",
     "dialog:default",
-    "fs:default"
+    "fs:read-all"
   ]
 }
