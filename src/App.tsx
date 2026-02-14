@@ -6,7 +6,7 @@ import { useAppStore, ImageMetadata, Shortcuts, DEFAULT_SHORTCUTS } from "./stor
 import { FolderOpen, Image as ImageIcon, Layers, ChevronLeft, ChevronRight, Search, X, Settings, Keyboard } from "lucide-react";
 import { useToast } from "./components/Toast";
 import { FixedSizeGrid as Grid } from "react-window";
-import AutoSizer from "react-virtualized-auto-sizer";
+import { AutoSizer } from "react-virtualized-auto-sizer";
 
 const store = new LazyStore(".settings.json");
 
