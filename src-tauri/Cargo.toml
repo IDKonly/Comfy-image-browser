@@ -1,7 +1,7 @@
 [package]
-name = "tauri-app"
+name = "comfy-view"
 version = "0.1.0"
-description = "A Tauri App"
+description = "A fast and comfy image browser"
 authors = ["you"]
 edition = "2021"
 

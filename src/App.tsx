@@ -19,25 +19,67 @@ const AutoSizer = AutoSizerPkg.default || AutoSizerPkg;
 
 const store = new LazyStore(".settings.json");
 
-const Thumbnail = ({ path, className, onClick, fit = "cover" }: { path: string, className?: string, onClick?: () => void, fit?: "cover" | "contain" }) => {
+// Simple concurrency limiter for thumbnail generation
+const taskQueue: (() => Promise<void>)[] = [];
+let activeTasks = 0;
+const MAX_CONCURRENT = 6;
+
+const processQueue = () => {
+  if (activeTasks >= MAX_CONCURRENT || taskQueue.length === 0) return;
+  
+  const task = taskQueue.shift();
+  if (task) {
+    activeTasks++;
+    task().finally(() => {
+      activeTasks--;
+      processQueue();
+    });
+    processQueue();
+  }
+};
+
+const scheduleThumbnailGeneration = (path: string): Promise<string> => {
+  return new Promise((resolve, reject) => {
+    taskQueue.push(async () => {
+      try {
+        const res = await invoke("get_thumbnail", { path });
+        resolve(res as string);
+      } catch (e) {
+        reject(e);
+      }
+    });
+    processQueue();
+  });
+};
+
+const Thumbnail = ({ path, mtime, reloadTimestamp, className, onClick, fit = "cover" }: { path: string, mtime?: number, reloadTimestamp?: number, className?: string, onClick?: () => void, fit?: "cover" | "contain" }) => {
   const [src, setSrc] = useState<string | null>(null);
   useEffect(() => {
     let active = true;
+    
     // Debounce to prevent flooding IPC during fast scrolling
     const timer = setTimeout(() => {
-      invoke("get_thumbnail", { path }).then(res => {
-        if (active) setSrc(convertFileSrc(res as string));
-      }).catch((err) => {
-        console.error("Thumbnail generation failed for", path, err);
-        if (active) setSrc(convertFileSrc(path));
-      });
+      scheduleThumbnailGeneration(path)
+        .then(res => {
+          if (active) {
+            const url = convertFileSrc(res as string);
+            setSrc(reloadTimestamp ? `${url}?t=${reloadTimestamp}` : url);
+          }
+        })
+        .catch((err) => {
+          console.error("Thumbnail failed", path, err);
+          if (active) {
+             const url = convertFileSrc(path);
+             setSrc(reloadTimestamp ? `${url}?t=${reloadTimestamp}` : url);
+          }
+        });
     }, 100);
     
     return () => { 
       active = false; 
       clearTimeout(timer);
     };
-  }, [path]);
+  }, [path, mtime, reloadTimestamp]);
 
   return (
     <div className={`overflow-hidden bg-neutral-900/50 flex items-center justify-center ${className}`} onClick={onClick}>
@@ -53,13 +95,18 @@ const Thumbnail = ({ path, className, onClick, fit = "cover" }: { path: string, 
 };
 
 const Row = ({ index, style, data }: any) => {
-  const { images, currentIndex, batchRange, setCurrentIndex } = data;
+  const { images, currentIndex, batchRange, setCurrentIndex, reloadTimestamp } = data;
   const i1 = index * 2, i2 = index * 2 + 1;
   return (
     <div style={style} className="flex gap-2 p-1">
       {[i1, i2].map(idx => images[idx] && (
-        <Thumbnail key={images[idx].path} path={images[idx].path} onClick={() => setCurrentIndex(idx)}
-          className={`flex-1 aspect-square cursor-pointer rounded-lg border-2 transition-all ${idx === currentIndex ? 'border-blue-500 scale-[0.98]' : (batchRange && idx >= batchRange[0] && idx <= batchRange[1]) ? 'border-blue-500/30' : 'border-transparent opacity-60 hover:opacity-100'}`} 
+        <Thumbnail 
+            key={`${images[idx].path}-${reloadTimestamp}`} 
+            path={images[idx].path} 
+            mtime={images[idx].mtime}
+            reloadTimestamp={reloadTimestamp} 
+            onClick={() => setCurrentIndex(idx)}
+            className={`flex-1 aspect-square cursor-pointer rounded-lg border-2 transition-all ${idx === currentIndex ? 'border-blue-500 scale-[0.98]' : (batchRange && idx >= batchRange[0] && idx <= batchRange[1]) ? 'border-blue-500/30' : 'border-transparent opacity-60 hover:opacity-100'}`} 
         />
       ))}
     </div>
@@ -79,6 +126,7 @@ function App() {
   const [showSettings, setShowSettings] = useState(false);
   const [showFilters, setShowFilters] = useState(false);
   const [activeFilters, setActiveFilters] = useState({ model: "", sampler: "" });
+  const [reloadTimestamp, setReloadTimestamp] = useState<number>(0);
   const { showToast } = useToast();
   const listRef = useRef<any>(null);
 
@@ -122,6 +170,22 @@ function App() {
       setImages(result as any);
       showToast(`Loaded ${ (result as any[]).length } images`, 'success');
     }
+  };
+
+  const handleReload = async () => {
+    if (!folderPath) return;
+    const ts = Date.now();
+    setReloadTimestamp(ts);
+    
+    const result = await invoke("scan_directory", { path: folderPath });
+    setImages(result as any);
+    
+    if (images[currentIndex]) {
+        const current = images[currentIndex];
+        invoke("get_metadata", { path: current.path }).then(m => setCurrentMetadata(m as ImageMetadata)).catch(() => {});
+        setImageSrc(`${convertFileSrc(current.path)}?t=${ts}`);
+    }
+    showToast("Reloaded", 'info');
   };
 
   const handleSearch = async (overrideFilters?: { model: string, sampler: string }) => {
@@ -220,6 +284,7 @@ function App() {
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
       if (document.activeElement?.tagName === 'INPUT' || showSettings) return;
+      if (e.key.toLowerCase() === 'r') { handleReload(); return; }
       if (images.length === 0) return;
       if (e.key === shortcuts.next) nextImage();
       else if (e.key === shortcuts.prev) prevImage();
@@ -236,17 +301,18 @@ function App() {
     if (images.length > 0 && images[currentIndex]) {
       const current = images[currentIndex];
       invoke("get_metadata", { path: current.path }).then(m => setCurrentMetadata(m as ImageMetadata)).catch(() => {});
-      setImageSrc(convertFileSrc(current.path));
+      setImageSrc(reloadTimestamp ? `${convertFileSrc(current.path)}?t=${reloadTimestamp}` : convertFileSrc(current.path));
     } else setImageSrc(null);
-  }, [currentIndex, images]);
+  }, [currentIndex, images, reloadTimestamp]);
 
   // Memoize itemData to prevent unnecessary re-renders of List items
   const itemData = useMemo(() => ({
     images,
     currentIndex,
     batchRange,
-    setCurrentIndex
-  }), [images, currentIndex, batchRange, setCurrentIndex]);
+    setCurrentIndex,
+    reloadTimestamp
+  }), [images, currentIndex, batchRange, setCurrentIndex, reloadTimestamp]);
 
   return (
     <div className="flex flex-col h-screen bg-neutral-950 text-neutral-100 font-sans overflow-hidden">
@@ -318,7 +384,13 @@ function App() {
                     }}
                   >
                     {batchItems.map((img) => (
-                      <Thumbnail key={img.path} path={img.path} fit="contain" onClick={() => setCurrentIndex(images.indexOf(img))}
+                      <Thumbnail 
+                        key={`${img.path}-${reloadTimestamp}`} 
+                        path={img.path} 
+                        mtime={img.mtime} 
+                        reloadTimestamp={reloadTimestamp}
+                        fit="contain" 
+                        onClick={() => setCurrentIndex(images.indexOf(img))}
                         className={`w-full h-full min-h-0 cursor-pointer rounded-2xl border-4 transition-all duration-300 hover:scale-[1.02] shadow-2xl ${images.indexOf(img) === currentIndex ? 'border-blue-500 ring-[4px] ring-blue-500/30' : 'border-white/5 hover:border-white/10'}`}
                       />
                     ))}
@@ -327,7 +399,7 @@ function App() {
               })()
             ) : (
               <div className="relative w-full h-full flex items-center justify-center p-0 overflow-hidden">
-                {imageSrc && <ZoomPanViewer key={images[currentIndex].path} src={imageSrc} className="animate-image-change" />}
+                {imageSrc && <ZoomPanViewer key={`${images[currentIndex].path}-${reloadTimestamp}`} src={imageSrc} className="animate-image-change" />}
                 <button onClick={prevImage} className="absolute left-6 z-10 p-4 rounded-2xl bg-neutral-900/80 text-white opacity-0 group-hover:opacity-100 transition-all hover:bg-blue-600 shadow-2xl backdrop-blur-xl"><ChevronLeft className="w-8 h-8" /></button>
                 <button onClick={nextImage} className="absolute right-6 z-10 p-4 rounded-2xl bg-neutral-900/80 text-white opacity-0 group-hover:opacity-100 transition-all hover:bg-blue-600 shadow-2xl backdrop-blur-xl"><ChevronRight className="w-8 h-8" /></button>
                 <div className="absolute bottom-8 left-1/2 -translate-x-1/2 z-10 bg-neutral-900/90 px-6 py-2 rounded-full text-[11px] font-bold border border-white/10 backdrop-blur-2xl shadow-2xl flex items-center gap-4"><span className="opacity-50">{images[currentIndex].name}</span><div className="w-px h-3 bg-white/10" /><span className="text-blue-400">{(images[currentIndex].size / 1024 / 1024).toFixed(2)} MB</span></div>
