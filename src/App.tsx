@@ -5,12 +5,8 @@ import { LazyStore } from "@tauri-apps/plugin-store";
 import { useAppStore, ImageMetadata, Shortcuts, DEFAULT_SHORTCUTS } from "./store/useAppStore";
 import { FolderOpen, Image as ImageIcon, Layers, ChevronLeft, ChevronRight, Search, X, Settings, Keyboard } from "lucide-react";
 import { useToast } from "./components/Toast";
-import { FixedSizeList } from "react-window";
-// @ts-ignore
+import { List } from "react-window";
 import { AutoSizer } from "react-virtualized-auto-sizer";
-
-// Workaround for react-window ESM issue in Vite
-const List = (FixedSizeList as any).default || FixedSizeList;
 
 const store = new LazyStore(".settings.json");
 
@@ -69,7 +65,7 @@ function App() {
   const [imageSrc, setImageSrc] = useState<string | null>(null);
   const [showSettings, setShowSettings] = useState(false);
   const { showToast } = useToast();
-  const listRef = useRef<List>(null);
+  const listRef = useRef<any>(null);
 
   useEffect(() => {
     const init = async () => {
@@ -107,7 +103,7 @@ function App() {
   useEffect(() => {
     if (listRef.current) {
       const rowIndex = Math.floor(currentIndex / 2);
-      listRef.current.scrollToItem(rowIndex);
+      listRef.current.scrollToRow({ index: rowIndex });
     }
   }, [currentIndex]);
 
@@ -302,7 +298,7 @@ function App() {
   };
 
   return (
-    <div className="flex flex-col h-screen bg-neutral-950 text-neutral-100 font-sans overflow-hidden">
+    <div className="flex flex-col h-screen bg-neutral-950 text-neutral-100 font-sans overflow-hidden text-center">
       {/* Header */}
       <header className="flex items-center justify-between px-4 h-14 bg-neutral-900 border-b border-white/5 shrink-0 z-10 shadow-2xl">
         <div className="flex items-center gap-6">
@@ -315,7 +311,7 @@ function App() {
         </div>
         <div className="flex items-center gap-3">
            {images.length > 0 && (
-             <div className="flex items-center gap-2 bg-neutral-800/50 p-1.5 rounded-xl border border-white/5">
+             <div className="flex items-center gap-2 bg-neutral-800/50 p-1.5 rounded-xl border border-white/5 text-center">
                <button onClick={handleKeep} className="px-4 py-1.5 bg-neutral-900 hover:bg-green-600 rounded-lg text-[10px] font-bold uppercase transition-all">Keep</button>
                <button onClick={handleDelete} className="px-4 py-1.5 bg-neutral-900 hover:bg-red-600 rounded-lg text-[10px] font-bold uppercase transition-all">Trash</button>
              </div>
@@ -325,7 +321,7 @@ function App() {
         </div>
       </header>
 
-      <main className="flex-1 overflow-hidden flex">
+      <main className="flex-1 overflow-hidden flex text-left">
         {/* Sidebar: Virtualized List (2 items per row) */}
         <aside className="w-72 border-r border-white/5 bg-neutral-900 flex flex-col shrink-0 overflow-hidden">
           <div className="p-4 space-y-3 shrink-0">
@@ -339,7 +335,7 @@ function App() {
           <div className="flex-1 px-2">
             {images.length > 0 ? (
               <AutoSizer>
-                {({ height, width }) => (
+                {({ height, width }: { height: number, width: number }) => (
                   <List
                     ref={listRef}
                     height={height}
@@ -398,9 +394,9 @@ function App() {
           <div className="flex-1 overflow-y-auto p-6 space-y-8 scrollbar-thin">
             {currentMetadata ? (
               <>
-                {currentMetadata.prompt && <div className="space-y-3"><div className="text-blue-500 text-[9px] font-black uppercase tracking-widest">Prompt</div><div className="bg-neutral-950 p-4 rounded-2xl leading-relaxed text-[11px] border border-white/5 select-text shadow-inner">{currentMetadata.prompt}</div></div>}
-                {currentMetadata.negative_prompt && <div className="space-y-3"><div className="text-red-500 text-[9px] font-black uppercase tracking-widest">Negative</div><div className="bg-neutral-950 p-4 rounded-2xl leading-relaxed text-[11px] border border-white/5 select-text shadow-inner">{currentMetadata.negative_prompt}</div></div>}
-                <div className="grid grid-cols-2 gap-3">
+                {currentMetadata.prompt && <div className="space-y-3"><div className="text-blue-500 text-[9px] font-black uppercase tracking-widest text-left">Prompt</div><div className="bg-neutral-950 p-4 rounded-2xl leading-relaxed text-[11px] border border-white/5 select-text shadow-inner text-left">{currentMetadata.prompt}</div></div>}
+                {currentMetadata.negative_prompt && <div className="space-y-3"><div className="text-red-500 text-[9px] font-black uppercase tracking-widest text-left">Negative</div><div className="bg-neutral-950 p-4 rounded-2xl leading-relaxed text-[11px] border border-white/5 select-text shadow-inner text-left">{currentMetadata.negative_prompt}</div></div>}
+                <div className="grid grid-cols-2 gap-3 text-left">
                   {[ { label: 'Steps', value: currentMetadata.steps }, { label: 'CFG', value: currentMetadata.cfg }, { label: 'Sampler', value: currentMetadata.sampler, full: true }, { label: 'Model', value: currentMetadata.model, full: true } ].map((item, i) => item.value && (
                     <div key={i} className={`bg-neutral-950 p-4 rounded-2xl border border-white/5 ${item.full ? 'col-span-2' : ''}`}><div className="text-neutral-600 text-[9px] font-black uppercase mb-1">{item.label}</div><div className="font-bold text-[11px] truncate select-text text-neutral-200">{item.value}</div></div>
                   ))}
