@@ -21,7 +21,7 @@ pub fn scan_directory(path: String) -> Result<Vec<ImageInfo>, String> {
         return Err("Not a directory".to_string());
     }
 
-    let db = DB::open().map_err(|e| e.to_string())?;
+    let _ = DB::open().map_err(|e| e.to_string())?;
     
     let entries: Vec<_> = WalkDir::new(root)
         .max_depth(1)
