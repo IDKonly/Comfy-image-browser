@@ -2,6 +2,9 @@ use std::path::Path;
 use walkdir::WalkDir;
 use serde::{Serialize, Deserialize};
 use std::time::UNIX_EPOCH;
+use rayon::prelude::*;
+use crate::db::DB;
+use crate::metadata::read_metadata;
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct ImageInfo {
@@ -18,38 +21,64 @@ pub fn scan_directory(path: String) -> Result<Vec<ImageInfo>, String> {
         return Err("Not a directory".to_string());
     }
 
-    let mut images = Vec::new();
-    let extensions = ["png", "jpg", "jpeg", "webp"];
-
-    for entry in WalkDir::new(root)
+    let db = DB::open().map_err(|e| e.to_string())?;
+    
+    let entries: Vec<_> = WalkDir::new(root)
         .max_depth(1)
         .into_iter()
-        .filter_map(|e| e.ok()) {
-            if entry.file_type().is_file() {
-                if let Some(ext) = entry.path().extension().and_then(|s| s.to_str()) {
-                    if extensions.contains(&ext.to_lowercase().as_str()) {
-                        let metadata = entry.metadata().map_err(|e| e.to_string())?;
-                        let mtime = metadata.modified()
-                            .map_err(|e| e.to_string())?
-                            .duration_since(UNIX_EPOCH)
-                            .map_err(|e| e.to_string())?
-                            .as_secs();
+        .filter_map(|e| e.ok())
+        .filter(|e| e.file_type().is_file())
+        .collect();
 
-                        images.push(ImageInfo {
-                            path: entry.path().to_string_lossy().to_string(),
-                            name: entry.file_name().to_string_lossy().to_string(),
-                            mtime,
-                            size: metadata.len(),
-                        });
-                    }
-                }
+    let extensions = ["png", "jpg", "jpeg", "webp"];
+
+    let mut images: Vec<ImageInfo> = entries.par_iter().filter_map(|entry| {
+        if let Some(ext) = entry.path().extension().and_then(|s| s.to_str()) {
+            if extensions.contains(&ext.to_lowercase().as_str()) {
+                let metadata = entry.metadata().ok()?;
+                let mtime = metadata.modified().ok()?
+                    .duration_since(UNIX_EPOCH).ok()?
+                    .as_secs();
+
+                return Some(ImageInfo {
+                    path: entry.path().to_string_lossy().to_string(),
+                    name: entry.file_name().to_string_lossy().to_string(),
+                    mtime,
+                    size: metadata.len(),
+                });
             }
         }
+        None
+    }).collect();
 
     // Sort by mtime descending
     images.sort_by(|a, b| b.mtime.cmp(&a.mtime));
 
+    // Background indexing for missing or changed metadata
+    let images_to_index = images.clone();
+    std::thread::spawn(move || {
+        let db = DB::open().unwrap();
+        for img in images_to_index {
+            let needs_update = match db.get_indexed_mtime(&img.path) {
+                Ok(Some(m)) => m != img.mtime,
+                _ => true,
+            };
+
+            if needs_update {
+                if let Ok(meta) = read_metadata(&img.path) {
+                    let _ = db.insert_image(&img, &meta);
+                }
+            }
+        }
+    });
+
     Ok(images)
+}
+
+#[tauri::command]
+pub fn search_images(folder: String, query: String) -> Result<Vec<String>, String> {
+    let db = DB::open().map_err(|e| e.to_string())?;
+    db.search(&folder, &query).map_err(|e| e.to_string())
 }
 
 #[tauri::command]

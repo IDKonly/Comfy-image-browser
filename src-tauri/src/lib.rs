@@ -1,6 +1,7 @@
 mod scanner;
 mod metadata;
 mod file_ops;
+mod db;
 
 // Learn more about Tauri commands at https://tauri.app/develop/calling-rust/
 #[tauri::command]
@@ -18,6 +19,7 @@ pub fn run() {
             greet,
             scanner::scan_directory,
             scanner::get_batch_range,
+            scanner::search_images,
             metadata::get_metadata,
             file_ops::delete_to_trash,
             file_ops::move_to_keep

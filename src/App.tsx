@@ -1,8 +1,8 @@
-import { useState, useEffect, useCallback, useMemo } from "react";
+import { useState, useEffect, useCallback } from "react";
 import { invoke, convertFileSrc } from "@tauri-apps/api/core";
 import { open, confirm } from "@tauri-apps/plugin-dialog";
 import { useAppStore, ImageMetadata } from "./store/useAppStore";
-import { FolderOpen, Image as ImageIcon, Info, Trash2, CheckCircle, Layers, ChevronLeft, ChevronRight } from "lucide-react";
+import { FolderOpen, Image as ImageIcon, Info, Trash2, CheckCircle, Layers, ChevronLeft, ChevronRight, Search, X } from "lucide-react";
 import { useToast } from "./components/Toast";
 
 function App() {
@@ -13,6 +13,7 @@ function App() {
   const [loading, setLoading] = useState(false);
   const [batchMode, setBatchMode] = useState(false);
   const [batchRange, setBatchRange] = useState<[number, number] | null>(null);
+  const [searchQuery, setSearchQuery] = useState("");
   const { showToast } = useToast();
 
   const handleOpenFolder = async () => {
@@ -36,8 +37,41 @@ function App() {
     }
   };
 
+  const handleSearch = async () => {
+    if (!folderPath) return;
+    if (!searchQuery.trim()) {
+      const result = await invoke("scan_directory", { path: folderPath });
+      setImages(result as any);
+      return;
+    }
+
+    try {
+      setLoading(true);
+      const paths = await invoke("search_images", { folder: folderPath, query: searchQuery }) as string[];
+      // We need to map paths back to ImageInfo. 
+      // For simplicity, we filter the existing images array in state.
+      const filtered = images.filter(img => paths.includes(img.path));
+      setImages(filtered);
+      setLoading(false);
+      showToast(`Found ${filtered.length} matches`, 'info');
+    } catch (error) {
+      console.error("Search failed:", error);
+      setLoading(false);
+    }
+  };
+
+  const clearSearch = async () => {
+    setSearchQuery("");
+    if (folderPath) {
+      setLoading(true);
+      const result = await invoke("scan_directory", { path: folderPath });
+      setImages(result as any);
+      setLoading(false);
+    }
+  };
+
   const updateBatchRange = useCallback(async (index: number, currentImages: any[]) => {
-    if (!batchMode || currentImages.length === 0) {
+    if (!batchMode || currentImages.length === 0 || !currentImages[index]) {
       setBatchRange(null);
       return;
     }
@@ -87,7 +121,6 @@ function App() {
   const nextImage = useCallback(() => {
     if (images.length === 0) return;
     if (batchMode && batchRange) {
-        // In batch mode, skip to the start of the NEXT batch
         const nextIndex = (batchRange[1] + 1) % images.length;
         setCurrentIndex(nextIndex);
     } else {
@@ -98,10 +131,7 @@ function App() {
   const prevImage = useCallback(() => {
     if (images.length === 0) return;
     if (batchMode && batchRange) {
-        // In batch mode, skip to the start of the PREVIOUS batch
         let prevIndex = (batchRange[0] - 1 + images.length) % images.length;
-        // Now we need to find the start of THAT batch... but since we don't know it yet, 
-        // we just set the index and the useEffect will calculate the new range.
         setCurrentIndex(prevIndex);
     } else {
         setCurrentIndex((currentIndex - 1 + images.length) % images.length);
@@ -110,6 +140,9 @@ function App() {
 
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
+      // Don't trigger shortcuts if user is typing in search bar
+      if (document.activeElement?.tagName === 'INPUT') return;
+
       if (images.length === 0) return;
       
       switch(e.key) {
@@ -130,6 +163,10 @@ function App() {
         case 'B':
           setBatchMode(prev => !prev);
           showToast(`Batch Mode ${!batchMode ? 'ON' : 'OFF'}`, 'info');
+          break;
+        case '/':
+          e.preventDefault();
+          document.getElementById('search-input')?.focus();
           break;
       }
     };
@@ -214,41 +251,67 @@ function App() {
       {/* Main Content */}
       <main className="flex-1 overflow-hidden flex">
         {/* Sidebar / List */}
-        <aside className="w-64 border-r border-neutral-800 bg-neutral-900/50 overflow-y-auto shrink-0 scrollbar-thin">
-          {loading ? (
-            <div className="p-8 flex flex-col items-center gap-3 animate-pulse">
-               <div className="w-8 h-8 rounded-full border-2 border-blue-500 border-t-transparent animate-spin" />
-               <div className="text-[10px] text-neutral-500 font-bold uppercase tracking-widest">Scanning Files</div>
-            </div>
-          ) : images.length > 0 ? (
-            <div className="py-2">
-              {images.map((img, idx) => (
-                <div
-                  key={img.path}
-                  onClick={() => setCurrentIndex(idx)}
-                  className={`px-4 py-1.5 text-[10px] truncate cursor-pointer transition-all border-l-2 ${
-                    idx === currentIndex 
-                      ? 'bg-blue-600/10 border-blue-500 text-blue-400 font-medium' 
-                      : isInBatch(idx)
-                        ? 'bg-blue-500/5 border-blue-500/30 text-neutral-400'
-                        : 'border-transparent text-neutral-500 hover:text-neutral-300 hover:bg-neutral-800'
-                  }`}
+        <aside className="w-64 border-r border-neutral-800 bg-neutral-900 flex flex-col shrink-0 overflow-hidden">
+          {/* Search Bar */}
+          <div className="p-3 bg-neutral-900/50 border-b border-neutral-800">
+            <div className="relative group">
+              <Search className={`absolute left-2.5 top-1/2 -translate-y-1/2 w-3.5 h-3.5 transition-colors ${searchQuery ? 'text-blue-500' : 'text-neutral-600'}`} />
+              <input
+                id="search-input"
+                type="text"
+                placeholder="Search Prompt... (/)"
+                value={searchQuery}
+                onChange={(e) => setSearchQuery(e.target.value)}
+                onKeyDown={(e) => e.key === 'Enter' && handleSearch()}
+                className="w-full bg-neutral-950 border border-neutral-800 rounded-md py-1.5 pl-8 pr-8 text-[10px] text-neutral-200 placeholder:text-neutral-700 focus:outline-none focus:border-blue-900/50 focus:ring-1 focus:ring-blue-900/20 transition-all"
+              />
+              {searchQuery && (
+                <button 
+                  onClick={clearSearch}
+                  className="absolute right-2.5 top-1/2 -translate-y-1/2 p-0.5 hover:bg-neutral-800 rounded-full text-neutral-600 hover:text-neutral-300"
                 >
-                  <span className="opacity-30 mr-2 tabular-nums">{String(idx + 1).padStart(3, '0')}</span>
-                  {img.name}
-                </div>
-              ))}
+                  <X className="w-3 h-3" />
+                </button>
+              )}
             </div>
-          ) : (
-            <div className="p-8 text-neutral-600 text-center text-[10px] font-bold uppercase tracking-widest mt-10 opacity-30">
-               Ready to Scan
-            </div>
-          )}
+          </div>
+
+          <div className="flex-1 overflow-y-auto scrollbar-thin">
+            {loading ? (
+              <div className="p-8 flex flex-col items-center gap-3 animate-pulse">
+                <div className="w-8 h-8 rounded-full border-2 border-blue-500 border-t-transparent animate-spin" />
+                <div className="text-[10px] text-neutral-500 font-bold uppercase tracking-widest">Processing</div>
+              </div>
+            ) : images.length > 0 ? (
+              <div className="py-2">
+                {images.map((img, idx) => (
+                  <div
+                    key={img.path}
+                    onClick={() => setCurrentIndex(idx)}
+                    className={`px-4 py-1.5 text-[10px] truncate cursor-pointer transition-all border-l-2 ${
+                      idx === currentIndex 
+                        ? 'bg-blue-600/10 border-blue-500 text-blue-400 font-medium' 
+                        : isInBatch(idx)
+                          ? 'bg-blue-500/5 border-blue-500/30 text-neutral-400'
+                          : 'border-transparent text-neutral-500 hover:text-neutral-300 hover:bg-neutral-800'
+                    }`}
+                  >
+                    <span className="opacity-30 mr-2 tabular-nums">{String(idx + 1).padStart(3, '0')}</span>
+                    {img.name}
+                  </div>
+                ))}
+              </div>
+            ) : (
+              <div className="p-8 text-neutral-600 text-center text-[10px] font-bold uppercase tracking-widest mt-10 opacity-30">
+                {searchQuery ? 'No Results' : 'Ready to Scan'}
+              </div>
+            )}
+          </div>
         </aside>
 
         {/* Viewer */}
         <section className="flex-1 flex flex-col items-center justify-center p-8 bg-neutral-950 overflow-hidden relative group">
-          {images.length > 0 ? (
+          {images.length > 0 && currentImage ? (
             <div className="relative w-full h-full flex items-center justify-center animate-in fade-in zoom-in-95 duration-500">
                <img 
                  key={currentImage.path}
@@ -257,7 +320,6 @@ function App() {
                  className="max-w-full max-h-full object-contain shadow-[0_0_50px_rgba(0,0,0,0.5)] z-0 animate-image-change"
                />
                
-               {/* Nav Arrows (Visible on hover) */}
                <button 
                 onClick={prevImage}
                 className="absolute left-4 p-2 rounded-full bg-neutral-900/50 border border-neutral-800 text-neutral-400 opacity-0 group-hover:opacity-100 transition-all hover:bg-neutral-800 hover:text-white"
@@ -299,7 +361,7 @@ function App() {
                     <span>Positive Prompt</span>
                     <button onClick={() => { navigator.clipboard.writeText(currentMetadata.prompt!); showToast('Prompt Copied', 'success'); }} className="hover:text-white transition-colors">Copy</button>
                   </div>
-                  <div className="bg-neutral-950 p-3 rounded-lg leading-relaxed select-all text-neutral-400 border border-neutral-800 hover:border-blue-900/30 transition-colors">
+                  <div className="bg-neutral-950 p-3 rounded-lg leading-relaxed select-all text-neutral-300 border border-neutral-800 hover:border-blue-900/30 transition-colors">
                     {currentMetadata.prompt}
                   </div>
                 </div>
@@ -307,7 +369,7 @@ function App() {
               {currentMetadata.negative_prompt && (
                 <div className="space-y-2">
                   <div className="text-red-500/60 font-black uppercase tracking-widest">Negative Prompt</div>
-                  <div className="bg-neutral-950 p-3 rounded-lg leading-relaxed select-all text-neutral-400 border border-neutral-800 hover:border-red-900/30 transition-colors">
+                  <div className="bg-neutral-950 p-3 rounded-lg leading-relaxed select-all text-neutral-300 border border-neutral-800 hover:border-red-900/30 transition-colors">
                     {currentMetadata.negative_prompt}
                   </div>
                 </div>
