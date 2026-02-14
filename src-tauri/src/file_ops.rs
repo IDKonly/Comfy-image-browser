@@ -40,3 +40,26 @@ pub fn move_to_keep(path: String) -> Result<(), String> {
 
     Ok(())
 }
+
+#[tauri::command]
+pub fn move_files_to_folder(paths: Vec<String>, folder_name: String) -> Result<(), String> {
+    if paths.is_empty() { return Ok(()); }
+
+    let first_path = Path::new(&paths[0]);
+    let parent = first_path.parent().ok_or("No parent directory")?;
+    let dest_dir = parent.join(&folder_name);
+
+    if !dest_dir.exists() {
+        fs::create_dir(&dest_dir).map_err(|e| e.to_string())?;
+    }
+
+    for path_str in paths {
+        let p = Path::new(&path_str);
+        if p.exists() {
+            let dest = dest_dir.join(p.file_name().ok_or("Invalid filename")?);
+            fs::rename(p, dest).map_err(|e| e.to_string())?;
+        }
+    }
+
+    Ok(())
+}

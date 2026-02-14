@@ -22,7 +22,8 @@ pub fn run() {
             scanner::search_images,
             metadata::get_metadata,
             file_ops::delete_to_trash,
-            file_ops::move_to_keep
+            file_ops::move_to_keep,
+            file_ops::move_files_to_folder
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
