@@ -1,18 +1,35 @@
-import { useState, useEffect, useCallback, useMemo } from "react";
+import { useState, useEffect, useCallback, useMemo, useRef } from "react";
 import { invoke, convertFileSrc } from "@tauri-apps/api/core";
 import { open, confirm } from "@tauri-apps/plugin-dialog";
 import { LazyStore } from "@tauri-apps/plugin-store";
 import { useAppStore, ImageMetadata, Shortcuts, DEFAULT_SHORTCUTS } from "./store/useAppStore";
 import { FolderOpen, Image as ImageIcon, Layers, ChevronLeft, ChevronRight, Search, X, Settings, Keyboard } from "lucide-react";
 import { useToast } from "./components/Toast";
+import { FixedSizeGrid as Grid } from "react-window";
+import AutoSizer from "react-virtualized-auto-sizer";
 
 const store = new LazyStore(".settings.json");
 
-// Optimized Thumbnail Component (File-based)
+// Lazy & Virtualized Thumbnail Component
 const Thumbnail = ({ path, className, onClick, fit = "cover" }: { path: string, className?: string, onClick?: () => void, fit?: "cover" | "contain" }) => {
   const [src, setSrc] = useState<string | null>(null);
+  const [isVisible, setIsVisible] = useState(false);
+  const containerRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
+    const observer = new IntersectionObserver(([entry]) => {
+      if (entry.isIntersecting) {
+        setIsVisible(true);
+        observer.disconnect();
+      }
+    }, { rootMargin: '100px' });
+
+    if (containerRef.current) observer.observe(containerRef.current);
+    return () => observer.disconnect();
+  }, []);
+
+  useEffect(() => {
+    if (!isVisible) return;
     let active = true;
     invoke("get_thumbnail", { path }).then(res => {
       if (active) setSrc(convertFileSrc(res as string));
@@ -20,12 +37,12 @@ const Thumbnail = ({ path, className, onClick, fit = "cover" }: { path: string, 
       if (active) setSrc(convertFileSrc(path));
     });
     return () => { active = false; };
-  }, [path]);
+  }, [path, isVisible]);
 
   return (
-    <div className={`overflow-hidden bg-neutral-900/50 flex items-center justify-center ${className}`} onClick={onClick}>
+    <div ref={containerRef} className={`overflow-hidden bg-neutral-900/50 flex items-center justify-center ${className}`} onClick={onClick}>
       {src ? (
-        <img src={src} className={`w-full h-full ${fit === "cover" ? 'object-cover' : 'object-contain'}`} loading="lazy" />
+        <img src={src} className={`w-full h-full ${fit === "cover" ? 'object-cover' : 'object-contain'} animate-in fade-in duration-300`} loading="lazy" />
       ) : (
         <div className="w-full h-full flex items-center justify-center">
           <div className="w-4 h-4 border-2 border-white/5 border-t-blue-500 rounded-full animate-spin" />
@@ -48,6 +65,7 @@ function App() {
   const [imageSrc, setImageSrc] = useState<string | null>(null);
   const [showSettings, setShowSettings] = useState(false);
   const { showToast } = useToast();
+  const gridRef = useRef<Grid>(null);
 
   useEffect(() => {
     const init = async () => {
@@ -80,6 +98,15 @@ function App() {
       store.save();
     }
   }, [folderPath, currentIndex]);
+
+  // Sync grid scroll with currentIndex
+  useEffect(() => {
+    if (gridRef.current) {
+      const columnCount = 2;
+      const rowIndex = Math.floor(currentIndex / columnCount);
+      gridRef.current.scrollToItem({ rowIndex });
+    }
+  }, [currentIndex]);
 
   const handleOpenFolder = async () => {
     try {
@@ -244,6 +271,23 @@ function App() {
     return images.slice(batchRange[0], batchRange[1] + 1);
   }, [images, batchMode, batchRange]);
 
+  // Grid Cell Renderer
+  const Cell = ({ columnIndex, rowIndex, style }: any) => {
+    const idx = rowIndex * 2 + columnIndex;
+    const img = images[idx];
+    if (!img) return null;
+
+    return (
+      <div style={{...style, padding: '4px'}}>
+        <Thumbnail 
+          path={img.path} 
+          onClick={() => setCurrentIndex(idx)}
+          className={`w-full h-full cursor-pointer rounded-lg border-2 transition-all duration-300 ${idx === currentIndex ? 'border-blue-500 scale-[0.98] z-10 shadow-[0_0_20px_rgba(37,99,235,0.2)]' : (batchRange && idx >= batchRange[0] && idx <= batchRange[1]) ? 'border-blue-500/30' : 'border-transparent opacity-60 hover:opacity-100 hover:scale-[1.02]'}`} 
+        />
+      </div>
+    );
+  };
+
   return (
     <div className="flex flex-col h-screen bg-neutral-950 text-neutral-100 font-sans overflow-hidden">
       {/* Header */}
@@ -269,9 +313,9 @@ function App() {
       </header>
 
       <main className="flex-1 overflow-hidden flex">
-        {/* Sidebar: Thumbnails */}
+        {/* Sidebar: Virtualized Thumbnails */}
         <aside className="w-72 border-r border-white/5 bg-neutral-900 flex flex-col shrink-0 overflow-hidden">
-          <div className="p-4 space-y-3">
+          <div className="p-4 space-y-3 shrink-0">
             <div className="relative group">
               <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-neutral-600 group-focus-within:text-blue-500 transition-colors" />
               <input id="search-input" type="text" placeholder="Search... (/)" value={searchQuery} onChange={e => setSearchQuery(e.target.value)} onKeyDown={e => e.key === 'Enter' && handleSearch()} className="w-full bg-neutral-950 border border-white/5 rounded-xl py-2.5 pl-10 text-[11px] focus:outline-none focus:border-blue-500/50 transition-all" />
@@ -279,17 +323,29 @@ function App() {
             {isSearching && <button onClick={moveSearchResults} className="w-full py-2 bg-neutral-800 hover:bg-blue-600/20 border border-blue-500/10 rounded-xl text-[10px] font-bold text-neutral-400">Classify results</button>}
           </div>
 
-          <div className="flex-1 overflow-y-auto scrollbar-thin px-3 pb-4 grid grid-cols-2 gap-2 content-start text-center">
-            {loading ? (
-              <div className="col-span-2 py-20 opacity-20 italic text-[10px]">Scanning...</div>
-            ) : images.map((img, idx) => (
-              <Thumbnail 
-                key={img.path} 
-                path={img.path} 
-                onClick={() => setCurrentIndex(idx)}
-                className={`aspect-square cursor-pointer rounded-lg border-2 transition-all duration-300 ${idx === currentIndex ? 'border-blue-500 scale-[0.98] z-10 shadow-[0_0_20px_rgba(37,99,235,0.2)]' : (batchRange && idx >= batchRange[0] && idx <= batchRange[1]) ? 'border-blue-500/30' : 'border-transparent opacity-60 hover:opacity-100 hover:scale-[1.02]'}`} 
-              />
-            ))}
+          <div className="flex-1 px-2">
+            {images.length > 0 ? (
+              <AutoSizer>
+                {({ height, width }) => (
+                  <Grid
+                    ref={gridRef}
+                    columnCount={2}
+                    columnWidth={width / 2 - 4}
+                    rowCount={Math.ceil(images.length / 2)}
+                    rowHeight={width / 2}
+                    height={height}
+                    width={width}
+                    className="scrollbar-thin"
+                  >
+                    {Cell}
+                  </Grid>
+                )}
+              </AutoSizer>
+            ) : (
+              <div className="flex flex-col items-center justify-center h-full opacity-20 italic text-[10px]">
+                {loading ? 'Scanning...' : 'No Images'}
+              </div>
+            )}
           </div>
         </aside>
 
