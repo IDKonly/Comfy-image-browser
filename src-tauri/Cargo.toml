@@ -30,6 +30,7 @@ tauri-plugin-dialog = "2.6.0"
 tauri-plugin-fs = "2.4.5"
 rusqlite = { version = "0.38.0", features = ["bundled"] }
 tauri-plugin-store = "2.4.2"
+base64 = "0.22.1"
 
 [dev-dependencies]
 tempfile = "3.25.0"

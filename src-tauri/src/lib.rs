@@ -2,6 +2,7 @@ mod scanner;
 mod metadata;
 mod file_ops;
 mod db;
+mod thumbnails;
 
 // Learn more about Tauri commands at https://tauri.app/develop/calling-rust/
 #[tauri::command]
@@ -24,7 +25,8 @@ pub fn run() {
             metadata::get_metadata,
             file_ops::delete_to_trash,
             file_ops::move_to_keep,
-            file_ops::move_files_to_folder
+            file_ops::move_files_to_folder,
+            thumbnails::get_thumbnail
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
