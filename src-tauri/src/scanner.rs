@@ -76,7 +76,7 @@ pub fn scan_directory(path: String) -> Result<Vec<ImageInfo>, String> {
 }
 
 #[tauri::command]
-pub fn search_images(folder: String, query: String) -> Result<Vec<String>, String> {
+pub fn search_images(folder: String, query: String) -> Result<Vec<ImageInfo>, String> {
     let db = DB::open().map_err(|e| e.to_string())?;
     db.search(&folder, &query).map_err(|e| e.to_string())
 }
@@ -84,11 +84,33 @@ pub fn search_images(folder: String, query: String) -> Result<Vec<String>, Strin
 #[tauri::command]
 pub fn get_batch_range(paths: Vec<String>, current_index: usize) -> Result<(usize, usize), String> {
     if paths.is_empty() || current_index >= paths.len() {
-        return Err("Invalid index or empty paths".to_string());
+        return Ok((current_index, current_index));
     }
 
-    let current_meta = crate::metadata::read_metadata(&paths[current_index])?;
-    let target_prompt = match current_meta.prompt {
+    // Try to get cached prompts from DB for the folder of the current image
+    let current_path = Path::new(&paths[current_index]);
+    let folder = current_path.parent().map(|p| p.to_string_lossy().to_string());
+    
+    let cached_prompts = if let Some(f) = folder {
+        if let Ok(db) = DB::open() {
+             db.get_folder_prompts(&f).ok()
+        } else { None }
+    } else { None };
+
+    // Helper to get prompt: Try cache first, then disk
+    let get_prompt = |index: usize| -> Option<String> {
+        let path = &paths[index];
+        if let Some(cache) = &cached_prompts {
+            if let Some(cached_val) = cache.get(path) {
+                return cached_val.clone();
+            }
+        }
+        
+        // Fallback to disk
+        read_metadata(path).ok().and_then(|m| m.prompt)
+    };
+
+    let target_prompt = match get_prompt(current_index) {
         Some(p) => p,
         None => return Ok((current_index, current_index)),
     };
@@ -98,8 +120,8 @@ pub fn get_batch_range(paths: Vec<String>, current_index: usize) -> Result<(usiz
 
     // Scan backwards
     while start > 0 {
-        if let Ok(meta) = crate::metadata::read_metadata(&paths[start - 1]) {
-            if meta.prompt.as_deref() == Some(&target_prompt) {
+        if let Some(p) = get_prompt(start - 1) {
+            if p == target_prompt {
                 start -= 1;
                 continue;
             }
@@ -109,8 +131,8 @@ pub fn get_batch_range(paths: Vec<String>, current_index: usize) -> Result<(usiz
 
     // Scan forwards
     while end < paths.len() - 1 {
-        if let Ok(meta) = crate::metadata::read_metadata(&paths[end + 1]) {
-            if meta.prompt.as_deref() == Some(&target_prompt) {
+        if let Some(p) = get_prompt(end + 1) {
+            if p == target_prompt {
                 end += 1;
                 continue;
             }

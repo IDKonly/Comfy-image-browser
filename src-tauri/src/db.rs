@@ -11,6 +11,8 @@ impl DB {
     pub fn open() -> Result<Self> {
         let conn = Connection::open(".image_manager_v2.db")?;
         
+        conn.pragma_update(None, "journal_mode", "WAL")?;
+        
         conn.execute(
             "CREATE TABLE IF NOT EXISTS images (
                 path TEXT PRIMARY KEY,
@@ -64,21 +66,26 @@ impl DB {
         Ok(())
     }
 
-    pub fn search(&self, folder: &str, query: &str) -> Result<Vec<String>> {
+    pub fn search(&self, folder: &str, query: &str) -> Result<Vec<ImageInfo>> {
         let mut stmt = self.conn.prepare(
-            "SELECT path FROM images 
+            "SELECT path, name, mtime, size FROM images 
              WHERE folder = ?1 AND (prompt LIKE ?2 OR negative_prompt LIKE ?2 OR name LIKE ?2)
              ORDER BY mtime DESC"
         )?;
         
         let pattern = format!("%{}%", query);
         let rows = stmt.query_map(params![folder, pattern], |row| {
-            row.get(0)
+            Ok(ImageInfo {
+                path: row.get(0)?,
+                name: row.get(1)?,
+                mtime: row.get::<_, i64>(2)? as u64,
+                size: row.get::<_, i64>(3)? as u64,
+            })
         })?;
 
         let mut results = Vec::new();
-        for path in rows {
-            results.push(path?);
+        for img in rows {
+            results.push(img?);
         }
         Ok(results)
     }
@@ -92,5 +99,19 @@ impl DB {
         } else {
             Ok(None)
         }
+    }
+
+    pub fn get_folder_prompts(&self, folder: &str) -> Result<std::collections::HashMap<String, Option<String>>> {
+        let mut stmt = self.conn.prepare("SELECT path, prompt FROM images WHERE folder = ?1")?;
+        let rows = stmt.query_map(params![folder], |row| {
+            Ok((row.get::<_, String>(0)?, row.get::<_, Option<String>>(1)?))
+        })?;
+
+        let mut prompts = std::collections::HashMap::new();
+        for row in rows {
+            let (path, prompt) = row?;
+            prompts.insert(path, prompt);
+        }
+        Ok(prompts)
     }
 }

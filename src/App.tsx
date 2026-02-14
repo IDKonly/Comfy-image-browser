@@ -1,10 +1,11 @@
-import { useState, useEffect, useCallback, useRef } from "react";
+import { useState, useEffect, useCallback, useRef, useMemo } from "react";
 import { invoke, convertFileSrc } from "@tauri-apps/api/core";
 import { open, confirm } from "@tauri-apps/plugin-dialog";
 import { LazyStore } from "@tauri-apps/plugin-store";
 import { useAppStore, ImageMetadata, Shortcuts, DEFAULT_SHORTCUTS } from "./store/useAppStore";
 import { FolderOpen, Image as ImageIcon, Layers, ChevronLeft, ChevronRight, Search, X, Settings, Keyboard } from "lucide-react";
 import { useToast } from "./components/Toast";
+import { ZoomPanViewer } from "./components/ZoomPanViewer";
 
 // Use direct imports which are more reliable in Vite 7
 // @ts-ignore
@@ -21,19 +22,26 @@ const Thumbnail = ({ path, className, onClick, fit = "cover" }: { path: string, 
   const [src, setSrc] = useState<string | null>(null);
   useEffect(() => {
     let active = true;
-    invoke("get_thumbnail", { path }).then(res => {
-      if (active) setSrc(convertFileSrc(res as string));
-    }).catch((err) => {
-      console.error("Thumbnail generation failed for", path, err);
-      if (active) setSrc(convertFileSrc(path));
-    });
-    return () => { active = false; };
+    // Debounce to prevent flooding IPC during fast scrolling
+    const timer = setTimeout(() => {
+      invoke("get_thumbnail", { path }).then(res => {
+        if (active) setSrc(convertFileSrc(res as string));
+      }).catch((err) => {
+        console.error("Thumbnail generation failed for", path, err);
+        if (active) setSrc(convertFileSrc(path));
+      });
+    }, 100);
+    
+    return () => { 
+      active = false; 
+      clearTimeout(timer);
+    };
   }, [path]);
 
   return (
     <div className={`overflow-hidden bg-neutral-900/50 flex items-center justify-center ${className}`} onClick={onClick}>
       {src ? (
-        <img src={src} className={`w-full h-full ${fit === "cover" ? 'object-cover' : 'object-contain'} animate-in fade-in duration-300`} loading="lazy" />
+        <img src={src} className={`w-full h-full ${fit === "cover" ? 'object-cover' : 'object-contain'} animate-in fade-in duration-300`} />
       ) : (
         <div className="w-full h-full flex items-center justify-center">
           <div className="w-4 h-4 border-2 border-white/5 border-t-blue-500 rounded-full animate-spin" />
@@ -43,11 +51,26 @@ const Thumbnail = ({ path, className, onClick, fit = "cover" }: { path: string, 
   );
 };
 
+const Row = ({ index, style, data }: any) => {
+  const { images, currentIndex, batchRange, setCurrentIndex } = data;
+  const i1 = index * 2, i2 = index * 2 + 1;
+  return (
+    <div style={style} className="flex gap-2 p-1">
+      {[i1, i2].map(idx => images[idx] && (
+        <Thumbnail key={images[idx].path} path={images[idx].path} onClick={() => setCurrentIndex(idx)}
+          className={`flex-1 aspect-square cursor-pointer rounded-lg border-2 transition-all ${idx === currentIndex ? 'border-blue-500 scale-[0.98]' : (batchRange && idx >= batchRange[0] && idx <= batchRange[1]) ? 'border-blue-500/30' : 'border-transparent opacity-60 hover:opacity-100'}`} 
+        />
+      ))}
+    </div>
+  );
+};
+
 function App() {
   const { 
     folderPath, images, currentIndex, currentMetadata, shortcuts,
     setFolderPath, setImages, setCurrentIndex, setCurrentMetadata, removeImages, setShortcuts
   } = useAppStore();
+  // ... (rest of App state)
   const [batchMode, setBatchMode] = useState(false);
   const [batchRange, setBatchRange] = useState<[number, number] | null>(null);
   const [searchQuery, setSearchQuery] = useState("");
@@ -108,11 +131,9 @@ function App() {
       return;
     }
     setIsSearching(true);
-    const paths = await invoke("search_images", { folder: folderPath, query: searchQuery }) as string[];
-    const fullList = await invoke("scan_directory", { path: folderPath }) as any[];
-    const filtered = fullList.filter(img => paths.includes(img.path));
-    setImages(filtered);
-    showToast(`Found ${filtered.length} matches`, 'info');
+    const results = await invoke("search_images", { folder: folderPath, query: searchQuery }) as any[];
+    setImages(results);
+    showToast(`Found ${results.length} matches`, 'info');
   };
 
   const clearSearch = async () => {
@@ -200,21 +221,17 @@ function App() {
     } else setImageSrc(null);
   }, [currentIndex, images]);
 
-  const Row = useCallback(({ index, style }: any) => {
-    const i1 = index * 2, i2 = index * 2 + 1;
-    return (
-      <div style={style} className="flex gap-2 p-1">
-        {[i1, i2].map(idx => images[idx] && (
-          <Thumbnail key={images[idx].path} path={images[idx].path} onClick={() => setCurrentIndex(idx)}
-            className={`flex-1 aspect-square cursor-pointer rounded-lg border-2 transition-all ${idx === currentIndex ? 'border-blue-500 scale-[0.98]' : (batchRange && idx >= batchRange[0] && idx <= batchRange[1]) ? 'border-blue-500/30' : 'border-transparent opacity-60 hover:opacity-100'}`} 
-          />
-        ))}
-      </div>
-    );
-  }, [images, currentIndex, batchRange, setCurrentIndex]);
+  // Memoize itemData to prevent unnecessary re-renders of List items
+  const itemData = useMemo(() => ({
+    images,
+    currentIndex,
+    batchRange,
+    setCurrentIndex
+  }), [images, currentIndex, batchRange, setCurrentIndex]);
 
   return (
     <div className="flex flex-col h-screen bg-neutral-950 text-neutral-100 font-sans overflow-hidden">
+      {/* ... header ... */}
       <header className="flex items-center justify-between px-4 h-14 bg-neutral-900 border-b border-white/5 shrink-0 z-10 shadow-2xl">
         <div className="flex items-center gap-6"><div className="flex items-center gap-2"><div className="w-8 h-8 bg-blue-600 rounded-lg flex items-center justify-center text-white font-black italic">CV</div><h1 className="text-lg font-black tracking-tighter uppercase italic">ComfyView</h1></div>
         <button onClick={() => setBatchMode(!batchMode)} className={`flex items-center gap-2 px-4 py-1.5 rounded-full text-[10px] font-bold uppercase transition-all border ${batchMode ? 'bg-blue-600 border-blue-500 text-white shadow-[0_0_15px_rgba(37,99,235,0.3)]' : 'bg-neutral-800 border-neutral-700 text-neutral-400'}`}><Layers className="w-3.5 h-3.5" />Batch Mode</button></div>
@@ -239,6 +256,7 @@ function App() {
                     itemCount={Math.ceil(images.length / 2)}
                     itemSize={width / 2}
                     width={width}
+                    itemData={itemData}
                     className="scrollbar-thin absolute inset-0"
                   >
                     {Row}
@@ -248,6 +266,9 @@ function App() {
             ) : <div className="flex items-center justify-center h-full opacity-20 italic text-[10px]">No Images</div>}
           </div>
         </aside>
+
+        {/* ... rest of main ... */}
+
 
         <section className="flex-1 flex flex-col bg-[#050505] overflow-hidden relative group">
           {images.length > 0 && images[currentIndex] ? (
@@ -260,11 +281,11 @@ function App() {
                 ))}
               </div>
             ) : (
-              <div className="relative w-full h-full flex items-center justify-center p-10">
-                {imageSrc && <img key={images[currentIndex].path} src={imageSrc} className="max-w-full max-h-full object-contain shadow-[0_0_100px_rgba(0,0,0,0.8)] animate-image-change rounded-md" />}
-                <button onClick={prevImage} className="absolute left-6 p-4 rounded-2xl bg-neutral-900/80 text-white opacity-0 group-hover:opacity-100 transition-all hover:bg-blue-600 shadow-2xl backdrop-blur-xl"><ChevronLeft className="w-8 h-8" /></button>
-                <button onClick={nextImage} className="absolute right-6 p-4 rounded-2xl bg-neutral-900/80 text-white opacity-0 group-hover:opacity-100 transition-all hover:bg-blue-600 shadow-2xl backdrop-blur-xl"><ChevronRight className="w-8 h-8" /></button>
-                <div className="absolute bottom-8 left-1/2 -translate-x-1/2 bg-neutral-900/90 px-6 py-2 rounded-full text-[11px] font-bold border border-white/10 backdrop-blur-2xl shadow-2xl flex items-center gap-4"><span className="opacity-50">{images[currentIndex].name}</span><div className="w-px h-3 bg-white/10" /><span className="text-blue-400">{(images[currentIndex].size / 1024 / 1024).toFixed(2)} MB</span></div>
+              <div className="relative w-full h-full flex items-center justify-center p-0 overflow-hidden">
+                {imageSrc && <ZoomPanViewer key={images[currentIndex].path} src={imageSrc} className="animate-image-change" />}
+                <button onClick={prevImage} className="absolute left-6 z-10 p-4 rounded-2xl bg-neutral-900/80 text-white opacity-0 group-hover:opacity-100 transition-all hover:bg-blue-600 shadow-2xl backdrop-blur-xl"><ChevronLeft className="w-8 h-8" /></button>
+                <button onClick={nextImage} className="absolute right-6 z-10 p-4 rounded-2xl bg-neutral-900/80 text-white opacity-0 group-hover:opacity-100 transition-all hover:bg-blue-600 shadow-2xl backdrop-blur-xl"><ChevronRight className="w-8 h-8" /></button>
+                <div className="absolute bottom-8 left-1/2 -translate-x-1/2 z-10 bg-neutral-900/90 px-6 py-2 rounded-full text-[11px] font-bold border border-white/10 backdrop-blur-2xl shadow-2xl flex items-center gap-4"><span className="opacity-50">{images[currentIndex].name}</span><div className="w-px h-3 bg-white/10" /><span className="text-blue-400">{(images[currentIndex].size / 1024 / 1024).toFixed(2)} MB</span></div>
               </div>
             )
           ) : <div className="flex-1 flex flex-col items-center justify-center opacity-10"><ImageIcon className="w-48 h-48 animate-pulse" /><p className="text-sm font-black uppercase tracking-[0.5em]">System Ready</p></div>}

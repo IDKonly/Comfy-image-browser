@@ -23,7 +23,8 @@ pub async fn get_thumbnail(path: String) -> Result<String, String> {
     mtime.hash(&mut hasher);
     let hash = hasher.finish();
     
-    let cache_dir = std::env::temp_dir().join("comfyview_v2_cache");
+    // Version 3 cache for higher quality thumbnails (1024px)
+    let cache_dir = std::env::temp_dir().join("comfyview_v3_cache");
     if !cache_dir.exists() {
         fs::create_dir_all(&cache_dir).map_err(|e| e.to_string())?;
     }
@@ -46,9 +47,9 @@ pub async fn get_thumbnail(path: String) -> Result<String, String> {
             format!("Failed to open image {}: {}", path_clone, e)
         })?;
         
-        // Resize: 400px is enough for grid/sidebar and looks better on high-DPI
+        // Resize: 1024px for better quality in Batch Mode and high-DPI screens
         // thumbnails() is faster than resize() as it's optimized for downscaling
-        let thumbnail = img.thumbnail(400, 400); 
+        let thumbnail = img.thumbnail(1024, 1024); 
         
         // Save as JPEG with default quality (usually 75)
         thumbnail.save_with_format(&cache_path_clone, ImageFormat::Jpeg)
