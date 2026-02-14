@@ -1,4 +1,4 @@
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use image::imageops::FilterType;
 use std::fs;
 use base64::{Engine as _, engine::general_purpose};
