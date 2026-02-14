@@ -1,50 +1,105 @@
 import { useState } from "react";
-import reactLogo from "./assets/react.svg";
-import { invoke } from "@tauri-apps/api/core";
-import "./App.css";
+import { invoke, convertFileSrc } from "@tauri-apps/api/core";
+import { open } from "@tauri-apps/plugin-dialog";
+import { useAppStore } from "./store/useAppStore";
+import { FolderOpen, Image as ImageIcon } from "lucide-react";
 
 function App() {
-  const [greetMsg, setGreetMsg] = useState("");
-  const [name, setName] = useState("");
+  const { folderPath, images, currentIndex, setFolderPath, setImages, setCurrentIndex } = useAppStore();
+  const [loading, setLoading] = useState(false);
 
-  async function greet() {
-    // Learn more about Tauri commands at https://tauri.app/develop/calling-rust/
-    setGreetMsg(await invoke("greet", { name }));
-  }
+  const handleOpenFolder = async () => {
+    try {
+      const selected = await open({
+        directory: true,
+        multiple: false,
+      });
+      if (selected && typeof selected === 'string') {
+        setLoading(true);
+        setFolderPath(selected);
+        const result = await invoke("scan_directory", { path: selected });
+        setImages(result as any);
+        setLoading(false);
+      }
+    } catch (error) {
+      console.error("Failed to open folder:", error);
+      setLoading(false);
+    }
+  };
+
+  const currentImage = images[currentIndex];
 
   return (
-    <main className="container">
-      <h1>Welcome to Tauri + React</h1>
+    <div className="flex flex-col h-screen bg-neutral-900 text-white font-sans">
+      {/* Header */}
+      <header className="flex items-center justify-between px-4 py-2 bg-neutral-800 border-b border-neutral-700">
+        <h1 className="text-lg font-bold flex items-center gap-2">
+          <ImageIcon className="w-5 h-5 text-blue-400" />
+          Comfy Image Browser
+        </h1>
+        <button
+          onClick={handleOpenFolder}
+          className="flex items-center gap-2 px-3 py-1.5 bg-blue-600 hover:bg-blue-500 rounded text-sm transition-colors"
+        >
+          <FolderOpen className="w-4 h-4" />
+          Open Folder
+        </button>
+      </header>
 
-      <div className="row">
-        <a href="https://vite.dev" target="_blank">
-          <img src="/vite.svg" className="logo vite" alt="Vite logo" />
-        </a>
-        <a href="https://tauri.app" target="_blank">
-          <img src="/tauri.svg" className="logo tauri" alt="Tauri logo" />
-        </a>
-        <a href="https://react.dev" target="_blank">
-          <img src={reactLogo} className="logo react" alt="React logo" />
-        </a>
-      </div>
-      <p>Click on the Tauri, Vite, and React logos to learn more.</p>
+      {/* Main Content */}
+      <main className="flex-1 overflow-hidden flex">
+        {/* Sidebar / List */}
+        <aside className="w-64 border-r border-neutral-700 bg-neutral-800/50 overflow-y-auto">
+          {loading ? (
+            <div className="p-4 text-neutral-400 text-sm italic">Scanning...</div>
+          ) : images.length > 0 ? (
+            <ul className="divide-y divide-neutral-700/50">
+              {images.map((img, idx) => (
+                <li
+                  key={img.path}
+                  onClick={() => setCurrentIndex(idx)}
+                  className={`p-2 text-xs truncate cursor-pointer hover:bg-neutral-700 transition-colors ${
+                    idx === currentIndex ? 'bg-blue-900/30 text-blue-300' : 'text-neutral-400'
+                  }`}
+                >
+                  {img.name}
+                </li>
+              ))}
+            </ul>
+          ) : (
+            <div className="p-4 text-neutral-500 text-sm">No folder selected</div>
+          )}
+        </aside>
 
-      <form
-        className="row"
-        onSubmit={(e) => {
-          e.preventDefault();
-          greet();
-        }}
-      >
-        <input
-          id="greet-input"
-          onChange={(e) => setName(e.currentTarget.value)}
-          placeholder="Enter a name..."
-        />
-        <button type="submit">Greet</button>
-      </form>
-      <p>{greetMsg}</p>
-    </main>
+        {/* Viewer */}
+        <section className="flex-1 flex flex-col items-center justify-center p-4 bg-black overflow-hidden">
+          {images.length > 0 ? (
+            <div className="relative w-full h-full flex items-center justify-center">
+               <img 
+                 src={convertFileSrc(currentImage.path)} 
+                 alt={currentImage.name}
+                 className="max-w-full max-h-full object-contain shadow-2xl"
+               />
+            </div>
+          ) : (
+            <div className="text-neutral-600 flex flex-col items-center gap-4">
+               <ImageIcon className="w-16 h-16 opacity-20" />
+               <p>Select a folder to start browsing</p>
+            </div>
+          )}
+        </section>
+      </main>
+
+      {/* Footer / Status */}
+      <footer className="px-4 py-1 bg-neutral-800 border-t border-neutral-700 text-[10px] text-neutral-500 flex justify-between">
+        <div>
+          {folderPath || 'No folder selected'}
+        </div>
+        <div>
+          {images.length > 0 ? `${currentIndex + 1} / ${images.length} images` : '0 images'}
+        </div>
+      </footer>
+    </div>
   );
 }
 
