@@ -17,6 +17,7 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             greet,
             scanner::scan_directory,
+            scanner::get_batch_range,
             metadata::get_metadata,
             file_ops::delete_to_trash,
             file_ops::move_to_keep

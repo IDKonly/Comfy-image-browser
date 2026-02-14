@@ -1,8 +1,9 @@
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, useMemo } from "react";
 import { invoke, convertFileSrc } from "@tauri-apps/api/core";
 import { open, confirm } from "@tauri-apps/plugin-dialog";
 import { useAppStore, ImageMetadata } from "./store/useAppStore";
-import { FolderOpen, Image as ImageIcon, Info, Trash2, CheckCircle } from "lucide-react";
+import { FolderOpen, Image as ImageIcon, Info, Trash2, CheckCircle, Layers, ChevronLeft, ChevronRight } from "lucide-react";
+import { useToast } from "./components/Toast";
 
 function App() {
   const { 
@@ -10,6 +11,9 @@ function App() {
     setFolderPath, setImages, setCurrentIndex, setCurrentMetadata, removeImage
   } = useAppStore();
   const [loading, setLoading] = useState(false);
+  const [batchMode, setBatchMode] = useState(false);
+  const [batchRange, setBatchRange] = useState<[number, number] | null>(null);
+  const { showToast } = useToast();
 
   const handleOpenFolder = async () => {
     try {
@@ -23,12 +27,33 @@ function App() {
         const result = await invoke("scan_directory", { path: selected });
         setImages(result as any);
         setLoading(false);
+        showToast(`Loaded ${ (result as any[]).length } images`, 'success');
       }
     } catch (error) {
       console.error("Failed to open folder:", error);
       setLoading(false);
+      showToast("Failed to open folder", 'error');
     }
   };
+
+  const updateBatchRange = useCallback(async (index: number, currentImages: any[]) => {
+    if (!batchMode || currentImages.length === 0) {
+      setBatchRange(null);
+      return;
+    }
+    try {
+      const paths = currentImages.map(img => img.path);
+      const range = await invoke("get_batch_range", { paths, currentIndex: index });
+      setBatchRange(range as [number, number]);
+    } catch (error) {
+      console.error("Failed to get batch range:", error);
+      setBatchRange(null);
+    }
+  }, [batchMode]);
+
+  useEffect(() => {
+    updateBatchRange(currentIndex, images);
+  }, [currentIndex, images, batchMode, updateBatchRange]);
 
   const handleDelete = useCallback(async () => {
     if (images.length === 0) return;
@@ -38,11 +63,13 @@ function App() {
       try {
         await invoke("delete_to_trash", { path: current.path });
         removeImage(currentIndex);
+        showToast(`Deleted ${current.name}`, 'info');
       } catch (error) {
         console.error("Delete failed:", error);
+        showToast("Delete failed", 'error');
       }
     }
-  }, [images, currentIndex, removeImage]);
+  }, [images, currentIndex, removeImage, showToast]);
 
   const handleKeep = useCallback(async () => {
     if (images.length === 0) return;
@@ -50,10 +77,36 @@ function App() {
     try {
       await invoke("move_to_keep", { path: current.path });
       removeImage(currentIndex);
+      showToast(`Moved ${current.name} to _Keep`, 'success');
     } catch (error) {
       console.error("Move to keep failed:", error);
+      showToast("Move failed", 'error');
     }
-  }, [images, currentIndex, removeImage]);
+  }, [images, currentIndex, removeImage, showToast]);
+
+  const nextImage = useCallback(() => {
+    if (images.length === 0) return;
+    if (batchMode && batchRange) {
+        // In batch mode, skip to the start of the NEXT batch
+        const nextIndex = (batchRange[1] + 1) % images.length;
+        setCurrentIndex(nextIndex);
+    } else {
+        setCurrentIndex((currentIndex + 1) % images.length);
+    }
+  }, [images.length, currentIndex, batchMode, batchRange, setCurrentIndex]);
+
+  const prevImage = useCallback(() => {
+    if (images.length === 0) return;
+    if (batchMode && batchRange) {
+        // In batch mode, skip to the start of the PREVIOUS batch
+        let prevIndex = (batchRange[0] - 1 + images.length) % images.length;
+        // Now we need to find the start of THAT batch... but since we don't know it yet, 
+        // we just set the index and the useEffect will calculate the new range.
+        setCurrentIndex(prevIndex);
+    } else {
+        setCurrentIndex((currentIndex - 1 + images.length) % images.length);
+    }
+  }, [images.length, currentIndex, batchMode, batchRange, setCurrentIndex]);
 
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
@@ -61,10 +114,10 @@ function App() {
       
       switch(e.key) {
         case 'ArrowRight':
-          setCurrentIndex((currentIndex + 1) % images.length);
+          nextImage();
           break;
         case 'ArrowLeft':
-          setCurrentIndex((currentIndex - 1 + images.length) % images.length);
+          prevImage();
           break;
         case 'Delete':
           handleDelete();
@@ -73,12 +126,17 @@ function App() {
         case 'K':
           handleKeep();
           break;
+        case 'b':
+        case 'B':
+          setBatchMode(prev => !prev);
+          showToast(`Batch Mode ${!batchMode ? 'ON' : 'OFF'}`, 'info');
+          break;
       }
     };
 
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [images.length, currentIndex, setCurrentIndex, handleDelete, handleKeep]);
+  }, [images.length, nextImage, prevImage, handleDelete, handleKeep, batchMode, showToast]);
 
   useEffect(() => {
     if (images.length > 0 && images[currentIndex]) {
@@ -92,42 +150,60 @@ function App() {
       };
       fetchMetadata();
     }
-  }, [currentIndex, images]);
+  }, [currentIndex, images, setCurrentMetadata]);
 
   const currentImage = images[currentIndex];
 
+  const isInBatch = (idx: number) => {
+    if (!batchRange) return false;
+    return idx >= batchRange[0] && idx <= batchRange[1];
+  };
+
   return (
-    <div className="flex flex-col h-screen bg-neutral-900 text-white font-sans select-none">
+    <div className="flex flex-col h-screen bg-neutral-950 text-neutral-100 font-sans select-none overflow-hidden">
       {/* Header */}
-      <header className="flex items-center justify-between px-4 py-2 bg-neutral-800 border-b border-neutral-700 shrink-0">
-        <h1 className="text-lg font-bold flex items-center gap-2">
-          <ImageIcon className="w-5 h-5 text-blue-400" />
-          Comfy Image Browser
-        </h1>
+      <header className="flex items-center justify-between px-4 h-12 bg-neutral-900 border-b border-neutral-800 shrink-0 z-10">
+        <div className="flex items-center gap-4">
+          <h1 className="text-sm font-black flex items-center gap-2 tracking-tighter uppercase italic text-blue-500">
+            <ImageIcon className="w-5 h-5" />
+            ComfyView
+          </h1>
+          <div className="h-4 w-px bg-neutral-800" />
+          <button
+            onClick={() => setBatchMode(!batchMode)}
+            className={`flex items-center gap-2 px-3 py-1 rounded text-[10px] font-bold uppercase transition-all ${
+              batchMode ? 'bg-blue-600 text-white shadow-[0_0_10px_rgba(37,99,235,0.4)]' : 'bg-neutral-800 text-neutral-400 hover:bg-neutral-700'
+            }`}
+          >
+            <Layers className="w-3.5 h-3.5" />
+            Batch Mode
+          </button>
+        </div>
+
         <div className="flex items-center gap-2">
            {images.length > 0 && (
-             <>
+             <div className="flex items-center gap-1 bg-neutral-800 p-1 rounded-md border border-neutral-700/50">
                <button
                 onClick={handleKeep}
-                className="flex items-center gap-2 px-3 py-1.5 bg-green-700 hover:bg-green-600 rounded text-xs transition-colors"
+                className="flex items-center gap-2 px-3 py-1 bg-neutral-900 hover:bg-green-900/40 hover:text-green-400 rounded text-[10px] font-bold uppercase transition-all"
                 title="Move to _Keep (K)"
               >
-                <CheckCircle className="w-4 h-4" />
+                <CheckCircle className="w-3.5 h-3.5" />
                 Keep
               </button>
               <button
                 onClick={handleDelete}
-                className="flex items-center gap-2 px-3 py-1.5 bg-red-700 hover:bg-red-600 rounded text-xs transition-colors"
+                className="flex items-center gap-2 px-3 py-1 bg-neutral-900 hover:bg-red-900/40 hover:text-red-400 rounded text-[10px] font-bold uppercase transition-all"
                 title="Delete to _Trash (Del)"
               >
-                <Trash2 className="w-4 h-4" />
-                Delete
+                <Trash2 className="w-3.5 h-3.5" />
+                Trash
               </button>
-             </>
+             </div>
            )}
           <button
             onClick={handleOpenFolder}
-            className="flex items-center gap-2 px-3 py-1.5 bg-blue-600 hover:bg-blue-500 rounded text-xs transition-colors ml-4"
+            className="flex items-center gap-2 px-4 py-1.5 bg-blue-600 hover:bg-blue-500 rounded text-[10px] font-bold uppercase transition-all ml-2"
           >
             <FolderOpen className="w-4 h-4" />
             Open Folder
@@ -138,119 +214,144 @@ function App() {
       {/* Main Content */}
       <main className="flex-1 overflow-hidden flex">
         {/* Sidebar / List */}
-        <aside className="w-64 border-r border-neutral-700 bg-neutral-800/50 overflow-y-auto shrink-0">
+        <aside className="w-64 border-r border-neutral-800 bg-neutral-900/50 overflow-y-auto shrink-0 scrollbar-thin">
           {loading ? (
-            <div className="p-4 text-neutral-400 text-sm italic">Scanning...</div>
+            <div className="p-8 flex flex-col items-center gap-3 animate-pulse">
+               <div className="w-8 h-8 rounded-full border-2 border-blue-500 border-t-transparent animate-spin" />
+               <div className="text-[10px] text-neutral-500 font-bold uppercase tracking-widest">Scanning Files</div>
+            </div>
           ) : images.length > 0 ? (
-            <ul className="divide-y divide-neutral-700/50">
+            <div className="py-2">
               {images.map((img, idx) => (
-                <li
+                <div
                   key={img.path}
                   onClick={() => setCurrentIndex(idx)}
-                  className={`p-2 text-[10px] truncate cursor-pointer hover:bg-neutral-700 transition-colors ${
-                    idx === currentIndex ? 'bg-blue-900/40 text-blue-300' : 'text-neutral-500'
+                  className={`px-4 py-1.5 text-[10px] truncate cursor-pointer transition-all border-l-2 ${
+                    idx === currentIndex 
+                      ? 'bg-blue-600/10 border-blue-500 text-blue-400 font-medium' 
+                      : isInBatch(idx)
+                        ? 'bg-blue-500/5 border-blue-500/30 text-neutral-400'
+                        : 'border-transparent text-neutral-500 hover:text-neutral-300 hover:bg-neutral-800'
                   }`}
                 >
+                  <span className="opacity-30 mr-2 tabular-nums">{String(idx + 1).padStart(3, '0')}</span>
                   {img.name}
-                </li>
+                </div>
               ))}
-            </ul>
+            </div>
           ) : (
-            <div className="p-4 text-neutral-500 text-sm text-center mt-10">No folder selected</div>
+            <div className="p-8 text-neutral-600 text-center text-[10px] font-bold uppercase tracking-widest mt-10 opacity-30">
+               Ready to Scan
+            </div>
           )}
         </aside>
 
         {/* Viewer */}
-        <section className="flex-1 flex flex-col items-center justify-center p-4 bg-black overflow-hidden relative">
+        <section className="flex-1 flex flex-col items-center justify-center p-8 bg-neutral-950 overflow-hidden relative group">
           {images.length > 0 ? (
-            <div className="relative w-full h-full flex items-center justify-center">
+            <div className="relative w-full h-full flex items-center justify-center animate-in fade-in zoom-in-95 duration-500">
                <img 
                  key={currentImage.path}
                  src={convertFileSrc(currentImage.path)} 
                  alt={currentImage.name}
-                 className="max-w-full max-h-full object-contain shadow-2xl transition-opacity duration-200"
+                 className="max-w-full max-h-full object-contain shadow-[0_0_50px_rgba(0,0,0,0.5)] z-0 animate-image-change"
                />
-               <div className="absolute bottom-4 left-4 right-4 text-center pointer-events-none">
-                  <span className="bg-black/60 px-3 py-1 rounded-full text-xs text-neutral-400 backdrop-blur-sm">
+               
+               {/* Nav Arrows (Visible on hover) */}
+               <button 
+                onClick={prevImage}
+                className="absolute left-4 p-2 rounded-full bg-neutral-900/50 border border-neutral-800 text-neutral-400 opacity-0 group-hover:opacity-100 transition-all hover:bg-neutral-800 hover:text-white"
+               >
+                 <ChevronLeft className="w-6 h-6" />
+               </button>
+               <button 
+                onClick={nextImage}
+                className="absolute right-4 p-2 rounded-full bg-neutral-900/50 border border-neutral-800 text-neutral-400 opacity-0 group-hover:opacity-100 transition-all hover:bg-neutral-800 hover:text-white"
+               >
+                 <ChevronRight className="w-6 h-6" />
+               </button>
+
+               <div className="absolute bottom-6 left-1/2 -translate-x-1/2 pointer-events-none">
+                  <span className="bg-neutral-900/80 px-4 py-1.5 rounded-full text-[10px] font-bold text-neutral-400 border border-neutral-800 backdrop-blur-md shadow-2xl uppercase tracking-tighter">
                     {currentImage.name}
                   </span>
                </div>
             </div>
           ) : (
-            <div className="text-neutral-600 flex flex-col items-center gap-4">
-               <ImageIcon className="w-16 h-16 opacity-10" />
-               <p className="text-sm">Select a folder to start browsing</p>
+            <div className="text-neutral-800 flex flex-col items-center gap-6">
+               <ImageIcon className="w-32 h-32 opacity-20 animate-pulse" />
+               <p className="text-[10px] font-black uppercase tracking-[0.2em] opacity-40">Drop folder here or open manually</p>
             </div>
           )}
         </section>
 
         {/* Metadata Sidebar */}
-        <aside className="w-80 border-l border-neutral-700 bg-neutral-800 overflow-y-auto shrink-0 p-4">
-          <div className="flex items-center gap-2 mb-4 text-neutral-300 font-bold border-b border-neutral-700 pb-2">
-            <Info className="w-4 h-4" />
-            Metadata
+        <aside className="w-80 border-l border-neutral-800 bg-neutral-900 overflow-y-auto shrink-0 p-6 scrollbar-thin">
+          <div className="flex items-center gap-2 mb-6 text-neutral-400 text-[10px] font-black uppercase tracking-widest border-b border-neutral-800 pb-4">
+            <Info className="w-4 h-4 text-blue-500" />
+            Metadata Inspector
           </div>
           {currentMetadata ? (
-            <div className="space-y-4 text-[11px]">
+            <div className="space-y-6 text-[10px]">
               {currentMetadata.prompt && (
-                <div>
-                  <div className="text-blue-400 font-bold mb-1 uppercase tracking-tighter opacity-50">Prompt</div>
-                  <div className="bg-neutral-900/50 p-2 rounded leading-relaxed select-all text-neutral-300 border border-neutral-700/50">
+                <div className="space-y-2">
+                  <div className="text-blue-500/60 font-black uppercase tracking-widest flex justify-between items-center">
+                    <span>Positive Prompt</span>
+                    <button onClick={() => { navigator.clipboard.writeText(currentMetadata.prompt!); showToast('Prompt Copied', 'success'); }} className="hover:text-white transition-colors">Copy</button>
+                  </div>
+                  <div className="bg-neutral-950 p-3 rounded-lg leading-relaxed select-all text-neutral-400 border border-neutral-800 hover:border-blue-900/30 transition-colors">
                     {currentMetadata.prompt}
                   </div>
                 </div>
               )}
               {currentMetadata.negative_prompt && (
-                <div>
-                  <div className="text-red-400 font-bold mb-1 uppercase tracking-tighter opacity-50">Negative Prompt</div>
-                  <div className="bg-neutral-900/50 p-2 rounded leading-relaxed select-all text-neutral-300 border border-neutral-700/50">
+                <div className="space-y-2">
+                  <div className="text-red-500/60 font-black uppercase tracking-widest">Negative Prompt</div>
+                  <div className="bg-neutral-950 p-3 rounded-lg leading-relaxed select-all text-neutral-400 border border-neutral-800 hover:border-red-900/30 transition-colors">
                     {currentMetadata.negative_prompt}
                   </div>
                 </div>
               )}
-              <div className="grid grid-cols-2 gap-2">
-                {currentMetadata.steps && (
-                  <div className="bg-neutral-900/50 p-2 rounded border border-neutral-700/50">
-                    <div className="text-neutral-500 scale-90 origin-left mb-1">Steps</div>
-                    <div className="font-bold text-neutral-200">{currentMetadata.steps}</div>
+              <div className="grid grid-cols-2 gap-3">
+                {[
+                  { label: 'Steps', value: currentMetadata.steps },
+                  { label: 'CFG', value: currentMetadata.cfg },
+                  { label: 'Sampler', value: currentMetadata.sampler, full: true },
+                  { label: 'Model', value: currentMetadata.model, full: true }
+                ].map((item, i) => item.value && (
+                  <div key={i} className={`bg-neutral-950 p-3 rounded-lg border border-neutral-800 ${item.full ? 'col-span-2' : ''}`}>
+                    <div className="text-neutral-600 font-black uppercase tracking-tighter mb-1">{item.label}</div>
+                    <div className="font-bold text-neutral-300 truncate" title={String(item.value)}>{item.value}</div>
                   </div>
-                )}
-                {currentMetadata.cfg && (
-                  <div className="bg-neutral-900/50 p-2 rounded border border-neutral-700/50">
-                    <div className="text-neutral-500 scale-90 origin-left mb-1">CFG</div>
-                    <div className="font-bold text-neutral-200">{currentMetadata.cfg}</div>
-                  </div>
-                )}
-                {currentMetadata.sampler && (
-                  <div className="bg-neutral-900/50 p-2 rounded col-span-2 border border-neutral-700/50">
-                    <div className="text-neutral-500 scale-90 origin-left mb-1">Sampler</div>
-                    <div className="font-bold text-neutral-200">{currentMetadata.sampler}</div>
-                  </div>
-                )}
-                {currentMetadata.model && (
-                  <div className="bg-neutral-900/50 p-2 rounded col-span-2 border border-neutral-700/50">
-                    <div className="text-neutral-500 scale-90 origin-left mb-1">Model</div>
-                    <div className="font-bold text-neutral-200 truncate" title={currentMetadata.model}>{currentMetadata.model}</div>
-                  </div>
-                )}
+                ))}
               </div>
             </div>
           ) : (
-            <div className="text-neutral-500 italic text-xs text-center mt-10">No metadata found</div>
+            <div className="flex flex-col items-center justify-center py-20 text-neutral-700 text-center space-y-4">
+               <div className="w-12 h-px bg-neutral-800" />
+               <div className="text-[10px] font-bold uppercase tracking-widest">No Meta Data</div>
+               <div className="w-12 h-px bg-neutral-800" />
+            </div>
           )}
         </aside>
       </main>
 
       {/* Footer / Status */}
-      <footer className="px-4 py-1.5 bg-neutral-800 border-t border-neutral-700 text-[10px] text-neutral-500 flex justify-between shrink-0">
-        <div className="truncate pr-4 italic">
-          {folderPath || 'No folder selected'}
+      <footer className="px-4 h-8 bg-neutral-900 border-t border-neutral-800 text-[9px] text-neutral-500 flex items-center justify-between shrink-0 z-10">
+        <div className="truncate pr-8 font-mono opacity-50">
+          {folderPath || '---'}
         </div>
-        <div className="shrink-0 flex gap-4">
+        <div className="flex gap-6 font-bold uppercase tracking-tighter items-center">
           {images.length > 0 && (
             <>
-              <span>{images[currentIndex]?.size ? `${(images[currentIndex].size / 1024 / 1024).toFixed(2)} MB` : ''}</span>
-              <span className="text-neutral-400 font-bold">{currentIndex + 1} / {images.length} images</span>
+              {batchMode && batchRange && (
+                <div className="flex items-center gap-2 px-2 py-0.5 bg-blue-900/20 border border-blue-900/50 rounded text-blue-400 text-[8px]">
+                   BATCH: {batchRange[1] - batchRange[0] + 1} IMAGES
+                </div>
+              )}
+              <span className="text-neutral-600">{images[currentIndex]?.size ? `${(images[currentIndex].size / 1024 / 1024).toFixed(2)} MB` : ''}</span>
+              <div className="w-px h-3 bg-neutral-800" />
+              <span className="text-blue-500/60">{currentIndex + 1} <span className="text-neutral-700 mx-1">/</span> {images.length}</span>
             </>
           )}
         </div>
