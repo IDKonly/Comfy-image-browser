@@ -22,6 +22,8 @@ pub fn run() {
             scanner::scan_directory,
             scanner::get_batch_range,
             scanner::search_images,
+            scanner::search_advanced_images,
+            scanner::get_filter_options,
             metadata::get_metadata,
             file_ops::delete_to_trash,
             file_ops::move_to_keep,

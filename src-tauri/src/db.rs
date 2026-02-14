@@ -114,4 +114,45 @@ impl DB {
         }
         Ok(prompts)
     }
+
+    pub fn get_distinct_models(&self, folder: &str) -> Result<Vec<String>> {
+        let mut stmt = self.conn.prepare("SELECT DISTINCT model FROM images WHERE folder = ?1 AND model IS NOT NULL AND model != '' ORDER BY model")?;
+        let rows = stmt.query_map(params![folder], |row| row.get(0))?;
+        let mut results = Vec::new();
+        for r in rows { results.push(r?); }
+        Ok(results)
+    }
+
+    pub fn get_distinct_samplers(&self, folder: &str) -> Result<Vec<String>> {
+        let mut stmt = self.conn.prepare("SELECT DISTINCT sampler FROM images WHERE folder = ?1 AND sampler IS NOT NULL AND sampler != '' ORDER BY sampler")?;
+        let rows = stmt.query_map(params![folder], |row| row.get(0))?;
+        let mut results = Vec::new();
+        for r in rows { results.push(r?); }
+        Ok(results)
+    }
+
+    pub fn search_advanced(&self, folder: &str, query: &str, model: &str, sampler: &str) -> Result<Vec<ImageInfo>> {
+        let sql = "SELECT path, name, mtime, size FROM images 
+                   WHERE folder = ?1 
+                   AND (?2 = '' OR (prompt LIKE ?3 OR negative_prompt LIKE ?3 OR name LIKE ?3))
+                   AND (?4 = '' OR model = ?4)
+                   AND (?5 = '' OR sampler = ?5)
+                   ORDER BY mtime DESC";
+        
+        let mut stmt = self.conn.prepare(sql)?;
+        let pattern = format!("%{}%", query);
+        
+        let rows = stmt.query_map(params![folder, query, pattern, model, sampler], |row| {
+             Ok(ImageInfo {
+                path: row.get(0)?,
+                name: row.get(1)?,
+                mtime: row.get::<_, i64>(2)? as u64,
+                size: row.get::<_, i64>(3)? as u64,
+            })
+        })?;
+
+        let mut results = Vec::new();
+        for img in rows { results.push(img?); }
+        Ok(results)
+    }
 }

@@ -3,9 +3,10 @@ import { invoke, convertFileSrc } from "@tauri-apps/api/core";
 import { open, confirm } from "@tauri-apps/plugin-dialog";
 import { LazyStore } from "@tauri-apps/plugin-store";
 import { useAppStore, ImageMetadata, Shortcuts, DEFAULT_SHORTCUTS } from "./store/useAppStore";
-import { FolderOpen, Image as ImageIcon, Layers, ChevronLeft, ChevronRight, Search, X, Settings, Keyboard } from "lucide-react";
+import { FolderOpen, Image as ImageIcon, Layers, ChevronLeft, ChevronRight, Search, X, Settings, Keyboard, Filter } from "lucide-react";
 import { useToast } from "./components/Toast";
 import { ZoomPanViewer } from "./components/ZoomPanViewer";
+import { FilterPanel } from "./components/FilterPanel";
 
 // Use direct imports which are more reliable in Vite 7
 // @ts-ignore
@@ -70,13 +71,14 @@ function App() {
     folderPath, images, currentIndex, currentMetadata, shortcuts,
     setFolderPath, setImages, setCurrentIndex, setCurrentMetadata, removeImages, setShortcuts
   } = useAppStore();
-  // ... (rest of App state)
   const [batchMode, setBatchMode] = useState(false);
   const [batchRange, setBatchRange] = useState<[number, number] | null>(null);
   const [searchQuery, setSearchQuery] = useState("");
   const [isSearching, setIsSearching] = useState(false);
   const [imageSrc, setImageSrc] = useState<string | null>(null);
   const [showSettings, setShowSettings] = useState(false);
+  const [showFilters, setShowFilters] = useState(false);
+  const [activeFilters, setActiveFilters] = useState({ model: "", sampler: "" });
   const { showToast } = useToast();
   const listRef = useRef<any>(null);
 
@@ -122,22 +124,39 @@ function App() {
     }
   };
 
-  const handleSearch = async () => {
+  const handleSearch = async (overrideFilters?: { model: string, sampler: string }) => {
     if (!folderPath) return;
-    if (!searchQuery.trim()) {
+    
+    const filters = overrideFilters || activeFilters;
+    const hasFilters = filters.model || filters.sampler;
+    
+    if (!searchQuery.trim() && !hasFilters) {
       setIsSearching(false);
       const result = await invoke("scan_directory", { path: folderPath });
       setImages(result as any);
       return;
     }
+
     setIsSearching(true);
-    const results = await invoke("search_images", { folder: folderPath, query: searchQuery }) as any[];
+    const results = await invoke("search_advanced_images", { 
+        folder: folderPath, 
+        query: searchQuery, 
+        model: filters.model, 
+        sampler: filters.sampler 
+    }) as any[];
+    
     setImages(results);
     showToast(`Found ${results.length} matches`, 'info');
   };
 
+  const handleFilterChange = (filters: { model: string, sampler: string }) => {
+      setActiveFilters(filters);
+      handleSearch(filters);
+  };
+
   const clearSearch = async () => {
     setSearchQuery("");
+    setActiveFilters({ model: "", sampler: "" });
     setIsSearching(false);
     if (folderPath) {
       const result = await invoke("scan_directory", { path: folderPath });
@@ -231,7 +250,6 @@ function App() {
 
   return (
     <div className="flex flex-col h-screen bg-neutral-950 text-neutral-100 font-sans overflow-hidden">
-      {/* ... header ... */}
       <header className="flex items-center justify-between px-4 h-14 bg-neutral-900 border-b border-white/5 shrink-0 z-10 shadow-2xl">
         <div className="flex items-center gap-6"><div className="flex items-center gap-2"><div className="w-8 h-8 bg-blue-600 rounded-lg flex items-center justify-center text-white font-black italic">CV</div><h1 className="text-lg font-black tracking-tighter uppercase italic">ComfyView</h1></div>
         <button onClick={() => setBatchMode(!batchMode)} className={`flex items-center gap-2 px-4 py-1.5 rounded-full text-[10px] font-bold uppercase transition-all border ${batchMode ? 'bg-blue-600 border-blue-500 text-white shadow-[0_0_15px_rgba(37,99,235,0.3)]' : 'bg-neutral-800 border-neutral-700 text-neutral-400'}`}><Layers className="w-3.5 h-3.5" />Batch Mode</button></div>
@@ -241,12 +259,26 @@ function App() {
       </header>
 
       <main className="flex-1 overflow-hidden flex">
-        <aside className="w-72 border-r border-white/5 bg-neutral-900 flex flex-col shrink-0 overflow-hidden">
-          <div className="p-4 space-y-3 shrink-0"><div className="relative group"><Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-neutral-600 group-focus-within:text-blue-500" />
-          <input id="search-input" type="text" placeholder="Search... (/)" value={searchQuery} onChange={e => setSearchQuery(e.target.value)} onKeyDown={e => e.key === 'Enter' && handleSearch()} className="w-full bg-neutral-950 border border-white/5 rounded-xl py-2.5 pl-10 text-[11px] focus:outline-none focus:border-blue-500/50 transition-all" /></div>
+        <aside className="w-72 border-r border-white/5 bg-neutral-900 flex flex-col shrink-0 overflow-hidden relative">
+          <div className="p-4 space-y-3 shrink-0"><div className="relative group flex items-center gap-2">
+            <div className="relative flex-1">
+                <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-neutral-600 group-focus-within:text-blue-500" />
+                <input id="search-input" type="text" placeholder="Search... (/)" value={searchQuery} onChange={e => setSearchQuery(e.target.value)} onKeyDown={e => e.key === 'Enter' && handleSearch()} className="w-full bg-neutral-950 border border-white/5 rounded-xl py-2.5 pl-10 text-[11px] focus:outline-none focus:border-blue-500/50 transition-all" />
+            </div>
+            <button onClick={() => setShowFilters(!showFilters)} className={`p-2.5 rounded-xl border transition-all ${showFilters || activeFilters.model || activeFilters.sampler ? 'bg-blue-600/20 border-blue-500/50 text-blue-400' : 'bg-neutral-950 border-white/5 text-neutral-500 hover:text-white'}`}>
+                <Filter className="w-4 h-4" />
+            </button>
+          </div>
           {isSearching && <button onClick={moveSearchResults} className="w-full py-2 bg-neutral-800 hover:bg-blue-600/20 border border-blue-500/10 rounded-xl text-[10px] font-bold text-neutral-400">Classify results</button>}</div>
           
           <div className="flex-1 relative min-h-0">
+             {/* Filter Panel Overlay */}
+             {showFilters && (
+                 <div className="absolute inset-0 z-20 bg-neutral-900/95 backdrop-blur-sm animate-in fade-in duration-200">
+                     <FilterPanel folderPath={folderPath} onFilterChange={handleFilterChange} onClose={() => setShowFilters(false)} />
+                 </div>
+             )}
+
             {images.length > 0 && List && AutoSizer ? (
               <AutoSizer>
                 {({ height, width }: any) => (
@@ -267,19 +299,32 @@ function App() {
           </div>
         </aside>
 
-        {/* ... rest of main ... */}
-
-
         <section className="flex-1 flex flex-col bg-[#050505] overflow-hidden relative group">
           {images.length > 0 && images[currentIndex] ? (
             batchMode ? (
-              <div className="w-full h-full p-8 overflow-y-auto grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4 animate-in fade-in zoom-in-95 duration-500 scrollbar-thin content-center justify-items-center">
-                {images.slice(batchRange?.[0] || currentIndex, (batchRange?.[1] || currentIndex) + 1).map((img) => (
-                  <Thumbnail key={img.path} path={img.path} fit="contain" onClick={() => setCurrentIndex(images.indexOf(img))}
-                    className={`w-full aspect-[3/4] max-h-[80vh] cursor-pointer rounded-2xl border-4 transition-all duration-500 hover:scale-[1.02] shadow-2xl ${images.indexOf(img) === currentIndex ? 'border-blue-500 ring-[12px] ring-blue-500/10' : 'border-white/5 hover:border-white/10'}`}
-                  />
-                ))}
-              </div>
+              (() => {
+                const start = batchRange?.[0] || currentIndex;
+                const end = batchRange?.[1] || currentIndex;
+                const batchItems = images.slice(start, end + 1);
+                const count = batchItems.length;
+                const cols = Math.ceil(Math.sqrt(count));
+                
+                return (
+                  <div 
+                    className="w-full h-full p-8 overflow-hidden grid gap-4 animate-in fade-in zoom-in-95 duration-500 content-center justify-items-center"
+                    style={{
+                      gridTemplateColumns: `repeat(${cols}, minmax(0, 1fr))`,
+                      gridTemplateRows: `repeat(${Math.ceil(count / cols)}, minmax(0, 1fr))`
+                    }}
+                  >
+                    {batchItems.map((img) => (
+                      <Thumbnail key={img.path} path={img.path} fit="contain" onClick={() => setCurrentIndex(images.indexOf(img))}
+                        className={`w-full h-full min-h-0 cursor-pointer rounded-2xl border-4 transition-all duration-300 hover:scale-[1.02] shadow-2xl ${images.indexOf(img) === currentIndex ? 'border-blue-500 ring-[4px] ring-blue-500/30' : 'border-white/5 hover:border-white/10'}`}
+                      />
+                    ))}
+                  </div>
+                );
+              })()
             ) : (
               <div className="relative w-full h-full flex items-center justify-center p-0 overflow-hidden">
                 {imageSrc && <ZoomPanViewer key={images[currentIndex].path} src={imageSrc} className="animate-image-change" />}

@@ -75,6 +75,26 @@ pub fn scan_directory(path: String) -> Result<Vec<ImageInfo>, String> {
     Ok(images)
 }
 
+#[derive(Serialize, Deserialize, Debug, Clone)]
+pub struct FilterOptions {
+    models: Vec<String>,
+    samplers: Vec<String>,
+}
+
+#[tauri::command]
+pub fn get_filter_options(folder: String) -> Result<FilterOptions, String> {
+    let db = DB::open().map_err(|e| e.to_string())?;
+    let models = db.get_distinct_models(&folder).map_err(|e| e.to_string())?;
+    let samplers = db.get_distinct_samplers(&folder).map_err(|e| e.to_string())?;
+    Ok(FilterOptions { models, samplers })
+}
+
+#[tauri::command]
+pub fn search_advanced_images(folder: String, query: String, model: String, sampler: String) -> Result<Vec<ImageInfo>, String> {
+    let db = DB::open().map_err(|e| e.to_string())?;
+    db.search_advanced(&folder, &query, &model, &sampler).map_err(|e| e.to_string())
+}
+
 #[tauri::command]
 pub fn search_images(folder: String, query: String) -> Result<Vec<ImageInfo>, String> {
     let db = DB::open().map_err(|e| e.to_string())?;
