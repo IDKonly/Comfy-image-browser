@@ -5,47 +5,41 @@ import { LazyStore } from "@tauri-apps/plugin-store";
 import { useAppStore, ImageMetadata, Shortcuts, DEFAULT_SHORTCUTS } from "./store/useAppStore";
 import { FolderOpen, Image as ImageIcon, Layers, ChevronLeft, ChevronRight, Search, X, Settings, Keyboard } from "lucide-react";
 import { useToast } from "./components/Toast";
-import { List } from "react-window";
+import { FixedSizeList as List } from "react-window";
 import { AutoSizer } from "react-virtualized-auto-sizer";
 
 const store = new LazyStore(".settings.json");
 
-// Lazy & Virtualized Thumbnail Component
+// Simplified Thumbnail Component (Relies on react-window virtualization)
 const Thumbnail = ({ path, className, onClick, fit = "cover" }: { path: string, className?: string, onClick?: () => void, fit?: "cover" | "contain" }) => {
   const [src, setSrc] = useState<string | null>(null);
-  const [isVisible, setIsVisible] = useState(false);
-  const containerRef = useRef<HTMLDivElement>(null);
+  const [error, setError] = useState(false);
 
   useEffect(() => {
-    const observer = new IntersectionObserver(([entry]) => {
-      if (entry.isIntersecting) {
-        setIsVisible(true);
-        observer.disconnect();
-      }
-    }, { rootMargin: '100px' });
-
-    if (containerRef.current) observer.observe(containerRef.current);
-    return () => observer.disconnect();
-  }, []);
-
-  useEffect(() => {
-    if (!isVisible) return;
     let active = true;
     invoke("get_thumbnail", { path }).then(res => {
-      if (active) setSrc(convertFileSrc(res as string));
-    }).catch(() => {
-      if (active) setSrc(convertFileSrc(path));
+      if (active) {
+        const url = convertFileSrc(res as string);
+        setSrc(url);
+      }
+    }).catch((err) => {
+      console.error("Thumbnail error for:", path, err);
+      if (active) setSrc(convertFileSrc(path)); // Fallback to original
     });
     return () => { active = false; };
-  }, [path, isVisible]);
+  }, [path]);
 
   return (
-    <div ref={containerRef} className={`overflow-hidden bg-neutral-900/50 flex items-center justify-center ${className}`} onClick={onClick}>
+    <div className={`overflow-hidden bg-neutral-900/50 flex items-center justify-center ${className}`} onClick={onClick}>
       {src ? (
-        <img src={src} className={`w-full h-full ${fit === "cover" ? 'object-cover' : 'object-contain'} animate-in fade-in duration-300`} loading="lazy" />
+        <img 
+          src={src} 
+          className={`w-full h-full ${fit === "cover" ? 'object-cover' : 'object-contain'} animate-in fade-in duration-300`} 
+          onError={() => setError(true)}
+        />
       ) : (
         <div className="w-full h-full flex items-center justify-center">
-          <div className="w-4 h-4 border-2 border-white/5 border-t-blue-500 rounded-full animate-spin" />
+          {error ? <ImageIcon className="w-4 h-4 text-neutral-700" /> : <div className="w-4 h-4 border-2 border-white/5 border-t-blue-500 rounded-full animate-spin" />}
         </div>
       )}
     </div>
@@ -103,7 +97,7 @@ function App() {
   useEffect(() => {
     if (listRef.current) {
       const rowIndex = Math.floor(currentIndex / 2);
-      listRef.current.scrollToRow({ index: rowIndex });
+      listRef.current.scrollToItem(rowIndex);
     }
   }, [currentIndex]);
 
@@ -301,7 +295,7 @@ function App() {
     <div className="flex flex-col h-screen bg-neutral-950 text-neutral-100 font-sans overflow-hidden text-center">
       {/* Header */}
       <header className="flex items-center justify-between px-4 h-14 bg-neutral-900 border-b border-white/5 shrink-0 z-10 shadow-2xl">
-        <div className="flex items-center gap-6">
+        <div className="flex items-center gap-6 text-left">
           <div className="flex items-center gap-2">
             <div className="w-8 h-8 bg-blue-600 rounded-lg flex items-center justify-center shadow-lg shadow-blue-900/20 text-white font-black italic">CV</div>
             <h1 className="text-lg font-black tracking-tighter uppercase italic text-white">ComfyView</h1>
@@ -372,7 +366,7 @@ function App() {
                 ))}
               </div>
             ) : (
-              <div className="relative w-full h-full flex items-center justify-center p-10">
+              <div className="relative w-full h-full flex items-center justify-center p-10 text-center">
                 {imageSrc && <img key={images[currentIndex].path} src={imageSrc} className="max-w-full max-h-full object-contain shadow-[0_0_100px_rgba(0,0,0,0.8)] animate-image-change rounded-md" />}
                 <button onClick={prevImage} className="absolute left-6 p-4 rounded-2xl bg-neutral-900/80 text-white opacity-0 group-hover:opacity-100 transition-all hover:bg-blue-600 hover:scale-110 shadow-2xl backdrop-blur-xl"><ChevronLeft className="w-8 h-8" /></button>
                 <button onClick={nextImage} className="absolute right-6 p-4 rounded-2xl bg-neutral-900/80 text-white opacity-0 group-hover:opacity-100 transition-all hover:bg-blue-600 hover:scale-110 shadow-2xl backdrop-blur-xl"><ChevronRight className="w-8 h-8" /></button>
@@ -389,14 +383,14 @@ function App() {
         </section>
 
         {/* Metadata Sidebar */}
-        <aside className="w-80 border-l border-white/5 bg-neutral-900 flex flex-col shrink-0">
+        <aside className="w-80 border-l border-white/5 bg-neutral-900 flex flex-col shrink-0 overflow-hidden">
           <div className="p-6 border-b border-white/5 flex items-center justify-between font-black uppercase tracking-widest text-[11px]"><span>Inspector</span>{currentMetadata && <button onClick={() => { navigator.clipboard.writeText(currentMetadata.raw); showToast('Raw Copied', 'success'); }} className="text-[9px] text-neutral-500 hover:text-white uppercase">Raw</button>}</div>
           <div className="flex-1 overflow-y-auto p-6 space-y-8 scrollbar-thin">
             {currentMetadata ? (
               <>
-                {currentMetadata.prompt && <div className="space-y-3"><div className="text-blue-500 text-[9px] font-black uppercase tracking-widest text-left">Prompt</div><div className="bg-neutral-950 p-4 rounded-2xl leading-relaxed text-[11px] border border-white/5 select-text shadow-inner text-left">{currentMetadata.prompt}</div></div>}
-                {currentMetadata.negative_prompt && <div className="space-y-3"><div className="text-red-500 text-[9px] font-black uppercase tracking-widest text-left">Negative</div><div className="bg-neutral-950 p-4 rounded-2xl leading-relaxed text-[11px] border border-white/5 select-text shadow-inner text-left">{currentMetadata.negative_prompt}</div></div>}
-                <div className="grid grid-cols-2 gap-3 text-left">
+                {currentMetadata.prompt && <div className="space-y-3"><div className="text-blue-500 text-[9px] font-black uppercase tracking-widest">Prompt</div><div className="bg-neutral-950 p-4 rounded-2xl leading-relaxed text-[11px] border border-white/5 select-text shadow-inner">{currentMetadata.prompt}</div></div>}
+                {currentMetadata.negative_prompt && <div className="space-y-3"><div className="text-red-500 text-[9px] font-black uppercase tracking-widest">Negative</div><div className="bg-neutral-950 p-4 rounded-2xl leading-relaxed text-[11px] border border-white/5 select-text shadow-inner">{currentMetadata.negative_prompt}</div></div>}
+                <div className="grid grid-cols-2 gap-3">
                   {[ { label: 'Steps', value: currentMetadata.steps }, { label: 'CFG', value: currentMetadata.cfg }, { label: 'Sampler', value: currentMetadata.sampler, full: true }, { label: 'Model', value: currentMetadata.model, full: true } ].map((item, i) => item.value && (
                     <div key={i} className={`bg-neutral-950 p-4 rounded-2xl border border-white/5 ${item.full ? 'col-span-2' : ''}`}><div className="text-neutral-600 text-[9px] font-black uppercase mb-1">{item.label}</div><div className="font-bold text-[11px] truncate select-text text-neutral-200">{item.value}</div></div>
                   ))}
@@ -412,7 +406,7 @@ function App() {
         <div className="fixed inset-0 z-50 bg-black/80 backdrop-blur-md flex items-center justify-center p-10 animate-in fade-in duration-300">
           <div className="bg-neutral-900 border border-white/10 rounded-3xl w-full max-w-md shadow-2xl overflow-hidden animate-in slide-in-from-bottom-10">
             <div className="p-6 border-b border-white/5 flex items-center justify-between">
-              <div className="flex items-center gap-3 font-black uppercase tracking-widest text-sm text-white"><Keyboard className="w-5 h-5 text-blue-500" /> Shortcuts</div>
+              <div className="flex items-center gap-3 font-black uppercase tracking-widest text-sm text-white text-left"><Keyboard className="w-5 h-5 text-blue-500" /> Shortcuts</div>
               <button onClick={() => setShowSettings(false)} className="p-2 hover:bg-white/5 rounded-full transition-colors"><X className="w-5 h-5" /></button>
             </div>
             <div className="p-8 space-y-6">
