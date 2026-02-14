@@ -5,8 +5,12 @@ import { LazyStore } from "@tauri-apps/plugin-store";
 import { useAppStore, ImageMetadata, Shortcuts, DEFAULT_SHORTCUTS } from "./store/useAppStore";
 import { FolderOpen, Image as ImageIcon, Layers, ChevronLeft, ChevronRight, Search, X, Settings, Keyboard } from "lucide-react";
 import { useToast } from "./components/Toast";
-import { FixedSizeList as List } from "react-window";
+import { FixedSizeList } from "react-window";
+// @ts-ignore
 import { AutoSizer } from "react-virtualized-auto-sizer";
+
+// Workaround for react-window ESM issue in Vite
+const List = (FixedSizeList as any).default || FixedSizeList;
 
 const store = new LazyStore(".settings.json");
 
