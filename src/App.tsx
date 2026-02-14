@@ -5,7 +5,7 @@ import { LazyStore } from "@tauri-apps/plugin-store";
 import { useAppStore, ImageMetadata, Shortcuts, DEFAULT_SHORTCUTS } from "./store/useAppStore";
 import { FolderOpen, Image as ImageIcon, Layers, ChevronLeft, ChevronRight, Search, X, Settings, Keyboard } from "lucide-react";
 import { useToast } from "./components/Toast";
-import { FixedSizeGrid as Grid } from "react-window";
+import { FixedSizeList as List } from "react-window";
 import { AutoSizer } from "react-virtualized-auto-sizer";
 
 const store = new LazyStore(".settings.json");
@@ -65,7 +65,7 @@ function App() {
   const [imageSrc, setImageSrc] = useState<string | null>(null);
   const [showSettings, setShowSettings] = useState(false);
   const { showToast } = useToast();
-  const gridRef = useRef<Grid>(null);
+  const listRef = useRef<List>(null);
 
   useEffect(() => {
     const init = async () => {
@@ -99,12 +99,11 @@ function App() {
     }
   }, [folderPath, currentIndex]);
 
-  // Sync grid scroll with currentIndex
+  // Sync list scroll with currentIndex
   useEffect(() => {
-    if (gridRef.current) {
-      const columnCount = 2;
-      const rowIndex = Math.floor(currentIndex / columnCount);
-      gridRef.current.scrollToItem({ rowIndex });
+    if (listRef.current) {
+      const rowIndex = Math.floor(currentIndex / 2);
+      listRef.current.scrollToItem(rowIndex);
     }
   }, [currentIndex]);
 
@@ -271,19 +270,29 @@ function App() {
     return images.slice(batchRange[0], batchRange[1] + 1);
   }, [images, batchMode, batchRange]);
 
-  // Grid Cell Renderer
-  const Cell = ({ columnIndex, rowIndex, style }: any) => {
-    const idx = rowIndex * 2 + columnIndex;
-    const img = images[idx];
-    if (!img) return null;
+  // List Row Renderer (2 columns per row)
+  const Row = ({ index, style }: any) => {
+    const idx1 = index * 2;
+    const idx2 = index * 2 + 1;
+    const img1 = images[idx1];
+    const img2 = images[idx2];
 
     return (
-      <div style={{...style, padding: '4px'}}>
-        <Thumbnail 
-          path={img.path} 
-          onClick={() => setCurrentIndex(idx)}
-          className={`w-full h-full cursor-pointer rounded-lg border-2 transition-all duration-300 ${idx === currentIndex ? 'border-blue-500 scale-[0.98] z-10 shadow-[0_0_20px_rgba(37,99,235,0.2)]' : (batchRange && idx >= batchRange[0] && idx <= batchRange[1]) ? 'border-blue-500/30' : 'border-transparent opacity-60 hover:opacity-100 hover:scale-[1.02]'}`} 
-        />
+      <div style={style} className="flex gap-2 p-1">
+        {img1 && (
+          <Thumbnail 
+            path={img1.path} 
+            onClick={() => setCurrentIndex(idx1)}
+            className={`flex-1 aspect-square cursor-pointer rounded-lg border-2 transition-all duration-300 ${idx1 === currentIndex ? 'border-blue-500 scale-[0.98] z-10 shadow-[0_0_20px_rgba(37,99,235,0.2)]' : (batchRange && idx1 >= batchRange[0] && idx1 <= batchRange[1]) ? 'border-blue-500/30' : 'border-transparent opacity-60 hover:opacity-100 hover:scale-[1.02]'}`} 
+          />
+        )}
+        {img2 ? (
+          <Thumbnail 
+            path={img2.path} 
+            onClick={() => setCurrentIndex(idx2)}
+            className={`flex-1 aspect-square cursor-pointer rounded-lg border-2 transition-all duration-300 ${idx2 === currentIndex ? 'border-blue-500 scale-[0.98] z-10 shadow-[0_0_20px_rgba(37,99,235,0.2)]' : (batchRange && idx2 >= batchRange[0] && idx2 <= batchRange[1]) ? 'border-blue-500/30' : 'border-transparent opacity-60 hover:opacity-100 hover:scale-[1.02]'}`} 
+          />
+        ) : <div className="flex-1" />}
       </div>
     );
   };
@@ -313,7 +322,7 @@ function App() {
       </header>
 
       <main className="flex-1 overflow-hidden flex">
-        {/* Sidebar: Virtualized Thumbnails */}
+        {/* Sidebar: Virtualized List (2 items per row) */}
         <aside className="w-72 border-r border-white/5 bg-neutral-900 flex flex-col shrink-0 overflow-hidden">
           <div className="p-4 space-y-3 shrink-0">
             <div className="relative group">
@@ -327,18 +336,16 @@ function App() {
             {images.length > 0 ? (
               <AutoSizer>
                 {({ height, width }) => (
-                  <Grid
-                    ref={gridRef}
-                    columnCount={2}
-                    columnWidth={width / 2 - 4}
-                    rowCount={Math.ceil(images.length / 2)}
-                    rowHeight={width / 2}
+                  <List
+                    ref={listRef}
                     height={height}
+                    itemCount={Math.ceil(images.length / 2)}
+                    itemSize={width / 2}
                     width={width}
                     className="scrollbar-thin"
                   >
-                    {Cell}
-                  </Grid>
+                    {Row}
+                  </List>
                 )}
               </AutoSizer>
             ) : (
