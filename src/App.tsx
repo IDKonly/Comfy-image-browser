@@ -11,14 +11,13 @@ const store = new LazyStore(".settings.json");
 
 // High-performance Thumbnail Component
 const Thumbnail = ({ path, className, onClick }: { path: string, className?: string, onClick?: () => void }) => {
-  const [src, setSrc] = useState<string>("");
+  const [src, setSrc] = useState<string | null>(null);
 
   useEffect(() => {
     let active = true;
     invoke("get_thumbnail", { path }).then(res => {
       if (active) setSrc(res as string);
     }).catch(() => {
-      // Fallback to asset if thumbnail fails
       if (active) setSrc(convertFileSrc(path));
     });
     return () => { active = false; };
@@ -47,26 +46,29 @@ function App() {
   const [batchRange, setBatchRange] = useState<[number, number] | null>(null);
   const [searchQuery, setSearchQuery] = useState("");
   const [isSearching, setIsSearching] = useState(false);
-  const [imageSrc, setImageSrc] = useState<string>("");
+  const [imageSrc, setImageSrc] = useState<string | null>(null);
   const [showSettings, setShowSettings] = useState(false);
   const { showToast } = useToast();
 
   useEffect(() => {
     const init = async () => {
-      const savedFolder = await store.get<string>("lastFolder");
-      const savedIndex = await store.get<number>("lastIndex");
-      const savedShortcuts = await store.get<Shortcuts>("shortcuts");
-      if (savedShortcuts) setShortcuts(savedShortcuts);
-      if (savedFolder) {
-        setLoading(true);
-        setFolderPath(savedFolder);
-        try {
+      try {
+        const savedFolder = await store.get<string>("lastFolder");
+        const savedIndex = await store.get<number>("lastIndex");
+        const savedShortcuts = await store.get<Shortcuts>("shortcuts");
+        if (savedShortcuts) setShortcuts(savedShortcuts);
+        if (savedFolder) {
+          setLoading(true);
+          setFolderPath(savedFolder);
           const result = await invoke("scan_directory", { path: savedFolder });
           setImages(result as any);
           if (savedIndex !== undefined && (result as any[]).length > savedIndex) {
             setCurrentIndex(savedIndex);
           }
-        } catch (e) {}
+          setLoading(false);
+        }
+      } catch (e) {
+        console.error("Store load error:", e);
         setLoading(false);
       }
     };
@@ -234,6 +236,8 @@ function App() {
       const current = images[currentIndex];
       invoke("get_metadata", { path: current.path }).then(m => setCurrentMetadata(m as ImageMetadata)).catch(() => {});
       setImageSrc(convertFileSrc(current.path));
+    } else {
+      setImageSrc(null);
     }
   }, [currentIndex, images, setCurrentMetadata]);
 
@@ -291,7 +295,7 @@ function App() {
 
         {/* Viewer / Grid */}
         <section className="flex-1 flex flex-col bg-neutral-950 overflow-hidden relative group">
-          {images.length > 0 ? (
+          {images.length > 0 && images[currentIndex] ? (
             batchMode ? (
               <div className="w-full h-full p-10 overflow-y-auto grid grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-6 animate-in fade-in zoom-in-95 duration-500 scrollbar-thin content-start">
                 {batchImages.map((img, i) => (
@@ -303,7 +307,7 @@ function App() {
               </div>
             ) : (
               <div className="relative w-full h-full flex items-center justify-center p-10">
-                <img key={images[currentIndex].path} src={imageSrc} className="max-w-full max-h-full object-contain shadow-2xl animate-image-change rounded-sm" />
+                {imageSrc && <img key={images[currentIndex].path} src={imageSrc} className="max-w-full max-h-full object-contain shadow-2xl animate-image-change rounded-sm" />}
                 <button onClick={prevImage} className="absolute left-6 p-4 rounded-2xl bg-neutral-900/80 text-white opacity-0 group-hover:opacity-100 transition-all hover:bg-blue-600 hover:scale-110 shadow-2xl backdrop-blur-xl"><ChevronLeft className="w-8 h-8" /></button>
                 <button onClick={nextImage} className="absolute right-6 p-4 rounded-2xl bg-neutral-900/80 text-white opacity-0 group-hover:opacity-100 transition-all hover:bg-blue-600 hover:scale-110 shadow-2xl backdrop-blur-xl"><ChevronRight className="w-8 h-8" /></button>
                 <div className="absolute bottom-8 left-1/2 -translate-x-1/2 bg-neutral-900/90 px-6 py-2 rounded-full text-[11px] font-bold border border-white/10 backdrop-blur-2xl shadow-2xl flex items-center gap-4">
