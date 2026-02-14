@@ -1,22 +1,21 @@
 import { useState, useEffect, useCallback, useMemo } from "react";
 import { invoke, convertFileSrc } from "@tauri-apps/api/core";
 import { open, confirm } from "@tauri-apps/plugin-dialog";
-import { readFile } from "@tauri-apps/plugin-fs";
 import { LazyStore } from "@tauri-apps/plugin-store";
 import { useAppStore, ImageMetadata, Shortcuts, DEFAULT_SHORTCUTS } from "./store/useAppStore";
-import { FolderOpen, Image as ImageIcon, Info, Trash2, CheckCircle, Layers, ChevronLeft, ChevronRight, Search, X, FolderInput, Settings, Keyboard } from "lucide-react";
+import { FolderOpen, Image as ImageIcon, Layers, ChevronLeft, ChevronRight, Search, X, Settings, Keyboard } from "lucide-react";
 import { useToast } from "./components/Toast";
 
 const store = new LazyStore(".settings.json");
 
-// High-performance Thumbnail Component
-const Thumbnail = ({ path, className, onClick }: { path: string, className?: string, onClick?: () => void }) => {
+// Optimized Thumbnail Component (File-based)
+const Thumbnail = ({ path, className, onClick, fit = "cover" }: { path: string, className?: string, onClick?: () => void, fit?: "cover" | "contain" }) => {
   const [src, setSrc] = useState<string | null>(null);
 
   useEffect(() => {
     let active = true;
     invoke("get_thumbnail", { path }).then(res => {
-      if (active) setSrc(res as string);
+      if (active) setSrc(convertFileSrc(res as string));
     }).catch(() => {
       if (active) setSrc(convertFileSrc(path));
     });
@@ -24,12 +23,12 @@ const Thumbnail = ({ path, className, onClick }: { path: string, className?: str
   }, [path]);
 
   return (
-    <div className={`overflow-hidden bg-neutral-800 ${className}`} onClick={onClick}>
+    <div className={`overflow-hidden bg-neutral-900/50 flex items-center justify-center ${className}`} onClick={onClick}>
       {src ? (
-        <img src={src} className="w-full h-full object-cover" loading="lazy" />
+        <img src={src} className={`w-full h-full ${fit === "cover" ? 'object-cover' : 'object-contain'}`} loading="lazy" />
       ) : (
         <div className="w-full h-full flex items-center justify-center">
-          <div className="w-4 h-4 border-2 border-white/10 border-t-blue-500 rounded-full animate-spin" />
+          <div className="w-4 h-4 border-2 border-white/5 border-t-blue-500 rounded-full animate-spin" />
         </div>
       )}
     </div>
@@ -60,15 +59,14 @@ function App() {
         if (savedFolder) {
           setLoading(true);
           setFolderPath(savedFolder);
-          const result = await invoke("scan_directory", { path: savedFolder });
-          setImages(result as any);
-          if (savedIndex !== undefined && (result as any[]).length > savedIndex) {
+          const result = await invoke("scan_directory", { path: savedFolder }) as any[];
+          setImages(result);
+          if (savedIndex !== undefined && result.length > savedIndex) {
             setCurrentIndex(savedIndex);
           }
           setLoading(false);
         }
       } catch (e) {
-        console.error("Store load error:", e);
         setLoading(false);
       }
     };
@@ -249,10 +247,10 @@ function App() {
   return (
     <div className="flex flex-col h-screen bg-neutral-950 text-neutral-100 font-sans overflow-hidden">
       {/* Header */}
-      <header className="flex items-center justify-between px-4 h-14 bg-neutral-900 border-b border-white/5 shrink-0 z-10">
+      <header className="flex items-center justify-between px-4 h-14 bg-neutral-900 border-b border-white/5 shrink-0 z-10 shadow-2xl">
         <div className="flex items-center gap-6">
           <div className="flex items-center gap-2">
-            <div className="w-8 h-8 bg-blue-600 rounded-lg flex items-center justify-center shadow-lg shadow-blue-900/20"><ImageIcon className="w-5 h-5 text-white" /></div>
+            <div className="w-8 h-8 bg-blue-600 rounded-lg flex items-center justify-center shadow-lg shadow-blue-900/20 text-white font-black italic">CV</div>
             <h1 className="text-lg font-black tracking-tighter uppercase italic text-white">ComfyView</h1>
           </div>
           <div className="h-6 w-px bg-white/5" />
@@ -274,40 +272,45 @@ function App() {
         {/* Sidebar: Thumbnails */}
         <aside className="w-72 border-r border-white/5 bg-neutral-900 flex flex-col shrink-0 overflow-hidden">
           <div className="p-4 space-y-3">
-            <div className="relative">
-              <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-neutral-600" />
-              <input id="search-input" type="text" placeholder="Search... (/)" value={searchQuery} onChange={e => setSearchQuery(e.target.value)} onKeyDown={e => e.key === 'Enter' && handleSearch()} className="w-full bg-neutral-950 border border-white/5 rounded-xl py-2.5 pl-10 text-[11px] focus:outline-none focus:border-blue-500/50 shadow-inner" />
+            <div className="relative group">
+              <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-neutral-600 group-focus-within:text-blue-500 transition-colors" />
+              <input id="search-input" type="text" placeholder="Search... (/)" value={searchQuery} onChange={e => setSearchQuery(e.target.value)} onKeyDown={e => e.key === 'Enter' && handleSearch()} className="w-full bg-neutral-950 border border-white/5 rounded-xl py-2.5 pl-10 text-[11px] focus:outline-none focus:border-blue-500/50 transition-all" />
             </div>
-            {isSearching && <button onClick={moveSearchResults} className="w-full py-2 bg-neutral-800 hover:bg-blue-600/20 rounded-xl text-[10px] font-bold text-neutral-400">Classify results</button>}
+            {isSearching && <button onClick={moveSearchResults} className="w-full py-2 bg-neutral-800 hover:bg-blue-600/20 border border-blue-500/10 rounded-xl text-[10px] font-bold text-neutral-400">Classify results</button>}
           </div>
 
-          <div className="flex-1 overflow-y-auto scrollbar-thin px-3 pb-4 grid grid-cols-2 gap-2 content-start">
-            {images.map((img, idx) => (
+          <div className="flex-1 overflow-y-auto scrollbar-thin px-3 pb-4 grid grid-cols-2 gap-2 content-start text-center">
+            {loading ? (
+              <div className="col-span-2 py-20 opacity-20 italic text-[10px]">Scanning...</div>
+            ) : images.map((img, idx) => (
               <Thumbnail 
                 key={img.path} 
                 path={img.path} 
                 onClick={() => setCurrentIndex(idx)}
-                className={`aspect-square cursor-pointer rounded-lg border-2 transition-all ${idx === currentIndex ? 'border-blue-500 scale-95 z-10' : (batchRange && idx >= batchRange[0] && idx <= batchRange[1]) ? 'border-blue-500/30' : 'border-transparent opacity-60 hover:opacity-100'}`} 
+                className={`aspect-square cursor-pointer rounded-lg border-2 transition-all duration-300 ${idx === currentIndex ? 'border-blue-500 scale-[0.98] z-10 shadow-[0_0_20px_rgba(37,99,235,0.2)]' : (batchRange && idx >= batchRange[0] && idx <= batchRange[1]) ? 'border-blue-500/30' : 'border-transparent opacity-60 hover:opacity-100 hover:scale-[1.02]'}`} 
               />
             ))}
           </div>
         </aside>
 
         {/* Viewer / Grid */}
-        <section className="flex-1 flex flex-col bg-neutral-950 overflow-hidden relative group">
+        <section className="flex-1 flex flex-col bg-[#050505] overflow-hidden relative group">
           {images.length > 0 && images[currentIndex] ? (
             batchMode ? (
-              <div className="w-full h-full p-10 overflow-y-auto grid grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-6 animate-in fade-in zoom-in-95 duration-500 scrollbar-thin content-start">
-                {batchImages.map((img, i) => (
-                  <div key={img.path} className={`aspect-square group/item relative rounded-xl overflow-hidden border-2 transition-all hover:scale-[1.02] ${images.indexOf(img) === currentIndex ? 'border-blue-500 ring-4 ring-blue-500/20' : 'border-white/5'}`} onClick={() => setCurrentIndex(images.indexOf(img))}>
-                    <img src={convertFileSrc(img.path)} className="w-full h-full object-cover bg-neutral-900" />
-                    <div className="absolute top-2 left-2 bg-black/60 backdrop-blur-md px-2 py-1 rounded text-[8px] font-bold text-white/50">{i + 1}</div>
-                  </div>
+              <div className="w-full h-full p-8 overflow-y-auto grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4 animate-in fade-in zoom-in-95 duration-500 scrollbar-thin content-center justify-items-center">
+                {batchImages.map((img) => (
+                  <Thumbnail
+                    key={img.path}
+                    path={img.path}
+                    fit="contain"
+                    onClick={() => setCurrentIndex(images.indexOf(img))}
+                    className={`w-full aspect-[3/4] max-h-[80vh] cursor-pointer rounded-2xl border-4 transition-all duration-500 hover:scale-[1.02] shadow-2xl ${images.indexOf(img) === currentIndex ? 'border-blue-500 ring-[12px] ring-blue-500/10' : 'border-white/5 hover:border-white/10'}`}
+                  />
                 ))}
               </div>
             ) : (
               <div className="relative w-full h-full flex items-center justify-center p-10">
-                {imageSrc && <img key={images[currentIndex].path} src={imageSrc} className="max-w-full max-h-full object-contain shadow-2xl animate-image-change rounded-sm" />}
+                {imageSrc && <img key={images[currentIndex].path} src={imageSrc} className="max-w-full max-h-full object-contain shadow-[0_0_100px_rgba(0,0,0,0.8)] animate-image-change rounded-md" />}
                 <button onClick={prevImage} className="absolute left-6 p-4 rounded-2xl bg-neutral-900/80 text-white opacity-0 group-hover:opacity-100 transition-all hover:bg-blue-600 hover:scale-110 shadow-2xl backdrop-blur-xl"><ChevronLeft className="w-8 h-8" /></button>
                 <button onClick={nextImage} className="absolute right-6 p-4 rounded-2xl bg-neutral-900/80 text-white opacity-0 group-hover:opacity-100 transition-all hover:bg-blue-600 hover:scale-110 shadow-2xl backdrop-blur-xl"><ChevronRight className="w-8 h-8" /></button>
                 <div className="absolute bottom-8 left-1/2 -translate-x-1/2 bg-neutral-900/90 px-6 py-2 rounded-full text-[11px] font-bold border border-white/10 backdrop-blur-2xl shadow-2xl flex items-center gap-4">
@@ -328,11 +331,11 @@ function App() {
           <div className="flex-1 overflow-y-auto p-6 space-y-8 scrollbar-thin">
             {currentMetadata ? (
               <>
-                {currentMetadata.prompt && <div className="space-y-3"><div className="text-blue-500 text-[9px] font-black uppercase tracking-widest">Prompt</div><div className="bg-neutral-950 p-4 rounded-2xl leading-relaxed text-[11px] border border-white/5 select-text">{currentMetadata.prompt}</div></div>}
-                {currentMetadata.negative_prompt && <div className="space-y-3"><div className="text-red-500 text-[9px] font-black uppercase tracking-widest">Negative</div><div className="bg-neutral-950 p-4 rounded-2xl leading-relaxed text-[11px] border border-white/5 select-text">{currentMetadata.negative_prompt}</div></div>}
+                {currentMetadata.prompt && <div className="space-y-3"><div className="text-blue-500 text-[9px] font-black uppercase tracking-widest">Prompt</div><div className="bg-neutral-950 p-4 rounded-2xl leading-relaxed text-[11px] border border-white/5 select-text shadow-inner">{currentMetadata.prompt}</div></div>}
+                {currentMetadata.negative_prompt && <div className="space-y-3"><div className="text-red-500 text-[9px] font-black uppercase tracking-widest">Negative</div><div className="bg-neutral-950 p-4 rounded-2xl leading-relaxed text-[11px] border border-white/5 select-text shadow-inner">{currentMetadata.negative_prompt}</div></div>}
                 <div className="grid grid-cols-2 gap-3">
                   {[ { label: 'Steps', value: currentMetadata.steps }, { label: 'CFG', value: currentMetadata.cfg }, { label: 'Sampler', value: currentMetadata.sampler, full: true }, { label: 'Model', value: currentMetadata.model, full: true } ].map((item, i) => item.value && (
-                    <div key={i} className={`bg-neutral-950 p-4 rounded-2xl border border-white/5 ${item.full ? 'col-span-2' : ''}`}><div className="text-neutral-600 text-[9px] font-black uppercase mb-1">{item.label}</div><div className="font-bold text-[11px] truncate select-text">{item.value}</div></div>
+                    <div key={i} className={`bg-neutral-950 p-4 rounded-2xl border border-white/5 ${item.full ? 'col-span-2' : ''}`}><div className="text-neutral-600 text-[9px] font-black uppercase mb-1">{item.label}</div><div className="font-bold text-[11px] truncate select-text text-neutral-200">{item.value}</div></div>
                   ))}
                 </div>
               </>
@@ -369,7 +372,7 @@ function App() {
           {images.length > 0 && (
             <>
               {batchMode && batchRange && <div className="px-3 py-1 bg-blue-600/10 border border-blue-500/20 rounded-full text-blue-500 font-black text-[9px]">BATCH: {batchRange[1] - batchRange[0] + 1} IMAGES</div>}
-              <div className="flex gap-2"><span className="text-white/60 font-black">{currentIndex + 1}</span><span className="opacity-20 uppercase text-[8px] font-black">of</span><span className="text-neutral-400 font-black">{images.length}</span></div>
+              <div className="flex gap-2"><span className="text-white/60 font-black tracking-tighter">{currentIndex + 1}</span><span className="opacity-20 uppercase text-[8px] font-black">of</span><span className="text-neutral-400 font-black tracking-tighter">{images.length}</span></div>
             </>
           )}
         </div>

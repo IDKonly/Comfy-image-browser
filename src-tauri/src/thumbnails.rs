@@ -1,7 +1,5 @@
 use std::path::Path;
-use image::imageops::FilterType;
 use std::fs;
-use base64::{Engine as _, engine::general_purpose};
 
 #[tauri::command]
 pub async fn get_thumbnail(path: String) -> Result<String, String> {
@@ -10,35 +8,37 @@ pub async fn get_thumbnail(path: String) -> Result<String, String> {
         return Err("File not found".to_string());
     }
 
-    // 간단한 캐싱 로직: 시스템 임시 폴더 사용
+    // Use system temp dir for high-speed cache
     let mut hasher = std::collections::hash_map::DefaultHasher::new();
     use std::hash::{Hash, Hasher};
     path.hash(&mut hasher);
     let hash = hasher.finish();
     
-    let cache_dir = std::env::temp_dir().join("comfyview_cache");
+    let cache_dir = std::env::temp_dir().join("comfyview_v2_cache");
     if !cache_dir.exists() {
         fs::create_dir_all(&cache_dir).map_err(|e| e.to_string())?;
     }
     
     let cache_path = cache_dir.join(format!("{}.jpg", hash));
 
-    // 캐시가 있으면 반환
+    // Return path if already cached
     if cache_path.exists() {
-        let bytes = fs::read(&cache_path).map_err(|e| e.to_string())?;
-        return Ok(format!("data:image/jpeg;base64,{}", general_purpose::STANDARD.encode(bytes)));
+        return Ok(cache_path.to_string_lossy().to_string());
     }
 
-    // 캐시 없으면 생성 (200px 너비)
-    let img = image::open(p).map_err(|e| e.to_string())?;
-    let thumbnail = img.resize(300, 300, FilterType::Lanczos3);
+    // Optimization: Use faster resize for initial thumbnailing
+    let path_clone = path.clone();
+    let cache_path_clone = cache_path.clone();
     
-    let mut buffer = std::io::Cursor::new(Vec::new());
-    thumbnail.write_to(&mut buffer, image::ImageFormat::Jpeg).map_err(|e| e.to_string())?;
-    let bytes = buffer.into_inner();
-    
-    // 파일로 저장
-    let _ = fs::write(&cache_path, &bytes);
+    tauri::async_runtime::spawn_blocking(move || {
+        let img = image::open(Path::new(&path_clone)).map_err(|e| e.to_string())?;
+        // 400px is enough for grid/sidebar and looks better on high-DPI
+        let thumbnail = img.thumbnail(400, 400); // .thumbnail is much faster than .resize
+        
+        thumbnail.save_with_format(&cache_path_clone, image::ImageFormat::Jpeg)
+            .map_err(|e| e.to_string())?;
+        Ok::<(), String>(())
+    }).await.map_err(|e| e.to_string())??;
 
-    Ok(format!("data:image/jpeg;base64,{}", general_purpose::STANDARD.encode(bytes)))
+    Ok(cache_path.to_string_lossy().to_string())
 }
