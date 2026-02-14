@@ -1,6 +1,7 @@
-import { useState, useEffect, useCallback, useMemo } from "react";
+import { useState, useEffect, useCallback } from "react";
 import { invoke, convertFileSrc } from "@tauri-apps/api/core";
 import { open, confirm } from "@tauri-apps/plugin-dialog";
+import { readFile } from "@tauri-apps/plugin-fs";
 import { useAppStore, ImageMetadata } from "./store/useAppStore";
 import { FolderOpen, Image as ImageIcon, Info, Trash2, CheckCircle, Layers, ChevronLeft, ChevronRight, Search, X, FolderInput } from "lucide-react";
 import { useToast } from "./components/Toast";
@@ -15,6 +16,7 @@ function App() {
   const [batchRange, setBatchRange] = useState<[number, number] | null>(null);
   const [searchQuery, setSearchQuery] = useState("");
   const [isSearching, setIsSearching] = useState(false);
+  const [imageSrc, setImageSrc] = useState<string>("");
   const { showToast } = useToast();
 
   const handleOpenFolder = async () => {
@@ -119,6 +121,7 @@ function App() {
         removeImage(currentIndex);
         showToast(`Deleted ${current.name}`, 'info');
       } catch (error) {
+        console.error("Delete failed:", error);
         showToast("Delete failed", 'error');
       }
     }
@@ -193,15 +196,36 @@ function App() {
 
   useEffect(() => {
     if (images.length > 0 && images[currentIndex]) {
+      const current = images[currentIndex];
+      
+      // Update metadata
       const fetchMetadata = async () => {
         try {
-          const meta = await invoke("get_metadata", { path: images[currentIndex].path });
+          const meta = await invoke("get_metadata", { path: current.path });
           setCurrentMetadata(meta as ImageMetadata);
         } catch (error) {
           console.error("Failed to fetch metadata:", error);
         }
       };
       fetchMetadata();
+
+      // Update Image Source with fallback
+      const updateImageSource = async () => {
+        try {
+          const assetUrl = convertFileSrc(current.path);
+          setImageSrc(assetUrl);
+        } catch (error) {
+          console.error("Asset URL conversion failed, attempting binary read:", error);
+          try {
+            const data = await readFile(current.path);
+            const blob = new Blob([data], { type: 'image/png' });
+            setImageSrc(URL.createObjectURL(blob));
+          } catch (e) {
+            console.error("Binary read failed:", e);
+          }
+        }
+      };
+      updateImageSource();
     }
   }, [currentIndex, images, setCurrentMetadata]);
 
@@ -210,11 +234,6 @@ function App() {
   const isInBatch = (idx: number) => {
     if (!batchRange) return false;
     return idx >= batchRange[0] && idx <= batchRange[1];
-  };
-
-  // Helper to ensure path is correctly formatted for asset protocol in Tauri v2
-  const getImageUrl = (path: string) => {
-    return convertFileSrc(path);
   };
 
   return (
@@ -361,7 +380,7 @@ function App() {
             <div className="relative w-full h-full flex items-center justify-center">
                <img 
                  key={currentImage.path}
-                 src={getImageUrl(currentImage.path)} 
+                 src={imageSrc} 
                  alt={currentImage.name}
                  className="max-w-full max-h-full object-contain shadow-[0_0_100px_rgba(0,0,0,0.8)] z-0 animate-image-change rounded-sm"
                  onError={(e) => {
