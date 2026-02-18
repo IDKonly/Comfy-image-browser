@@ -1,15 +1,45 @@
 use rusqlite::{params, Connection, Result};
 use std::path::Path;
 use crate::metadata::ImageMetadata;
-use crate::scanner::ImageInfo;
+use crate::scanner::{ImageInfo, SortMethod};
+use tauri::Manager;
+use log;
+
+#[tauri::command]
+pub fn get_db_status(app_handle: tauri::AppHandle, folder: String) -> Result<serde_json::Value, String> {
+    let mut path = app_handle.path().app_data_dir().map_err(|e| e.to_string())?;
+    path.push(".image_manager_v2.db");
+    
+    let db = DB::open(&path).map_err(|e| e.to_string())?;
+    let normalized_folder = folder.replace("\\", "/");
+
+    let total_count: i64 = db.conn.query_row("SELECT COUNT(*) FROM images", [], |r| r.get(0)).unwrap_or(0);
+    let folder_count: i64 = db.conn.query_row("SELECT COUNT(*) FROM images WHERE folder = ?1", [normalized_folder.clone()], |r| r.get(0)).unwrap_or(0);
+    
+    // Get sample of 3 paths in folder
+    let mut stmt = db.conn.prepare("SELECT path FROM images WHERE folder = ?1 LIMIT 3").map_err(|e| e.to_string())?;
+    let samples_iter = stmt.query_map([normalized_folder], |r| r.get::<_, String>(0)).map_err(|e| e.to_string())?;
+    
+    let mut samples = Vec::new();
+    for s in samples_iter {
+        if let Ok(path) = s { samples.push(path); }
+    }
+
+    Ok(serde_json::json!({
+        "total_images": total_count,
+        "folder_images": folder_count,
+        "samples": samples,
+        "db_path": path.to_string_lossy().to_string()
+    }))
+}
 
 pub struct DB {
     conn: Connection,
 }
 
 impl DB {
-    pub fn open() -> Result<Self> {
-        let conn = Connection::open(".image_manager_v2.db")?;
+    pub fn open(db_path: &Path) -> Result<Self> {
+        let conn = Connection::open(db_path)?;
         
         conn.pragma_update(None, "journal_mode", "WAL")?;
         
@@ -40,7 +70,7 @@ impl DB {
 
     pub fn insert_image(&self, info: &ImageInfo, meta: &ImageMetadata) -> Result<()> {
         let folder = Path::new(&info.path).parent()
-            .map(|p| p.to_string_lossy().to_string())
+            .map(|p| p.to_string_lossy().to_string().replace("\\", "/"))
             .unwrap_or_default();
 
         self.conn.execute(
@@ -67,6 +97,7 @@ impl DB {
     }
 
     pub fn search(&self, folder: &str, query: &str) -> Result<Vec<ImageInfo>> {
+        let normalized_folder = folder.replace("\\", "/");
         let mut stmt = self.conn.prepare(
             "SELECT path, name, mtime, size FROM images 
              WHERE folder = ?1 AND (prompt LIKE ?2 OR negative_prompt LIKE ?2 OR name LIKE ?2)
@@ -74,7 +105,7 @@ impl DB {
         )?;
         
         let pattern = format!("%{}%", query);
-        let rows = stmt.query_map(params![folder, pattern], |row| {
+        let rows = stmt.query_map(params![normalized_folder, pattern], |row| {
             Ok(ImageInfo {
                 path: row.get(0)?,
                 name: row.get(1)?,
@@ -102,8 +133,9 @@ impl DB {
     }
 
     pub fn get_folder_prompts(&self, folder: &str) -> Result<std::collections::HashMap<String, Option<String>>> {
+        let normalized_folder = folder.replace("\\", "/");
         let mut stmt = self.conn.prepare("SELECT path, prompt FROM images WHERE folder = ?1")?;
-        let rows = stmt.query_map(params![folder], |row| {
+        let rows = stmt.query_map(params![normalized_folder], |row| {
             Ok((row.get::<_, String>(0)?, row.get::<_, Option<String>>(1)?))
         })?;
 
@@ -116,33 +148,71 @@ impl DB {
     }
 
     pub fn get_distinct_models(&self, folder: &str) -> Result<Vec<String>> {
+        let normalized_folder = folder.replace("\\", "/");
         let mut stmt = self.conn.prepare("SELECT DISTINCT model FROM images WHERE folder = ?1 AND model IS NOT NULL AND model != '' ORDER BY model")?;
-        let rows = stmt.query_map(params![folder], |row| row.get(0))?;
+        let rows = stmt.query_map(params![normalized_folder], |row| row.get(0))?;
         let mut results = Vec::new();
         for r in rows { results.push(r?); }
         Ok(results)
     }
 
     pub fn get_distinct_samplers(&self, folder: &str) -> Result<Vec<String>> {
+        let normalized_folder = folder.replace("\\", "/");
         let mut stmt = self.conn.prepare("SELECT DISTINCT sampler FROM images WHERE folder = ?1 AND sampler IS NOT NULL AND sampler != '' ORDER BY sampler")?;
-        let rows = stmt.query_map(params![folder], |row| row.get(0))?;
+        let rows = stmt.query_map(params![normalized_folder], |row| row.get(0))?;
         let mut results = Vec::new();
         for r in rows { results.push(r?); }
         Ok(results)
     }
 
-    pub fn search_advanced(&self, folder: &str, query: &str, model: &str, sampler: &str) -> Result<Vec<ImageInfo>> {
-        let sql = "SELECT path, name, mtime, size FROM images 
-                   WHERE folder = ?1 
-                   AND (?2 = '' OR (prompt LIKE ?3 OR negative_prompt LIKE ?3 OR name LIKE ?3))
-                   AND (?4 = '' OR model = ?4)
-                   AND (?5 = '' OR sampler = ?5)
-                   ORDER BY mtime DESC";
+    pub fn search_advanced(&self, folder: &str, query: &str, model: &str, sampler: &str, sort_method: SortMethod, recursive: bool) -> Result<Vec<ImageInfo>> {
+        let normalized_folder = folder.replace("\\", "/");
+        log::debug!("SEARCH: Folder: {}, Query: '{}', Model: '{}', Sampler: '{}', Recursive: {}", normalized_folder, query, model, sampler, recursive);
         
-        let mut stmt = self.conn.prepare(sql)?;
-        let pattern = format!("%{}%", query);
+        let folder_condition = if recursive {
+            "folder LIKE ?1 || '%'"
+        } else {
+            "folder = ?1"
+        };
+
+        let mut sql = format!("SELECT path, name, mtime, size FROM images WHERE {} ", folder_condition);
+        let mut params: Vec<String> = vec![normalized_folder];
+
+        if !query.trim().is_empty() {
+            let tags: Vec<&str> = query.split(',').map(|s| s.trim()).filter(|s| !s.is_empty()).collect();
+            for tag in tags {
+                let param_idx = params.len() + 1;
+                // Use COLLATE NOCASE for case-insensitive search
+                sql.push_str(&format!(" AND (prompt LIKE ?{} COLLATE NOCASE OR negative_prompt LIKE ?{} COLLATE NOCASE OR name LIKE ?{} COLLATE NOCASE)", param_idx, param_idx, param_idx));
+                params.push(format!("%{}%", tag));
+            }
+        }
+
+        if !model.is_empty() {
+            let param_idx = params.len() + 1;
+            sql.push_str(&format!(" AND model = ?{} COLLATE NOCASE", param_idx));
+            params.push(model.to_string());
+        }
+
+        if !sampler.is_empty() {
+            let param_idx = params.len() + 1;
+            sql.push_str(&format!(" AND sampler = ?{} COLLATE NOCASE", param_idx));
+            params.push(sampler.to_string());
+        }
+
+        let order_by = match sort_method {
+            SortMethod::Newest => "ORDER BY mtime DESC",
+            SortMethod::Oldest => "ORDER BY mtime ASC",
+            SortMethod::NameAsc => "ORDER BY name COLLATE NOCASE ASC",
+            SortMethod::NameDesc => "ORDER BY name COLLATE NOCASE DESC",
+        };
+        sql.push_str(&format!(" {}", order_by));
         
-        let rows = stmt.query_map(params![folder, query, pattern, model, sampler], |row| {
+        log::debug!("SQL: {}", sql);
+        log::debug!("PARAMS: {:?}", params);
+
+        let mut stmt = self.conn.prepare(&sql)?;
+        let rows = stmt.query_map(rusqlite::params_from_iter(params.iter()), |row| {
              Ok(ImageInfo {
                 path: row.get(0)?,
                 name: row.get(1)?,
@@ -153,6 +223,7 @@ impl DB {
 
         let mut results = Vec::new();
         for img in rows { results.push(img?); }
+        log::debug!("SEARCH RESULT COUNT: {}", results.len());
         Ok(results)
     }
 }

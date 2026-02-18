@@ -7,32 +7,37 @@
 - [x] Basic File Operations (Delete, Keep).
 - [x] Keyboard Navigation.
 
-## Phase 2: Visual Feedback Loop & GUI/UX Polish (Current)
-- [ ] **Visual Feedback System**:
-    - [ ] Add Toast notifications for file operations (Delete/Keep).
-    - [ ] Loading overlays for heavy directory scans.
-    - [ ] Smooth transitions between images.
-- [ ] **Advanced Viewer UX**:
-    - [ ] Implementation of Zoom/Pan (Canvas or high-perf CSS).
-    - [ ] "Fit to Screen" vs "Original Size" toggle with visual indicators.
-- [ ] **Layout Optimization**:
-    - [ ] Resizable sidebars.
-    - [ ] Grid View vs. List View toggle.
-    - [ ] Modern dark-themed palette based on Shadcn/Tailwind.
+## Phase 2: Visual Feedback Loop & GUI/UX Polish (Completed)
+- [x] **Visual Feedback System**:
+    - [x] Add Toast notifications for file operations.
+    - [x] Smooth transitions between images.
+- [x] **Advanced Viewer UX**:
+    - [x] Implementation of Zoom/Pan (high-perf CSS/React).
+- [x] **Layout Optimization**:
+    - [x] Batch Mode (Grid View).
+    - [x] Modern dark-themed aesthetic.
 
-## Phase 3: Scenario-Driven Feature Parity (Legacy Alignment)
-- [ ] **Batch Logic Migration**:
-    - [ ] Port the "contigous prompt grouping" logic from `legacy/test_batch_logic.py`.
-    - [ ] Visual grouping indicators in the sidebar/grid.
-- [ ] **Search & Filter**:
-    - [ ] Real-time metadata search.
-    - [ ] Filter by Model/Sampler/Date.
+## Phase 3: Scenario-Driven Feature Parity & Intelligence (Completed)
+- [x] **Batch Logic**:
+    - [x] Ported "contiguous prompt grouping" logic.
+    - [x] Visual grouping indicators in Batch Mode.
+- [x] **Advanced Search & Filter**:
+    - [x] Multi-tag search (AND condition).
+    - [x] Filter by Model/Sampler.
+    - [x] Recursive folder scanning and searching.
+- [x] **Wildcard Workshop**:
+    - [x] AI-driven prompt compression.
+    - [x] Similarity-based results sorting.
+    - [x] Interactive tag refining.
 
-## Phase 4: Performance & Virtualization
-- [ ] **Virtualized Grid**: Render 10k+ images efficiently using `react-window` or `tanstack-virtual`.
-- [ ] **Smart Pre-fetching**: Background loading of next/previous images for zero-latency browsing.
+## Phase 4: Performance & Stability (Completed)
+- [x] **Virtualized List**: High-performance scrolling for 10k+ images.
+- [x] **Multi-threading Optimization**: Parallel metadata indexing and thumbnail generation.
+- [x] **Undo System**: Revert accidental file moves with Ctrl+Z.
+- [x] **Persistence**: Secure storage of settings and database in app data directory.
 
-## Phase 5: Testing & Validation
-- [ ] Port legacy test scenarios (`legacy/test_app.py`, `legacy/test_batch_logic.py`) to Rust/TypeScript.
-- [ ] Visual regression testing.
-- [ ] Performance benchmarking (Scan speed, Metadata indexing).
+## Phase 5: Advanced Intelligence & Ecosystem (Future)
+- [ ] **AI Tagging**: Auto-tagging images without metadata using local LLM/Vision models.
+- [ ] **Duplicate Detection**: Find and group identical or highly similar images.
+- [ ] **Mobile Remote**: View and sort images from a mobile device on the same network.
+- [ ] **Extension API**: Support for community-made themes and plugins.

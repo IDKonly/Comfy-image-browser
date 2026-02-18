@@ -3,10 +3,13 @@ import { invoke, convertFileSrc } from "@tauri-apps/api/core";
 import { open, confirm } from "@tauri-apps/plugin-dialog";
 import { LazyStore } from "@tauri-apps/plugin-store";
 import { useAppStore, ImageMetadata, Shortcuts, DEFAULT_SHORTCUTS } from "./store/useAppStore";
-import { FolderOpen, Image as ImageIcon, Layers, ChevronLeft, ChevronRight, Search, X, Settings, Keyboard, Filter } from "lucide-react";
+import { FolderOpen, Image as ImageIcon, Layers, ChevronLeft, ChevronRight, Search, X, Settings, Keyboard, Filter, Wand2, ArrowDownAZ, ArrowUpAZ, Clock, History } from "lucide-react";
 import { useToast } from "./components/Toast";
 import { ZoomPanViewer } from "./components/ZoomPanViewer";
 import { FilterPanel } from "./components/FilterPanel";
+import { WildcardTools } from "./components/WildcardTools";
+import { DebugPanel } from "./components/DebugPanel";
+import { listen } from "@tauri-apps/api/event";
 
 // Use direct imports which are more reliable in Vite 7
 // @ts-ignore
@@ -19,10 +22,17 @@ const AutoSizer = AutoSizerPkg.default || AutoSizerPkg;
 
 const store = new LazyStore(".settings.json");
 
-// Simple concurrency limiter for thumbnail generation
-const taskQueue: (() => Promise<void>)[] = [];
+// Simple concurrency limiter for thumbnail generation with priority support
+interface Task {
+  path: string;
+  priority: boolean;
+  run: () => Promise<void>;
+}
+
+const taskQueue: Task[] = [];
+const pendingTasks = new Map<string, Promise<string>>();
 let activeTasks = 0;
-const MAX_CONCURRENT = 6;
+const MAX_CONCURRENT = 12;
 
 const processQueue = () => {
   if (activeTasks >= MAX_CONCURRENT || taskQueue.length === 0) return;
@@ -30,7 +40,7 @@ const processQueue = () => {
   const task = taskQueue.shift();
   if (task) {
     activeTasks++;
-    task().finally(() => {
+    task.run().finally(() => {
       activeTasks--;
       processQueue();
     });
@@ -38,18 +48,44 @@ const processQueue = () => {
   }
 };
 
-const scheduleThumbnailGeneration = (path: string): Promise<string> => {
-  return new Promise((resolve, reject) => {
-    taskQueue.push(async () => {
-      try {
-        const res = await invoke("get_thumbnail", { path });
-        resolve(res as string);
-      } catch (e) {
-        reject(e);
+const scheduleThumbnailGeneration = (path: string, priority = true): Promise<string> => {
+  if (pendingTasks.has(path)) {
+    if (priority) {
+      const idx = taskQueue.findIndex(t => t.path === path);
+      if (idx !== -1 && !taskQueue[idx].priority) {
+        const [task] = taskQueue.splice(idx, 1);
+        task.priority = true;
+        taskQueue.unshift(task);
       }
-    });
+    }
+    return pendingTasks.get(path)!;
+  }
+
+  const promise = new Promise<string>((resolve, reject) => {
+    const taskObj = {
+      path,
+      priority,
+      run: async () => {
+        try {
+          const res = await invoke("get_thumbnail", { path });
+          resolve(res as string);
+        } catch (e) {
+          reject(e);
+        }
+      }
+    };
+    
+    if (priority) {
+      taskQueue.unshift(taskObj);
+    } else {
+      taskQueue.push(taskObj);
+    }
     processQueue();
   });
+
+  pendingTasks.set(path, promise);
+  promise.finally(() => pendingTasks.delete(path));
+  return promise;
 };
 
 const Thumbnail = ({ path, mtime, reloadTimestamp, className, onClick, fit = "cover" }: { path: string, mtime?: number, reloadTimestamp?: number, className?: string, onClick?: () => void, fit?: "cover" | "contain" }) => {
@@ -57,7 +93,6 @@ const Thumbnail = ({ path, mtime, reloadTimestamp, className, onClick, fit = "co
   useEffect(() => {
     let active = true;
     
-    // Debounce to prevent flooding IPC during fast scrolling
     const timer = setTimeout(() => {
       scheduleThumbnailGeneration(path)
         .then(res => {
@@ -113,22 +148,58 @@ const Row = ({ index, style, data }: any) => {
   );
 };
 
+type SortMethod = 'Newest' | 'Oldest' | 'NameAsc' | 'NameDesc';
+
 function App() {
   const { 
-    folderPath, images, currentIndex, currentMetadata, shortcuts,
-    setFolderPath, setImages, setCurrentIndex, setCurrentMetadata, removeImages, setShortcuts
+    folderPath, images, currentIndex, currentMetadata, shortcuts, batchMode,
+    setFolderPath, setImages, setCurrentIndex, setCurrentMetadata, removeImages, setShortcuts, setBatchMode
   } = useAppStore();
-  const [batchMode, setBatchMode] = useState(false);
   const [batchRange, setBatchRange] = useState<[number, number] | null>(null);
   const [searchQuery, setSearchQuery] = useState("");
   const [isSearching, setIsSearching] = useState(false);
   const [imageSrc, setImageSrc] = useState<string | null>(null);
   const [showSettings, setShowSettings] = useState(false);
   const [showFilters, setShowFilters] = useState(false);
+  const [showWildcards, setShowWildcards] = useState(false);
+  const [showDebug, setShowDebug] = useState(false);
   const [activeFilters, setActiveFilters] = useState({ model: "", sampler: "" });
   const [reloadTimestamp, setReloadTimestamp] = useState<number>(0);
+  const [sortMethod, setSortMethod] = useState<SortMethod>('NameAsc');
+  const [recursive, setRecursive] = useState(false);
   const { showToast } = useToast();
   const listRef = useRef<any>(null);
+  const showWildcardsRef = useRef(showWildcards);
+
+  const isTrashFolder = folderPath?.split(/[\\/]/).pop()?.toLowerCase() === '_trash';
+
+  useEffect(() => {
+    showWildcardsRef.current = showWildcards;
+  }, [showWildcards]);
+
+  useEffect(() => {
+    const unlisten = listen('tauri://drag-drop', async (event: any) => {
+      if (showWildcardsRef.current || document.querySelector('[data-wildcard-modal]')) return;
+
+      const paths = (event.payload as any).paths as string[];
+      if (paths && paths.length > 0) {
+        const firstPath = paths[0];
+        try {
+          const result = await invoke("scan_directory", { path: firstPath, sortMethod, recursive }) as any;
+          // Set folderPath to the actual folder containing the files
+          const p = firstPath.replace(/\\/g, '/');
+          const lastSlash = p.lastIndexOf('/');
+          const parent = lastSlash !== -1 ? p.substring(0, lastSlash) : p;
+          
+          setFolderPath(parent || firstPath); 
+          setImages(result.images);
+          setCurrentIndex(result.initial_index);
+          showToast(`Loaded ${result.images.length} images`, 'success');
+        } catch (e) {}
+      }
+    });
+    return () => { unlisten.then(f => f()); };
+  }, [sortMethod, recursive]);
 
   useEffect(() => {
     const init = async () => {
@@ -136,12 +207,24 @@ function App() {
         const savedFolder = await store.get<string>("lastFolder");
         const savedIndex = await store.get<number>("lastIndex");
         const savedShortcuts = await store.get<Shortcuts>("shortcuts");
+        const savedSort = await store.get<SortMethod>("sortMethod");
+        const savedRecursive = await store.get<boolean>("recursive");
+        const savedBatchMode = await store.get<boolean>("batchMode");
+        
         if (savedShortcuts) setShortcuts(savedShortcuts);
+        if (savedSort) setSortMethod(savedSort);
+        if (savedRecursive !== undefined) setRecursive(savedRecursive);
+        if (savedBatchMode !== undefined) setBatchMode(savedBatchMode);
+        
         if (savedFolder) {
           setFolderPath(savedFolder);
-          const result = await invoke("scan_directory", { path: savedFolder }) as any[];
-          setImages(result);
-          if (savedIndex !== undefined && result.length > savedIndex) setCurrentIndex(savedIndex);
+          const result = await invoke("scan_directory", { 
+            path: savedFolder, 
+            sortMethod: savedSort || sortMethod,
+            recursive: savedRecursive !== undefined ? savedRecursive : recursive
+          }) as any;
+          setImages(result.images);
+          if (savedIndex !== undefined && result.images.length > savedIndex) setCurrentIndex(savedIndex);
         }
       } catch (e) {}
     };
@@ -152,9 +235,12 @@ function App() {
     if (folderPath) {
       store.set("lastFolder", folderPath);
       store.set("lastIndex", currentIndex);
+      store.set("sortMethod", sortMethod);
+      store.set("recursive", recursive);
+      store.set("batchMode", batchMode);
       store.save();
     }
-  }, [folderPath, currentIndex]);
+  }, [folderPath, currentIndex, sortMethod, recursive, batchMode]);
 
   useEffect(() => {
     if (listRef.current) {
@@ -166,9 +252,9 @@ function App() {
     const selected = await open({ directory: true, multiple: false });
     if (selected && typeof selected === 'string') {
       setFolderPath(selected);
-      const result = await invoke("scan_directory", { path: selected });
-      setImages(result as any);
-      showToast(`Loaded ${ (result as any[]).length } images`, 'success');
+      const result = await invoke("scan_directory", { path: selected, sortMethod, recursive }) as any;
+      setImages(result.images);
+      showToast(`Loaded ${ result.images.length } images`, 'success');
     }
   };
 
@@ -177,8 +263,8 @@ function App() {
     const ts = Date.now();
     setReloadTimestamp(ts);
     
-    const result = await invoke("scan_directory", { path: folderPath });
-    setImages(result as any);
+    const result = await invoke("scan_directory", { path: folderPath, sortMethod, recursive }) as any;
+    setImages(result.images);
     
     if (images[currentIndex]) {
         const current = images[currentIndex];
@@ -188,16 +274,35 @@ function App() {
     showToast("Reloaded", 'info');
   };
 
-  const handleSearch = async (overrideFilters?: { model: string, sampler: string }) => {
+  const handleSortChange = async (method: SortMethod) => {
+    setSortMethod(method);
+    if (folderPath) {
+        if (isSearching) {
+            // Re-trigger search with new sort method
+            handleSearch(activeFilters, method);
+        } else {
+            const currentPath = images[currentIndex]?.path;
+            const result = await invoke("scan_directory", { path: folderPath, sortMethod: method, recursive }) as any;
+            setImages(result.images);
+            if (currentPath) {
+                const newIndex = result.images.findIndex((img: any) => img.path === currentPath);
+                if (newIndex !== -1) setCurrentIndex(newIndex);
+            }
+        }
+    }
+  };
+
+  const handleSearch = async (overrideFilters?: { model: string, sampler: string }, overrideSort?: SortMethod) => {
     if (!folderPath) return;
     
     const filters = overrideFilters || activeFilters;
+    const currentSort = overrideSort || sortMethod;
     const hasFilters = filters.model || filters.sampler;
     
     if (!searchQuery.trim() && !hasFilters) {
       setIsSearching(false);
-      const result = await invoke("scan_directory", { path: folderPath });
-      setImages(result as any);
+      const result = await invoke("scan_directory", { path: folderPath, sortMethod: currentSort, recursive }) as any;
+      setImages(result.images);
       return;
     }
 
@@ -206,7 +311,9 @@ function App() {
         folder: folderPath, 
         query: searchQuery, 
         model: filters.model, 
-        sampler: filters.sampler 
+        sampler: filters.sampler,
+        sortMethod: currentSort,
+        recursive
     }) as any[];
     
     setImages(results);
@@ -223,14 +330,17 @@ function App() {
     setActiveFilters({ model: "", sampler: "" });
     setIsSearching(false);
     if (folderPath) {
-      const result = await invoke("scan_directory", { path: folderPath });
-      setImages(result as any);
+      const result = await invoke("scan_directory", { path: folderPath, sortMethod, recursive }) as any;
+      setImages(result.images);
     }
   };
 
   const moveSearchResults = async () => {
-    if (!isSearching || images.length === 0 || !searchQuery) return;
-    const folderName = searchQuery.replace(/[^a-z0-9]/gi, '_').toLowerCase();
+    if (!isSearching || images.length === 0) return;
+    const folderName = searchQuery 
+        ? searchQuery.replace(/[^a-z0-9]/gi, '_').toLowerCase() 
+        : "filtered_results";
+        
     if (await confirm(`Move ${images.length} files to folder "${folderName}"?`)) {
       await invoke("move_files_to_folder", { paths: images.map(img => img.path), folderName });
       showToast(`Moved ${images.length} files`, 'success');
@@ -252,12 +362,19 @@ function App() {
         targets = [];
         for (let i = batchRange[0]; i <= batchRange[1]; i++) targets.push(i);
     }
-    if (await confirm(`Delete ${targets.length} image(s)?`)) {
-      await invoke("delete_to_trash", { paths: targets.map(i => images[i].path) });
-      removeImages(targets);
-      showToast("Deleted", 'info');
+    
+    if (isTrashFolder) {
+        if (await confirm(`Permanently delete ${targets.length} image(s)?`)) {
+            await invoke("delete_to_trash", { paths: targets.map(i => images[i].path) });
+            removeImages(targets);
+            showToast("Permanently Deleted", 'error');
+        }
+    } else {
+        await invoke("delete_to_trash", { paths: targets.map(i => images[i].path) });
+        removeImages(targets, 'trash');
+        showToast("Moved to _Trash", 'info');
     }
-  }, [images, currentIndex, batchMode, batchRange]);
+  }, [images, currentIndex, batchMode, batchRange, isTrashFolder, removeImages]);
 
   const handleKeep = useCallback(async () => {
     if (images.length === 0) return;
@@ -267,9 +384,34 @@ function App() {
         for (let i = batchRange[0]; i <= batchRange[1]; i++) targets.push(i);
     }
     await invoke("move_to_keep", { paths: targets.map(i => images[i].path) });
-    removeImages(targets);
+    removeImages(targets, 'keep');
     showToast("Moved to _Keep", 'success');
-  }, [images, currentIndex, batchMode, batchRange]);
+  }, [images, currentIndex, batchMode, batchRange, removeImages]);
+
+  const handleUndo = useCallback(async () => {
+    const action = useAppStore.getState().popUndo();
+    if (!action) {
+      showToast("Nothing to undo", "info");
+      return;
+    }
+
+    try {
+      for (const item of action.originalImages) {
+        const fileName = item.info.path.split(/[\\/]/).pop();
+        const currentPath = `${item.info.path.substring(0, item.info.path.lastIndexOf(fileName!) - 1)}/${action.targetFolder}/${fileName}`;
+        
+        await invoke("undo_move", { 
+          originalPath: item.info.path, 
+          currentPath: currentPath.replace(/\/\//g, '/')
+        });
+        
+        useAppStore.getState().insertImage(item.info, item.index);
+      }
+      showToast(`Undid ${action.type} operation`, "success");
+    } catch (e: any) {
+      showToast(`Undo failed: ${e}`, "error");
+    }
+  }, [showToast]);
 
   const nextImage = () => {
     if (images.length === 0) return;
@@ -284,18 +426,20 @@ function App() {
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
       if (document.activeElement?.tagName === 'INPUT' || showSettings) return;
+      if (e.ctrlKey && e.altKey && e.key.toLowerCase() === 'd') { setShowDebug(prev => !prev); return; }
+      if (e.ctrlKey && e.key.toLowerCase() === 'z') { e.preventDefault(); handleUndo(); return; }
       if (e.key.toLowerCase() === 'r') { handleReload(); return; }
       if (images.length === 0) return;
       if (e.key === shortcuts.next) nextImage();
       else if (e.key === shortcuts.prev) prevImage();
       else if (e.key === shortcuts.delete) handleDelete();
       else if (e.key === shortcuts.keep) handleKeep();
-      else if (e.key === shortcuts.batch) setBatchMode(p => !p);
+      else if (e.key === shortcuts.batch) setBatchMode(!batchMode);
       else if (e.key === shortcuts.search) { e.preventDefault(); document.getElementById('search-input')?.focus(); }
     };
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [images.length, currentIndex, batchMode, batchRange, shortcuts, showSettings]);
+  }, [images.length, currentIndex, batchMode, batchRange, shortcuts, showSettings, handleKeep, handleDelete, handleUndo]);
 
   useEffect(() => {
     if (images.length > 0 && images[currentIndex]) {
@@ -305,7 +449,23 @@ function App() {
     } else setImageSrc(null);
   }, [currentIndex, images, reloadTimestamp]);
 
-  // Memoize itemData to prevent unnecessary re-renders of List items
+  useEffect(() => {
+    if (images.length === 0) return;
+    
+    const PRECACHE_COUNT = 40;
+    const start = Math.max(0, currentIndex - PRECACHE_COUNT);
+    const end = Math.min(images.length - 1, currentIndex + PRECACHE_COUNT);
+    
+    const timer = setTimeout(() => {
+      for (let i = start; i <= end; i++) {
+        if (i === currentIndex) continue;
+        scheduleThumbnailGeneration(images[i].path, false).catch(() => {});
+      }
+    }, 300);
+    
+    return () => clearTimeout(timer);
+  }, [currentIndex, images]);
+
   const itemData = useMemo(() => ({
     images,
     currentIndex,
@@ -318,8 +478,35 @@ function App() {
     <div className="flex flex-col h-screen bg-neutral-950 text-neutral-100 font-sans overflow-hidden">
       <header className="flex items-center justify-between px-4 h-14 bg-neutral-900 border-b border-white/5 shrink-0 z-10 shadow-2xl">
         <div className="flex items-center gap-6"><div className="flex items-center gap-2"><div className="w-8 h-8 bg-blue-600 rounded-lg flex items-center justify-center text-white font-black italic">CV</div><h1 className="text-lg font-black tracking-tighter uppercase italic">ComfyView</h1></div>
-        <button onClick={() => setBatchMode(!batchMode)} className={`flex items-center gap-2 px-4 py-1.5 rounded-full text-[10px] font-bold uppercase transition-all border ${batchMode ? 'bg-blue-600 border-blue-500 text-white shadow-[0_0_15px_rgba(37,99,235,0.3)]' : 'bg-neutral-800 border-neutral-700 text-neutral-400'}`}><Layers className="w-3.5 h-3.5" />Batch Mode</button></div>
-        <div className="flex items-center gap-3">{images.length > 0 && <div className="flex items-center gap-2 bg-neutral-800/50 p-1.5 rounded-xl border border-white/5"><button onClick={handleKeep} className="px-4 py-1.5 bg-neutral-900 hover:bg-green-600 rounded-lg text-[10px] font-bold uppercase">Keep</button><button onClick={handleDelete} className="px-4 py-1.5 bg-neutral-900 hover:bg-red-600 rounded-lg text-[10px] font-bold uppercase">Trash</button></div>}
+        <button onClick={() => setBatchMode(!batchMode)} className={`flex items-center gap-2 px-4 py-1.5 rounded-full text-[10px] font-bold uppercase transition-all border ${batchMode ? 'bg-blue-600 border-blue-500 text-white shadow-[0_0_15px_rgba(37,99,235,0.3)]' : 'bg-neutral-800 border-neutral-700 text-neutral-400'}`}><Layers className="w-3.5 h-3.5" />Batch Mode</button>
+        <button onClick={() => setShowWildcards(true)} className="flex items-center gap-2 px-4 py-1.5 rounded-full text-[10px] font-bold uppercase transition-all border bg-neutral-800 border-neutral-700 text-neutral-400 hover:text-white hover:border-blue-500/50"><Wand2 className="w-3.5 h-3.5" />Wildcard</button>
+        <div className="flex items-center gap-2 bg-neutral-800/50 p-1 rounded-xl border border-white/5 ml-2">
+            <button 
+                onClick={() => setRecursive(!recursive)}
+                title="Recursive Scan"
+                className={`flex items-center gap-2 px-3 py-1.5 rounded-lg text-[9px] font-black uppercase transition-all ${recursive ? 'bg-blue-600 text-white shadow-lg shadow-blue-600/20' : 'text-neutral-500 hover:text-neutral-300'}`}
+            >
+                <Layers className="w-3.5 h-3.5" /> Recursive
+            </button>
+            <div className="w-px h-4 bg-white/5 mx-1" />
+            {[
+                { id: 'NameAsc', icon: ArrowDownAZ, label: 'A-Z' },
+                { id: 'NameDesc', icon: ArrowUpAZ, label: 'Z-A' },
+                { id: 'Newest', icon: History, label: 'Newest' },
+                { id: 'Oldest', icon: Clock, label: 'Oldest' }
+            ].map(m => (
+                <button 
+                    key={m.id} 
+                    onClick={() => handleSortChange(m.id as SortMethod)}
+                    title={m.label}
+                    className={`p-1.5 rounded-lg transition-all ${sortMethod === m.id ? 'bg-blue-600 text-white shadow-lg shadow-blue-600/20' : 'text-neutral-500 hover:text-neutral-300'}`}
+                >
+                    <m.icon className="w-3.5 h-3.5" />
+                </button>
+            ))}
+        </div>
+        </div>
+        <div className="flex items-center gap-3">{images.length > 0 && <div className="flex items-center gap-2 bg-neutral-800/50 p-1.5 rounded-xl border border-white/5"><button onClick={handleKeep} className="px-4 py-1.5 bg-neutral-900 hover:bg-green-600 rounded-lg text-[10px] font-bold uppercase">Keep</button><button onClick={handleDelete} className={`px-4 py-1.5 rounded-lg text-[10px] font-bold uppercase transition-colors ${isTrashFolder ? 'bg-red-600 hover:bg-red-700 text-white' : 'bg-neutral-900 hover:bg-red-600'}`}>Trash</button></div>}
         <button onClick={() => setShowSettings(true)} className="p-2 hover:bg-white/5 rounded-lg transition-colors text-neutral-500 hover:text-white"><Settings className="w-5 h-5" /></button>
         <button onClick={handleOpenFolder} className="flex items-center gap-2 px-5 py-2 bg-blue-600 hover:bg-blue-500 rounded-xl text-[10px] font-black uppercase transition-all shadow-lg active:scale-95"><FolderOpen className="w-4 h-4" />Open Folder</button></div>
       </header>
@@ -338,7 +525,6 @@ function App() {
           {isSearching && <button onClick={moveSearchResults} className="w-full py-2 bg-neutral-800 hover:bg-blue-600/20 border border-blue-500/10 rounded-xl text-[10px] font-bold text-neutral-400">Classify results</button>}</div>
           
           <div className="flex-1 relative min-h-0">
-             {/* Filter Panel Overlay */}
              {showFilters && (
                  <div className="absolute inset-0 z-20 bg-neutral-900/95 backdrop-blur-sm animate-in fade-in duration-200">
                      <FilterPanel folderPath={folderPath} onFilterChange={handleFilterChange} onClose={() => setShowFilters(false)} />
@@ -436,6 +622,19 @@ function App() {
             <button onClick={() => { setShortcuts(DEFAULT_SHORTCUTS); store.set("shortcuts", DEFAULT_SHORTCUTS); store.save(); showToast('Shortcuts Reset', 'info'); }} className="w-full py-3 bg-white/5 hover:bg-red-900/20 rounded-2xl text-[10px] font-black uppercase tracking-widest text-neutral-500 hover:text-red-400 transition-all">Reset to Default</button></div>
           </div>
         </div>
+      )}
+
+      {showWildcards && (
+        <WildcardTools 
+            onClose={() => setShowWildcards(false)} 
+            images={images} 
+            currentIndex={currentIndex} 
+            batchRange={batchRange} 
+        />
+      )}
+
+      {showDebug && (
+        <DebugPanel folderPath={folderPath} onClose={() => setShowDebug(false)} />
       )}
 
       <footer className="px-6 h-10 bg-neutral-950 border-t border-white/5 text-[10px] text-neutral-600 flex items-center justify-between shrink-0 z-10 font-medium">

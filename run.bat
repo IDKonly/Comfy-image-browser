@@ -15,11 +15,11 @@ if %errorlevel% neq 0 (
 :: 의존성 설치 확인 및 실행
 if not exist node_modules (
     echo [INFO] 의존성 설치 중...
-    npm install
+    call npm install
 )
 
 echo [INFO] Tauri 개발 서버 실행...
-npm run tauri dev
+call npm run tauri dev
 
 if %errorlevel% neq 0 (
     echo [ERROR] 프로그램 실행 중 오류가 발생했습니다.

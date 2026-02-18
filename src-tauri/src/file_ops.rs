@@ -8,14 +8,21 @@ pub fn delete_to_trash(paths: Vec<String>) -> Result<(), String> {
         if !p.exists() { continue; }
 
         let parent = p.parent().ok_or("No parent directory")?;
-        let trash_dir = parent.join("_Trash");
-        
-        if !trash_dir.exists() {
-            fs::create_dir(&trash_dir).map_err(|e| e.to_string())?;
-        }
+        let is_in_trash = parent.file_name()
+            .map(|n| n.to_string_lossy().to_lowercase() == "_trash")
+            .unwrap_or(false);
 
-        let dest = trash_dir.join(p.file_name().ok_or("Invalid filename")?);
-        fs::rename(p, dest).map_err(|e| e.to_string())?;
+        if is_in_trash {
+            fs::remove_file(p).map_err(|e| e.to_string())?;
+        } else {
+            let trash_dir = parent.join("_Trash");
+            if !trash_dir.exists() {
+                fs::create_dir(&trash_dir).map_err(|e| e.to_string())?;
+            }
+
+            let dest = trash_dir.join(p.file_name().ok_or("Invalid filename")?);
+            fs::rename(p, dest).map_err(|e| e.to_string())?;
+        }
     }
     Ok(())
 }
@@ -60,4 +67,22 @@ pub fn move_files_to_folder(paths: Vec<String>, folder_name: String) -> Result<(
     }
 
     Ok(())
+}
+
+#[tauri::command]
+pub fn undo_move(original_path: String, current_path: String) -> Result<(), String> {
+    let src = Path::new(&current_path);
+    let dst = Path::new(&original_path);
+    
+    if !src.exists() {
+        return Err("Source file for undo does not exist".to_string());
+    }
+    
+    if let Some(parent) = dst.parent() {
+        if !parent.exists() {
+            fs::create_dir_all(parent).map_err(|e| e.to_string())?;
+        }
+    }
+    
+    fs::rename(src, dst).map_err(|e| e.to_string())
 }

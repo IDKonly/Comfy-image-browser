@@ -1,29 +1,37 @@
-# Progress Report
+# Progress - Comfy Image Browser Optimization & Features
 
-## Phase 1: Foundation (Completed)
-- [x] Tech Stack Migration (Tauri v2 + React + Rust).
-- [x] High-speed directory scanning.
-- [x] Metadata parsing.
-- [x] Basic file operations.
-- [x] Keyboard navigation.
+## Goals
+1. **Multi-threading Optimization**: Identify and apply multi-threading to performance bottlenecks (scanning, thumbnails, metadata).
+2. **Filter Merging**: Develop a feature to merge filters via text file or string input.
+3. **Bug Fix**: Resolve the issue where the tag filter save button causes the app to close.
+4. **Undo Functionality (Ctrl+Z)**: Implement undo for image classification (moving to `_keep`, `_trash`).
 
-## Phase 2: Visual Feedback & GUI Polish (Completed)
-- [x] Toast notifications.
-- [x] Basic smooth transitions.
-- [x] Dark theme (Tailwind).
-- [x] Grid/List toggle (Batch Mode).
-- [x] Search Function Improvement (Backend Integration).
-- [x] Zoom/Pan/Fit Viewer.
+## Status
+- [x] Multi-threading Optimization
+- [x] Filter Merging
+- [x] Tag Filter Bug Fix
+- [x] Undo (Ctrl+Z) Implementation
 
-## Phase 3: Scenario-Driven Features (Pending)
-- [ ] Advanced search & filter.
+## Details
+### 1. Multi-threading Optimization
+- [x] Parallel metadata reading in `scanner.rs` background thread using `rayon`.
+- [x] Batch insertion into DB to minimize lock contention.
 
-## Phase 4: Performance & Optimization (In Progress)
-- [ ] **Database Optimization**: Enable WAL mode.
-- [ ] **Reduce I/O**: Use DB for `get_batch_range` instead of disk.
-- [ ] **IPC Throttling**: Debounce thumbnail requests.
-- [ ] **Request Cancellation**: Cancel stale thumbnail requests.
+### 2. Filter Merging
+- [x] Added `MergeFilterModal` in `WildcardTools.tsx`.
+- [x] Supports merging tags from clipboard or text input (comma/newline separated).
 
-## Recent Updates
-- Implemented `ZoomPanViewer` for advanced image inspection.
-- Fixed duplicate code injection in `App.tsx`.
+### 3. Tag Filter Bug Fix
+- [x] Fixed `write_filter_file` crash by using `app_data_dir` instead of the current directory (permission issues).
+- [x] Added `tauri::Manager` for path resolution.
+
+### 4. Undo (Ctrl+Z)
+- [x] Implemented `UndoAction` stack in `useAppStore.ts`.
+- [x] Added `undo_move` command in `file_ops.rs` to revert renames.
+- [x] Added global `Ctrl+Z` listener in `App.tsx`.
+
+### 5. Search Function Fix
+- [x] Normalized all folder paths to use forward slashes (`/`) in DB to match frontend normalization.
+- [x] Moved SQLite database to stable `app_data_dir` to avoid CWD-related issues.
+
+
