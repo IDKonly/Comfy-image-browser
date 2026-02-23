@@ -50,6 +50,8 @@ const MergeFilterModal = ({ onMerge, onClose }: MergeFilterModalProps) => {
   );
 };
 
+import { useAppStore, FilterState } from "../store/useAppStore";
+
 interface WildcardToolsProps {
   onClose: () => void;
   images: any[];
@@ -57,33 +59,20 @@ interface WildcardToolsProps {
   batchRange: [number, number] | null;
 }
 
-interface FilterState {
-  partial_match: string[];
-  exact_match: string[];
-  exceptions: string[];
-  max_words: number;
-  min_tags: number;
-  max_depth: number;
-}
-
 export const WildcardTools = ({ onClose, images, currentIndex, batchRange }: WildcardToolsProps) => {
   const [threshold, setThreshold] = useState(0.5);
   const [results, setResults] = useState<string[]>([]);
   const [loading, setLoading] = useState(false);
   const [progress, setProgress] = useState(0);
-  const [targetPaths, setTargetPaths] = useState<string[]>([]);
+  
+  const targetPaths = useAppStore(state => state.workshopTargetPaths);
+  const setTargetPaths = useAppStore(state => state.setWorkshopTargetPaths);
+  const filter = useAppStore(state => state.workshopFilter);
+  const setFilter = useAppStore(state => state.setWorkshopFilter);
+
   const [comparisonPath, setComparisonPath] = useState<string | null>(null);
   const [showFilters, setShowFilters] = useState(false);
   const [recursive, setRecursive] = useState(false);
-  
-  const [filter, setFilter] = useState<FilterState>({
-    partial_match: [],
-    exact_match: [],
-    exceptions: [],
-    max_words: 5,
-    min_tags: 1,
-    max_depth: 5
-  });
   
   const [showRefiner, setShowRefiner] = useState(false);
   const [tagCounts, setTagCounts] = useState<Record<string, number>>({});
@@ -108,21 +97,20 @@ export const WildcardTools = ({ onClose, images, currentIndex, batchRange }: Wil
       const savedRecursive = await settingsStore.get<boolean>("workshop_recursive");
       const savedFilter = await settingsStore.get<FilterState>("workshop_filter");
 
-      if (savedThreshold !== undefined) setThreshold(savedThreshold);
-      if (savedRecursive !== undefined) setRecursive(savedRecursive);
+      if (savedThreshold != null) setThreshold(savedThreshold);
+      if (savedRecursive != null) setRecursive(savedRecursive);
       
       const currentFilter = { ...filter };
       if (savedFilter) {
           Object.assign(currentFilter, savedFilter);
       }
 
-      setFilter(prev => ({
-        ...prev,
+      setFilter({
         ...currentFilter,
-        max_words: savedMaxWords !== undefined ? savedMaxWords : prev.max_words,
-        min_tags: savedMinTags !== undefined ? savedMinTags : prev.min_tags,
-        max_depth: savedMaxDepth !== undefined ? savedMaxDepth : prev.max_depth,
-      }));
+        max_words: savedMaxWords != null ? savedMaxWords : currentFilter.max_words,
+        min_tags: savedMinTags != null ? savedMinTags : currentFilter.min_tags,
+        max_depth: savedMaxDepth != null ? savedMaxDepth : currentFilter.max_depth,
+      });
 
       // Load filter text lists ONLY if we don't have a saved filter state in settingsStore
       if (!savedFilter) {
@@ -132,15 +120,16 @@ export const WildcardTools = ({ onClose, images, currentIndex, batchRange }: Wil
             { key: 'exceptions', name: 'default_exception_exclusion.txt' }
           ];
 
+          const loadedFilter = { ...currentFilter };
           for (const file of files) {
             try {
               const content = await invoke("read_filter_file", { name: file.name }) as string;
               if (content) {
-                (currentFilter as any)[file.key] = content.split(',').map((s: string) => s.trim()).filter((s: string) => s);
+                (loadedFilter as any)[file.key] = content.split(',').map((s: string) => s.trim()).filter((s: string) => s);
               }
             } catch (e) {}
           }
-          setFilter(prev => ({ ...prev, ...currentFilter }));
+          setFilter(loadedFilter);
       }
       isLoaded.current = true;
     } catch (e) {
@@ -568,10 +557,19 @@ export const WildcardTools = ({ onClose, images, currentIndex, batchRange }: Wil
             tagCounts={tagCounts} 
             initialExcluded={filter.exact_match} 
             onClose={() => setShowRefiner(false)}
-            onApply={(excluded) => {
-                setFilter({...filter, exact_match: excluded});
+            onApply={async (excluded) => {
+                const newFilter = {...filter, exact_match: excluded};
+                setFilter(newFilter);
                 setShowRefiner(false);
-                showToast(`Applied ${excluded.length} exclusions`, 'info');
+                
+                // Auto-save exact match filter
+                try {
+                    const content = excluded.join(', ');
+                    await invoke("write_filter_file", { name: 'default_exact_exclusion.txt', content });
+                    showToast(`Applied & Saved ${excluded.length} exclusions`, 'success');
+                } catch (e: any) {
+                    showToast(`Applied but failed to save: ${e}`, 'error');
+                }
             }}
         />
       )}

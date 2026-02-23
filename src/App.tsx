@@ -9,6 +9,7 @@ import { ZoomPanViewer } from "./components/ZoomPanViewer";
 import { FilterPanel } from "./components/FilterPanel";
 import { WildcardTools } from "./components/WildcardTools";
 import { DebugPanel } from "./components/DebugPanel";
+import { TagRefiner } from "./components/TagRefiner";
 import { listen } from "@tauri-apps/api/event";
 
 // Use direct imports which are more reliable in Vite 7
@@ -167,6 +168,8 @@ function App() {
   const [reloadTimestamp, setReloadTimestamp] = useState<number>(0);
   const [sortMethod, setSortMethod] = useState<SortMethod>('NameAsc');
   const [recursive, setRecursive] = useState(false);
+  const [showViewerRefiner, setShowViewerRefiner] = useState(false);
+  const [viewerTagCounts, setViewerTagCounts] = useState<Record<string, number>>({});
   const { showToast } = useToast();
   const listRef = useRef<any>(null);
   const showWildcardsRef = useRef(showWildcards);
@@ -523,7 +526,21 @@ function App() {
             ))}
         </div>
         </div>
-        <div className="flex items-center gap-3">{images.length > 0 && <div className="flex items-center gap-2 bg-neutral-800/50 p-1.5 rounded-xl border border-white/5"><button onClick={handleKeep} className="px-4 py-1.5 bg-neutral-900 hover:bg-green-600 rounded-lg text-[10px] font-bold uppercase">Keep</button><button onClick={handleDelete} className={`px-4 py-1.5 rounded-lg text-[10px] font-bold uppercase transition-colors ${isTrashFolder ? 'bg-red-600 hover:bg-red-700 text-white' : 'bg-neutral-900 hover:bg-red-600'}`}>Trash</button></div>}
+        <div className="flex items-center gap-3">{images.length > 0 && <div className="flex items-center gap-2 bg-neutral-800/50 p-1.5 rounded-xl border border-white/5">
+            <button onClick={handleKeep} className="px-4 py-1.5 bg-neutral-900 hover:bg-green-600 rounded-lg text-[10px] font-bold uppercase">Keep</button>
+            <button onClick={handleDelete} className={`px-4 py-1.5 rounded-lg text-[10px] font-bold uppercase transition-colors ${isTrashFolder ? 'bg-red-600 hover:bg-red-700 text-white' : 'bg-neutral-900 hover:bg-red-600'}`}>Trash</button>
+            <div className="w-px h-4 bg-white/10 mx-1" />
+            <button 
+                onClick={() => {
+                  useAppStore.getState().setWorkshopTargetPaths(images.map(i => i.path));
+                  setShowWildcards(true);
+                }} 
+                className="px-3 py-1.5 bg-neutral-900 hover:bg-purple-600/40 border border-transparent hover:border-purple-500/20 rounded-lg text-[10px] font-bold text-purple-400 uppercase transition-all"
+                title="Send all current images to Workshop"
+            >
+                <Wand2 className="w-3.5 h-3.5" />
+            </button>
+        </div>}
         <button onClick={() => setShowSettings(true)} className="p-2 hover:bg-white/5 rounded-lg transition-colors text-neutral-500 hover:text-white"><Settings className="w-5 h-5" /></button>
         <button onClick={handleOpenFolder} className="flex items-center gap-2 px-5 py-2 bg-blue-600 hover:bg-blue-500 rounded-xl text-[10px] font-black uppercase transition-all shadow-lg active:scale-95"><FolderOpen className="w-4 h-4" />Open Folder</button></div>
       </header>
@@ -544,7 +561,10 @@ function App() {
                 </button>
             </div>
           </div>
-          {isSearching && <button onClick={moveSearchResults} className="w-full py-2 bg-neutral-800 hover:bg-blue-600/20 border border-blue-500/10 rounded-xl text-[10px] font-bold text-neutral-400">Classify results</button>}</div>
+          <div className="flex gap-2 p-2">
+            {isSearching && <button onClick={moveSearchResults} className="flex-1 py-2 bg-neutral-800 hover:bg-blue-600/20 border border-blue-500/10 rounded-xl text-[10px] font-bold text-neutral-400 uppercase transition-all">Classify results</button>}
+          </div>
+          </div>
           
           <div className="flex-1 relative min-h-0">
              {showFilters && (
@@ -606,8 +626,27 @@ function App() {
                 );
               })()
             ) : (
-              <div className="relative w-full h-full flex items-center justify-center p-0 overflow-hidden">
+              <div className="relative w-full h-full flex items-center justify-center p-0 overflow-hidden group">
                 {imageSrc && <ZoomPanViewer key={`${images[currentIndex].path}-${reloadTimestamp}`} src={imageSrc} className="animate-image-change" />}
+                
+                {/* Viewer Overlay Controls */}
+                <div className="absolute top-6 right-6 flex flex-col gap-2 z-50 opacity-0 group-hover:opacity-100 transition-opacity duration-300">
+                    <button 
+                        onClick={() => {
+                            if (!currentMetadata?.prompt) return;
+                            const tags = currentMetadata.prompt.split(',').map(s => s.trim()).filter(Boolean);
+                            const counts: Record<string, number> = {};
+                            tags.forEach(t => counts[t] = 1);
+                            setViewerTagCounts(counts);
+                            setShowViewerRefiner(true);
+                        }}
+                        className="p-3 bg-neutral-900/80 backdrop-blur-md border border-white/10 rounded-2xl hover:bg-blue-600/20 hover:border-blue-500/50 hover:text-blue-400 transition-all shadow-2xl"
+                        title="Refine Filter with this Image"
+                    >
+                        <Filter className="w-5 h-5" />
+                    </button>
+                </div>
+
                 <button onClick={prevImage} className="absolute left-6 z-10 p-4 rounded-2xl bg-neutral-900/80 text-white opacity-0 group-hover:opacity-100 transition-all hover:bg-blue-600 shadow-2xl backdrop-blur-xl"><ChevronLeft className="w-8 h-8" /></button>
                 <button onClick={nextImage} className="absolute right-6 z-10 p-4 rounded-2xl bg-neutral-900/80 text-white opacity-0 group-hover:opacity-100 transition-all hover:bg-blue-600 shadow-2xl backdrop-blur-xl"><ChevronRight className="w-8 h-8" /></button>
                 <div className="absolute bottom-8 left-1/2 -translate-x-1/2 z-10 bg-neutral-900/90 px-6 py-2 rounded-full text-[11px] font-bold border border-white/10 backdrop-blur-2xl shadow-2xl flex items-center gap-4"><span className="opacity-50">{images[currentIndex].name}</span><div className="w-px h-3 bg-white/10" /><span className="text-blue-400">{(images[currentIndex].size / 1024 / 1024).toFixed(2)} MB</span></div>
@@ -652,6 +691,29 @@ function App() {
             images={images} 
             currentIndex={currentIndex} 
             batchRange={batchRange} 
+        />
+      )}
+
+      {showViewerRefiner && (
+        <TagRefiner 
+            tagCounts={viewerTagCounts} 
+            initialExcluded={useAppStore.getState().workshopFilter.exact_match || []} 
+            onClose={() => setShowViewerRefiner(false)}
+            onApply={async (excluded) => {
+                const currentFilter = useAppStore.getState().workshopFilter;
+                const newFilter = {...currentFilter, exact_match: excluded};
+                useAppStore.getState().setWorkshopFilter(newFilter);
+                setShowViewerRefiner(false);
+                
+                // Auto-save exact match filter
+                try {
+                    const content = excluded.join(', ');
+                    await invoke("write_filter_file", { name: 'default_exact_exclusion.txt', content });
+                    showToast(`Applied & Saved ${excluded.length} exclusions`, 'success');
+                } catch (e: any) {
+                    showToast(`Applied but failed to save: ${e}`, 'error');
+                }
+            }}
         />
       )}
 

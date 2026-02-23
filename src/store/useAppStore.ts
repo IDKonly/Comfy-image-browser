@@ -61,6 +61,21 @@ interface AppState {
   setBatchMode: (mode: boolean) => void;
   pushUndo: (action: UndoAction) => void;
   popUndo: () => UndoAction | undefined;
+
+  // Workshop State
+  workshopTargetPaths: string[];
+  setWorkshopTargetPaths: (paths: string[]) => void;
+  workshopFilter: FilterState;
+  setWorkshopFilter: (filter: FilterState) => void;
+}
+
+export interface FilterState {
+  partial_match: string[];
+  exact_match: string[];
+  exceptions: string[];
+  max_words: number;
+  min_tags: number;
+  max_depth: number;
 }
 
 export const useAppStore = create<AppState>((set, get) => ({
@@ -71,6 +86,20 @@ export const useAppStore = create<AppState>((set, get) => ({
   shortcuts: DEFAULT_SHORTCUTS,
   batchMode: false,
   undoStack: [],
+
+  // Workshop Initial State
+  workshopTargetPaths: [],
+  workshopFilter: {
+    partial_match: [],
+    exact_match: [],
+    exceptions: [],
+    max_words: 5,
+    min_tags: 1,
+    max_depth: 5
+  },
+
+  setWorkshopTargetPaths: (paths) => set({ workshopTargetPaths: paths }),
+  setWorkshopFilter: (filter) => set({ workshopFilter: filter }),
 
   setFolderPath: (path) => set({ folderPath: path, undoStack: [] }),
   setImages: (images) => set({ images }),
