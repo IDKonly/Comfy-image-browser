@@ -4,6 +4,15 @@ use crate::metadata::ImageMetadata;
 use crate::scanner::{ImageInfo, SortMethod};
 use tauri::Manager;
 use log;
+use serde::{Serialize, Deserialize};
+
+#[derive(Serialize, Deserialize, Debug, Clone)]
+pub struct ImageInfoWithTags {
+    pub path: String,
+    pub name: String,
+    pub prompt: Option<String>,
+    pub negative_prompt: Option<String>,
+}
 
 #[tauri::command]
 pub fn get_db_status(app_handle: tauri::AppHandle, folder: String) -> Result<serde_json::Value, String> {
@@ -11,13 +20,13 @@ pub fn get_db_status(app_handle: tauri::AppHandle, folder: String) -> Result<ser
     path.push(".image_manager_v2.db");
     
     let db = DB::open(&path).map_err(|e| e.to_string())?;
-    let normalized_folder = folder.replace("\\", "/");
+    let normalized_folder = folder.replace("\\", "/").trim_end_matches('/').to_string();
 
     let total_count: i64 = db.conn.query_row("SELECT COUNT(*) FROM images", [], |r| r.get(0)).unwrap_or(0);
-    let folder_count: i64 = db.conn.query_row("SELECT COUNT(*) FROM images WHERE folder = ?1", [normalized_folder.clone()], |r| r.get(0)).unwrap_or(0);
+    let folder_count: i64 = db.conn.query_row("SELECT COUNT(*) FROM images WHERE (folder = ?1 OR folder LIKE ?1 || '/%')", [normalized_folder.clone()], |r| r.get(0)).unwrap_or(0);
     
     // Get sample of 3 paths in folder
-    let mut stmt = db.conn.prepare("SELECT path FROM images WHERE folder = ?1 LIMIT 3").map_err(|e| e.to_string())?;
+    let mut stmt = db.conn.prepare("SELECT path FROM images WHERE (folder = ?1 OR folder LIKE ?1 || '/%') LIMIT 3").map_err(|e| e.to_string())?;
     let samples_iter = stmt.query_map([normalized_folder], |r| r.get::<_, String>(0)).map_err(|e| e.to_string())?;
     
     let mut samples = Vec::new();
@@ -96,8 +105,89 @@ impl DB {
         Ok(())
     }
 
+    pub fn delete_image(&self, path: &str) -> Result<()> {
+        self.conn.execute("DELETE FROM images WHERE path = ?1", params![path])?;
+        Ok(())
+    }
+
+    pub fn delete_images(&self, paths: &[String]) -> Result<()> {
+        if paths.is_empty() { return Ok(()); }
+        let mut stmt = self.conn.prepare("DELETE FROM images WHERE path = ?1")?;
+        for path in paths {
+            let _ = stmt.execute(params![path]);
+        }
+        Ok(())
+    }
+
+    pub fn update_image_path(&self, old_path: &str, new_path: &str) -> Result<()> {
+        let new_folder = Path::new(new_path).parent()
+            .map(|p| p.to_string_lossy().to_string().replace("\\", "/"))
+            .unwrap_or_default();
+        let new_name = Path::new(new_path).file_name()
+            .map(|n| n.to_string_lossy().to_string())
+            .unwrap_or_default();
+
+        self.conn.execute(
+            "UPDATE images SET path = ?1, name = ?2, folder = ?3 WHERE path = ?4",
+            params![new_path, new_name, new_folder, old_path],
+        )?;
+        Ok(())
+    }
+
+    pub fn get_all_paths_in_folder(&self, folder: &str, recursive: bool) -> Result<Vec<String>> {
+        let normalized_folder = folder.replace("\\", "/").trim_end_matches('/').to_string();
+        let sql = if recursive {
+            "SELECT path FROM images WHERE (folder = ?1 OR folder LIKE ?1 || '/%')"
+        } else {
+            "SELECT path FROM images WHERE folder = ?1"
+        };
+
+        let mut stmt = self.conn.prepare(sql)?;
+        let rows = stmt.query_map(params![normalized_folder], |row| row.get(0))?;
+
+        let mut results = Vec::new();
+        for r in rows { results.push(r?); }
+        Ok(results)
+    }
+
+    pub fn get_all_images_with_tags(&self, root_folder: &str, recursive: bool) -> Result<Vec<ImageInfoWithTags>> {
+        let normalized_folder = root_folder.replace("\\", "/").trim_end_matches('/').to_string();
+        let sql = if recursive {
+            "SELECT path, name, prompt, negative_prompt FROM images WHERE (folder = ?1 OR folder LIKE ?1 || '/%')"
+        } else {
+            "SELECT path, name, prompt, negative_prompt FROM images WHERE folder = ?1"
+        };
+
+        let mut stmt = self.conn.prepare(sql)?;
+        let rows = stmt.query_map(params![normalized_folder], |row| {
+            Ok(ImageInfoWithTags {
+                path: row.get(0)?,
+                name: row.get(1)?,
+                prompt: row.get(2)?,
+                negative_prompt: row.get(3)?,
+            })
+        })?;
+
+        let mut results = Vec::new();
+        for img in rows { results.push(img?); }
+        Ok(results)
+    }
+
+    pub fn get_subfolder_counts(&self, subfolders: Vec<String>) -> Result<std::collections::HashMap<String, i64>> {
+        let mut counts = std::collections::HashMap::new();
+        if subfolders.is_empty() { return Ok(counts); }
+
+        let mut stmt = self.conn.prepare("SELECT COUNT(*) FROM images WHERE folder = ?1")?;
+        for folder in subfolders {
+            let normalized = folder.replace("\\", "/");
+            let count: i64 = stmt.query_row(params![normalized], |r| r.get(0)).unwrap_or(0);
+            counts.insert(folder, count);
+        }
+        Ok(counts)
+    }
+
     pub fn search(&self, folder: &str, query: &str) -> Result<Vec<ImageInfo>> {
-        let normalized_folder = folder.replace("\\", "/");
+        let normalized_folder = folder.replace("\\", "/").trim_end_matches('/').to_string();
         let mut stmt = self.conn.prepare(
             "SELECT path, name, mtime, size FROM images 
              WHERE folder = ?1 AND (prompt LIKE ?2 OR negative_prompt LIKE ?2 OR name LIKE ?2)
@@ -133,7 +223,7 @@ impl DB {
     }
 
     pub fn get_folder_prompts(&self, folder: &str) -> Result<std::collections::HashMap<String, Option<String>>> {
-        let normalized_folder = folder.replace("\\", "/");
+        let normalized_folder = folder.replace("\\", "/").trim_end_matches('/').to_string();
         let mut stmt = self.conn.prepare("SELECT path, prompt FROM images WHERE folder = ?1")?;
         let rows = stmt.query_map(params![normalized_folder], |row| {
             Ok((row.get::<_, String>(0)?, row.get::<_, Option<String>>(1)?))
@@ -148,7 +238,7 @@ impl DB {
     }
 
     pub fn get_distinct_models(&self, folder: &str) -> Result<Vec<String>> {
-        let normalized_folder = folder.replace("\\", "/");
+        let normalized_folder = folder.replace("\\", "/").trim_end_matches('/').to_string();
         let mut stmt = self.conn.prepare("SELECT DISTINCT model FROM images WHERE folder = ?1 AND model IS NOT NULL AND model != '' ORDER BY model")?;
         let rows = stmt.query_map(params![normalized_folder], |row| row.get(0))?;
         let mut results = Vec::new();
@@ -157,7 +247,7 @@ impl DB {
     }
 
     pub fn get_distinct_samplers(&self, folder: &str) -> Result<Vec<String>> {
-        let normalized_folder = folder.replace("\\", "/");
+        let normalized_folder = folder.replace("\\", "/").trim_end_matches('/').to_string();
         let mut stmt = self.conn.prepare("SELECT DISTINCT sampler FROM images WHERE folder = ?1 AND sampler IS NOT NULL AND sampler != '' ORDER BY sampler")?;
         let rows = stmt.query_map(params![normalized_folder], |row| row.get(0))?;
         let mut results = Vec::new();
@@ -166,11 +256,11 @@ impl DB {
     }
 
     pub fn search_advanced(&self, folder: &str, query: &str, model: &str, sampler: &str, sort_method: SortMethod, recursive: bool) -> Result<Vec<ImageInfo>> {
-        let normalized_folder = folder.replace("\\", "/");
+        let normalized_folder = folder.replace("\\", "/").trim_end_matches('/').to_string();
         log::debug!("SEARCH: Folder: {}, Query: '{}', Model: '{}', Sampler: '{}', Recursive: {}", normalized_folder, query, model, sampler, recursive);
         
         let folder_condition = if recursive {
-            "folder LIKE ?1 || '%'"
+            "(folder = ?1 OR folder LIKE ?1 || '/%')"
         } else {
             "folder = ?1"
         };

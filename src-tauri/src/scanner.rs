@@ -27,6 +27,7 @@ pub enum SortMethod {
 pub struct ScanResult {
     pub images: Vec<ImageInfo>,
     pub initial_index: usize,
+    pub folder: String,
 }
 
 fn get_db_path(app_handle: &tauri::AppHandle) -> Result<PathBuf, String> {
@@ -49,6 +50,7 @@ pub fn scan_directory(app_handle: tauri::AppHandle, path: String, sort_method: O
         return Err("Path does not exist".to_string());
     };
 
+    let root_str = root.to_string_lossy().to_string().replace("\\", "/");
     let db_path = get_db_path(&app_handle)?;
     let _ = DB::open(&db_path).map_err(|e| e.to_string())?;
     
@@ -102,10 +104,26 @@ pub fn scan_directory(app_handle: tauri::AppHandle, path: String, sort_method: O
     // Background indexing for missing or changed metadata
     let images_to_index = images.clone();
     let db_path_clone = db_path.clone();
+    let scan_path = root_str.clone();
+    let is_recursive = recursive.unwrap_or(false);
+    
     std::thread::spawn(move || {
         let db = DB::open(&db_path_clone).unwrap();
         
-        // Filter images that actually need update first (sequential check is fast)
+        // 1. Cleanup stale entries
+        if let Ok(existing_paths) = db.get_all_paths_in_folder(&scan_path, is_recursive) {
+            let current_paths: std::collections::HashSet<_> = images_to_index.iter().map(|img| &img.path).collect();
+            let stale_paths: Vec<_> = existing_paths.into_iter()
+                .filter(|p| !current_paths.contains(p))
+                .collect();
+            
+            if !stale_paths.is_empty() {
+                log::info!("Cleaning up {} stale entries for {}", stale_paths.len(), scan_path);
+                let _ = db.delete_images(&stale_paths);
+            }
+        }
+
+        // 2. Filter images that actually need update
         let needs_update: Vec<_> = images_to_index.into_iter().filter(|img| {
             match db.get_indexed_mtime(&img.path) {
                 Ok(Some(m)) => m != img.mtime,
@@ -128,7 +146,92 @@ pub fn scan_directory(app_handle: tauri::AppHandle, path: String, sort_method: O
         }
     });
 
-    Ok(ScanResult { images, initial_index })
+    Ok(ScanResult { images, initial_index, folder: root_str })
+}
+
+#[tauri::command]
+pub fn scan_paths(app_handle: tauri::AppHandle, paths: Vec<String>, recursive: bool) -> Result<Vec<ImageInfo>, String> {
+    let extensions = ["png", "jpg", "jpeg", "webp"];
+    
+    let all_images: Vec<ImageInfo> = paths.par_iter().flat_map(|path| {
+        let input_path = Path::new(path);
+        if !input_path.exists() { return Vec::new(); }
+
+        if input_path.is_file() {
+            if let Some(ext) = input_path.extension().and_then(|s| s.to_str()) {
+                if extensions.contains(&ext.to_lowercase().as_str()) {
+                    if let Ok(metadata) = input_path.metadata() {
+                        if let Ok(mtime_res) = metadata.modified() {
+                            let mtime = mtime_res.duration_since(UNIX_EPOCH).unwrap_or_default().as_secs();
+                            return vec![ImageInfo {
+                                path: input_path.to_string_lossy().to_string(),
+                                name: input_path.file_name().unwrap().to_string_lossy().to_string(),
+                                mtime,
+                                size: metadata.len(),
+                            }];
+                        }
+                    }
+                }
+            }
+            return Vec::new();
+        }
+
+        // Directory scanning
+        let depth = if recursive { 99 } else { 1 };
+        WalkDir::new(input_path)
+            .max_depth(depth)
+            .into_iter()
+            .filter_map(|e| e.ok())
+            .filter(|e| e.file_type().is_file())
+            .filter_map(|entry| {
+                if let Some(ext) = entry.path().extension().and_then(|s| s.to_str()) {
+                    if extensions.contains(&ext.to_lowercase().as_str()) {
+                        let metadata = entry.metadata().ok()?;
+                        let mtime = metadata.modified().ok()?
+                            .duration_since(UNIX_EPOCH).ok()?
+                            .as_secs();
+
+                        return Some(ImageInfo {
+                            path: entry.path().to_string_lossy().to_string(),
+                            name: entry.file_name().to_string_lossy().to_string(),
+                            mtime,
+                            size: metadata.len(),
+                        });
+                    }
+                }
+                None
+            })
+            .collect::<Vec<_>>()
+    }).collect();
+
+    // Background indexing
+    let images_to_index = all_images.clone();
+    let db_path = get_db_path(&app_handle)?;
+    
+    std::thread::spawn(move || {
+        if let Ok(db) = DB::open(&db_path) {
+            let needs_update: Vec<_> = images_to_index.into_iter().filter(|img| {
+                match db.get_indexed_mtime(&img.path) {
+                    Ok(Some(m)) => m != img.mtime,
+                    _ => true,
+                }
+            }).collect();
+
+            if !needs_update.is_empty() {
+                let results: Vec<_> = needs_update.par_iter().map(|img| {
+                    (img, read_metadata(&img.path))
+                }).collect();
+
+                for (img, meta_res) in results {
+                    if let Ok(meta) = meta_res {
+                        let _ = db.insert_image(img, &meta);
+                    }
+                }
+            }
+        }
+    });
+
+    Ok(all_images)
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone)]

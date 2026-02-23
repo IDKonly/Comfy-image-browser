@@ -42,6 +42,7 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             greet,
             scanner::scan_directory,
+            scanner::scan_paths,
             scanner::get_batch_range,
             scanner::search_images,
             scanner::search_advanced_images,
@@ -52,6 +53,7 @@ pub fn run() {
             file_ops::move_to_keep,
             file_ops::move_files_to_folder,
             file_ops::undo_move,
+            file_ops::auto_classify,
             thumbnails::get_thumbnail,
             wildcard::generate_wildcards,
             wildcard::expand_wildcards,

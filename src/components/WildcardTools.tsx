@@ -222,23 +222,17 @@ export const WildcardTools = ({ onClose, images, currentIndex, batchRange }: Wil
     const validExtensions = ['png', 'jpg', 'jpeg', 'webp'];
     const newPaths: string[] = [];
 
-    for (const p of paths) {
-        try {
-            const result = await invoke("scan_directory", { 
-                path: p, 
-                sortMethod: 'NameAsc',
-                recursive: recursiveRef.current 
-            }) as any;
-            if (result && result.images) {
-                const imgPaths = result.images.map((img: any) => img.path);
-                newPaths.push(...imgPaths);
-            }
-        } catch (e) {
-            const ext = p.split('.').pop()?.toLowerCase();
-            if (ext && validExtensions.includes(ext)) {
-                newPaths.push(p);
-            }
+    try {
+        const result = await invoke("scan_paths", { 
+            paths, 
+            recursive: recursiveRef.current 
+        }) as any[];
+        if (result && Array.isArray(result)) {
+            const imgPaths = result.map((img: any) => img.path);
+            newPaths.push(...imgPaths);
         }
+    } catch (e) {
+        console.error("Batch scan error:", e);
     }
 
     if (newPaths.length > 0) {

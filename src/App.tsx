@@ -1,9 +1,9 @@
 import { useState, useEffect, useCallback, useRef, useMemo } from "react";
 import { invoke, convertFileSrc } from "@tauri-apps/api/core";
-import { open, confirm } from "@tauri-apps/plugin-dialog";
+import { open, confirm, message } from "@tauri-apps/plugin-dialog";
 import { LazyStore } from "@tauri-apps/plugin-store";
 import { useAppStore, ImageMetadata, Shortcuts, DEFAULT_SHORTCUTS } from "./store/useAppStore";
-import { FolderOpen, Image as ImageIcon, Layers, ChevronLeft, ChevronRight, Search, X, Settings, Keyboard, Filter, Wand2, ArrowDownAZ, ArrowUpAZ, Clock, History } from "lucide-react";
+import { FolderOpen, Image as ImageIcon, Layers, ChevronLeft, ChevronRight, Search, X, Settings, Keyboard, Filter, Wand2, ArrowDownAZ, ArrowUpAZ, Clock, History, Zap } from "lucide-react";
 import { useToast } from "./components/Toast";
 import { ZoomPanViewer } from "./components/ZoomPanViewer";
 import { FilterPanel } from "./components/FilterPanel";
@@ -186,12 +186,7 @@ function App() {
         const firstPath = paths[0];
         try {
           const result = await invoke("scan_directory", { path: firstPath, sortMethod, recursive }) as any;
-          // Set folderPath to the actual folder containing the files
-          const p = firstPath.replace(/\\/g, '/');
-          const lastSlash = p.lastIndexOf('/');
-          const parent = lastSlash !== -1 ? p.substring(0, lastSlash) : p;
-          
-          setFolderPath(parent || firstPath); 
+          setFolderPath(result.folder); 
           setImages(result.images);
           setCurrentIndex(result.initial_index);
           showToast(`Loaded ${result.images.length} images`, 'success');
@@ -251,8 +246,8 @@ function App() {
   const handleOpenFolder = async () => {
     const selected = await open({ directory: true, multiple: false });
     if (selected && typeof selected === 'string') {
-      setFolderPath(selected);
       const result = await invoke("scan_directory", { path: selected, sortMethod, recursive }) as any;
+      setFolderPath(result.folder);
       setImages(result.images);
       showToast(`Loaded ${ result.images.length } images`, 'success');
     }
@@ -264,10 +259,11 @@ function App() {
     setReloadTimestamp(ts);
     
     const result = await invoke("scan_directory", { path: folderPath, sortMethod, recursive }) as any;
+    setFolderPath(result.folder);
     setImages(result.images);
     
-    if (images[currentIndex]) {
-        const current = images[currentIndex];
+    if (result.images[currentIndex]) {
+        const current = result.images[currentIndex];
         invoke("get_metadata", { path: current.path }).then(m => setCurrentMetadata(m as ImageMetadata)).catch(() => {});
         setImageSrc(`${convertFileSrc(current.path)}?t=${ts}`);
     }
@@ -345,6 +341,27 @@ function App() {
       await invoke("move_files_to_folder", { paths: images.map(img => img.path), folderName });
       showToast(`Moved ${images.length} files`, 'success');
       clearSearch();
+    }
+  };
+
+  const handleAutoClassify = async () => {
+    if (!folderPath) return;
+    if (await confirm("Automatically classify images into subfolders based on their names/tags? (Priority: Largest subfolders first)")) {
+        try {
+            const result = await invoke("auto_classify", { root: folderPath, recursive }) as any;
+            if (result.total_moved > 0) {
+                let summary = `Successfully moved ${result.total_moved} images:\n\n`;
+                for (const [folder, count] of Object.entries(result.folder_summary)) {
+                    summary += `• ${folder}: ${count} images\n`;
+                }
+                await message(summary, { title: "Auto-classification Complete", kind: "info" });
+                handleReload();
+            } else {
+                showToast("No matching images found for auto-classification", "info");
+            }
+        } catch (e: any) {
+            showToast(`Auto-classify failed: ${e}`, "error");
+        }
     }
   };
 
@@ -518,9 +535,14 @@ function App() {
                 <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 text-neutral-600 group-focus-within:text-blue-500" />
                 <input id="search-input" type="text" placeholder="Search... (/)" value={searchQuery} onChange={e => setSearchQuery(e.target.value)} onKeyDown={e => e.key === 'Enter' && handleSearch()} className="w-full bg-neutral-950 border border-white/5 rounded-xl py-2.5 pl-10 text-[11px] focus:outline-none focus:border-blue-500/50 transition-all" />
             </div>
-            <button onClick={() => setShowFilters(!showFilters)} className={`p-2.5 rounded-xl border transition-all ${showFilters || activeFilters.model || activeFilters.sampler ? 'bg-blue-600/20 border-blue-500/50 text-blue-400' : 'bg-neutral-950 border-white/5 text-neutral-500 hover:text-white'}`}>
-                <Filter className="w-4 h-4" />
-            </button>
+            <div className="flex gap-1">
+                <button onClick={handleAutoClassify} title="Auto-Classify into subfolders" className="p-2.5 rounded-xl border bg-neutral-950 border-white/5 text-neutral-500 hover:text-amber-400 hover:border-amber-500/30 transition-all">
+                    <Zap className="w-4 h-4" />
+                </button>
+                <button onClick={() => setShowFilters(!showFilters)} className={`p-2.5 rounded-xl border transition-all ${showFilters || activeFilters.model || activeFilters.sampler ? 'bg-blue-600/20 border-blue-500/50 text-blue-400' : 'bg-neutral-950 border-white/5 text-neutral-500 hover:text-white'}`}>
+                    <Filter className="w-4 h-4" />
+                </button>
+            </div>
           </div>
           {isSearching && <button onClick={moveSearchResults} className="w-full py-2 bg-neutral-800 hover:bg-blue-600/20 border border-blue-500/10 rounded-xl text-[10px] font-bold text-neutral-400">Classify results</button>}</div>
           

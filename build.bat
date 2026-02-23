@@ -20,3 +20,5 @@ if %errorlevel% neq 0 (
 
 echo [SUCCESS] Build finished successfully!
 echo [INFO] Check src-tauri/target/release/bundle/ for installers.
+
+pause

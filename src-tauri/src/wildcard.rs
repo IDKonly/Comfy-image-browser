@@ -118,9 +118,9 @@ pub fn generate_wildcards(window: Window, paths: Vec<String>, threshold: f32, fi
             let c = current.fetch_add(1, Ordering::SeqCst) + 1;
             let percent = (c * 100 / total) as usize;
             
-            // Throttle: Emit only when percentage increases or every 100 items for huge sets
+            // Throttle: Emit only when percentage increases
             let last = last_emitted_percent.load(Ordering::SeqCst);
-            if percent > last || c % 100 == 0 || c == total {
+            if percent > last || c == total {
                 last_emitted_percent.store(percent, Ordering::SeqCst);
                 let _ = window.emit("workshop-progress", percent as f32);
             }
@@ -151,7 +151,7 @@ pub fn compare_tags(window: Window, target_paths: Vec<String>, comparison_paths:
             let c = current.fetch_add(1, Ordering::SeqCst) + 1;
             let percent = (c * 100 / total) as usize;
             let last = last_emitted_percent.load(Ordering::SeqCst);
-            if percent > last || c % 100 == 0 {
+            if percent > last {
                 last_emitted_percent.store(percent, Ordering::SeqCst);
                 let _ = window.emit("workshop-progress", percent as f32);
             }
@@ -170,7 +170,7 @@ pub fn compare_tags(window: Window, target_paths: Vec<String>, comparison_paths:
             let c = current.fetch_add(1, Ordering::SeqCst) + 1;
             let percent = (c * 100 / total) as usize;
             let last = last_emitted_percent.load(Ordering::SeqCst);
-            if percent > last || c % 100 == 0 || c == total {
+            if percent > last || c == total {
                 last_emitted_percent.store(percent, Ordering::SeqCst);
                 let _ = window.emit("workshop-progress", percent as f32);
             }
