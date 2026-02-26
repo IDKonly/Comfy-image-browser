@@ -36,6 +36,12 @@ interface ImageInfo {
   size: number;
 }
 
+export interface IndexProgress {
+  total: number;
+  current: number;
+  is_indexing: boolean;
+}
+
 export interface UndoAction {
   type: 'keep' | 'trash' | 'move';
   originalImages: { info: ImageInfo, index: number }[];
@@ -50,11 +56,13 @@ interface AppState {
   shortcuts: Shortcuts;
   batchMode: boolean;
   undoStack: UndoAction[];
+  indexProgress: IndexProgress | null;
   
   setFolderPath: (path: string | null) => void;
   setImages: (images: ImageInfo[]) => void;
   setCurrentIndex: (index: number) => void;
   setCurrentMetadata: (metadata: ImageMetadata | null) => void;
+  setIndexProgress: (progress: IndexProgress | null) => void;
   removeImages: (indices: number[], undoType?: 'keep' | 'trash' | 'move') => void;
   insertImage: (info: ImageInfo, index: number) => void;
   setShortcuts: (shortcuts: Shortcuts) => void;
@@ -86,6 +94,7 @@ export const useAppStore = create<AppState>((set, get) => ({
   shortcuts: DEFAULT_SHORTCUTS,
   batchMode: false,
   undoStack: [],
+  indexProgress: null,
 
   // Workshop Initial State
   workshopTargetPaths: [],
@@ -105,6 +114,7 @@ export const useAppStore = create<AppState>((set, get) => ({
   setImages: (images) => set({ images }),
   setCurrentIndex: (index) => set({ currentIndex: index, currentMetadata: null }),
   setCurrentMetadata: (metadata) => set({ currentMetadata: metadata }),
+  setIndexProgress: (progress) => set({ indexProgress: progress }),
   setBatchMode: (mode) => set({ batchMode: mode }),
   
   pushUndo: (action) => set((state) => ({ 

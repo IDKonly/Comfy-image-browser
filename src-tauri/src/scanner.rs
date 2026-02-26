@@ -5,7 +5,7 @@ use std::time::UNIX_EPOCH;
 use rayon::prelude::*;
 use crate::db::DB;
 use crate::metadata::read_metadata;
-use tauri::Manager;
+use tauri::{Manager, Emitter};
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct ImageInfo {
@@ -21,6 +21,13 @@ pub enum SortMethod {
     Oldest,
     NameAsc,
     NameDesc,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone)]
+pub struct IndexProgress {
+    pub total: usize,
+    pub current: usize,
+    pub is_indexing: bool,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
@@ -139,11 +146,18 @@ pub fn scan_directory(app_handle: tauri::AppHandle, path: String, sort_method: O
         }).collect();
 
         // Batch insert results (DB write must be sequential for now, but WAL mode helps)
-        for (img, meta_res) in results {
+        let total = results.len();
+        let _ = app_handle.emit("index-progress", IndexProgress { total, current: 0, is_indexing: true });
+        
+        for (i, (img, meta_res)) in results.into_iter().enumerate() {
             if let Ok(meta) = meta_res {
                 let _ = db.insert_image(img, &meta);
             }
+            if i % 50 == 0 || i == total - 1 {
+                let _ = app_handle.emit("index-progress", IndexProgress { total, current: i + 1, is_indexing: true });
+            }
         }
+        let _ = app_handle.emit("index-progress", IndexProgress { total, current: total, is_indexing: false });
     });
 
     Ok(ScanResult { images, initial_index, folder: root_str })
