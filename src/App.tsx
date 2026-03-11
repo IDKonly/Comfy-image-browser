@@ -9,6 +9,7 @@ import { FilterPanel } from "./components/FilterPanel";
 import { WildcardTools } from "./components/WildcardTools";
 import { DebugPanel } from "./components/DebugPanel";
 import { TagRefiner } from "./components/TagRefiner";
+import { BatchCropModule } from "./components/BatchCropModule";
 import { listen } from "@tauri-apps/api/event";
 
 // Use direct imports which are more reliable in Vite 7
@@ -151,8 +152,12 @@ type SortMethod = 'Newest' | 'Oldest' | 'NameAsc' | 'NameDesc';
 function App() {
   const { 
     folderPath, images, currentIndex, currentMetadata, shortcuts, batchMode, indexProgress, twitterSettings, recursive, sortMethod,
-    setFolderPath, setImages, setCurrentIndex, setCurrentMetadata, removeImages, setShortcuts, setBatchMode, setIndexProgress, setTwitterSettings, setRecursive, setSortMethod
+    setFolderPath, setImages, setCurrentIndex, setCurrentMetadata, removeImages, setShortcuts, setBatchMode, setIndexProgress, setTwitterSettings, setRecursive, setSortMethod: setAppSortMethod
   } = useAppStore();
+
+  const handleSortChange = (method: SortMethod) => {
+    setAppSortMethod(method);
+  };
 
   const handleTwitterUpload = useCallback(async () => {
     if (images.length === 0 || !images[currentIndex]) return;
@@ -180,6 +185,7 @@ function App() {
   const [showFilters, setShowFilters] = useState(false);
   const [showWildcards, setShowWildcards] = useState(false);
   const [showDebug, setShowDebug] = useState(false);
+  const [showBatchCrop, setShowBatchCrop] = useState(false);
   const [activeFilters, setActiveFilters] = useState({ model: "", sampler: "" });
   const [reloadTimestamp, setReloadTimestamp] = useState<number>(0);
   const [showViewerRefiner, setShowViewerRefiner] = useState(false);
@@ -214,11 +220,21 @@ function App() {
   }, [sortMethod, recursive]);
 
   useEffect(() => {
-    const unlisten = listen('index-progress', (event: any) => {
+    const unlistenProgress = listen('index-progress', (event: any) => {
       setIndexProgress(event.payload);
     });
-    return () => { unlisten.then(f => f()); };
-  }, [setIndexProgress]);
+    const unlistenUpdate = listen('folder-updated', (event: any) => {
+      const payload = event.payload as any;
+      // Update if it's the current folder or recursive is on
+      if (payload.folder === folderPath || recursive) {
+        setImages(payload.images);
+      }
+    });
+    return () => { 
+      unlistenProgress.then(f => f());
+      unlistenUpdate.then(f => f());
+    };
+  }, [setIndexProgress, folderPath, recursive, setImages]);
 
   // Initial load and settings change re-scan
   const initialScanDone = useRef(false);
@@ -667,7 +683,14 @@ function App() {
               })()
             ) : (
               <div className="relative w-full h-full flex items-center justify-center p-0 overflow-hidden group">
-                {imageSrc && <ZoomPanViewer key={`${images[currentIndex].path}-${reloadTimestamp}`} src={imageSrc} className="animate-image-change" />}
+                {imageSrc && (
+                  <ZoomPanViewer 
+                    key={`${images[currentIndex].path}-${reloadTimestamp}`} 
+                    src={imageSrc} 
+                    onBatchCrop={() => setShowBatchCrop(true)}
+                    className="animate-image-change" 
+                  />
+                )}
                 
                 {/* Viewer Overlay Controls */}
                 <div className="absolute top-6 right-6 flex flex-col gap-2 z-50 opacity-0 group-hover:opacity-100 transition-opacity duration-300">
@@ -785,7 +808,41 @@ function App() {
                 </label>
               </div>
 
-              <button onClick={() => { setShortcuts(DEFAULT_SHORTCUTS); showToast('Shortcuts Reset', 'info'); }} className="w-full py-3 bg-white/5 hover:bg-red-900/20 rounded-2xl text-[10px] font-black uppercase tracking-widest text-neutral-500 hover:text-red-400 transition-all">Reset to Default</button>
+              <div className="space-y-4 pt-6 border-t border-white/5">
+                <h4 className="text-[10px] font-black uppercase tracking-[0.2em] text-red-500">Database Management</h4>
+                <p className="text-[9px] text-neutral-500 italic leading-relaxed">
+                    If search results are incorrect or performance is lagging, you can reset the indexing database. 
+                    This will force a full re-scan of folders you visit.
+                </p>
+                <button 
+                    onClick={async () => {
+                        if (await confirm("Are you sure you want to CLEAR the entire image database? This will trigger full re-indexing of all folders.")) {
+                            try {
+                                await invoke("clear_database");
+                                if (folderPath) {
+                                    showToast("Database Initialized. Full re-indexing current folder...", "success");
+                                    const result = await invoke("scan_directory", { 
+                                        path: folderPath, 
+                                        sortMethod, 
+                                        recursive,
+                                        forceReindex: true 
+                                    }) as any;
+                                    setImages(result.images);
+                                } else {
+                                    showToast("Database Initialized.", "success");
+                                }
+                            } catch (e: any) {
+                                showToast(`Failed to clear DB: ${e}`, "error");
+                            }
+                        }
+                    }}
+                    className="w-full py-3 bg-red-950/10 hover:bg-red-600 border border-red-500/20 hover:border-red-500 rounded-2xl text-[10px] font-black uppercase tracking-widest text-red-500 hover:text-white transition-all flex items-center justify-center gap-2"
+                >
+                    <History className="w-3.5 h-3.5" /> Initialize & Rebuild Database
+                </button>
+              </div>
+
+              <button onClick={() => { setShortcuts(DEFAULT_SHORTCUTS); showToast('Shortcuts Reset', 'info'); }} className="w-full py-3 bg-white/5 hover:bg-neutral-800 rounded-2xl text-[10px] font-black uppercase tracking-widest text-neutral-500 hover:text-neutral-300 transition-all">Reset Shortcuts to Default</button>
             </div>
           </div>
         </div>
@@ -825,6 +882,28 @@ function App() {
 
       {showDebug && (
         <DebugPanel folderPath={folderPath} onClose={() => setShowDebug(false)} />
+      )}
+
+      {showBatchCrop && images[currentIndex] && (
+        <BatchCropModule 
+          src={convertFileSrc(images[currentIndex].path)} 
+          onClose={() => setShowBatchCrop(false)} 
+          onSave={async (rects, fillColor) => {
+            try {
+              showToast(`Processing ${rects.length} crops...`, 'info');
+              const paths = await invoke("process_batch_crop", {
+                imagePath: images[currentIndex].path,
+                rects: rects.map(r => ({ x: r.x, y: r.y, width: r.width, height: r.height })),
+                fillColor: fillColor
+              }) as string[];
+              
+              setShowBatchCrop(false);
+              showToast(`Successfully saved ${paths.length} crops to 'cropped' folder`, "success");
+            } catch (e: any) {
+              showToast(e.toString(), "error");
+            }
+          }}
+        />
       )}
 
       <footer className="px-6 h-10 bg-neutral-950 border-t border-white/5 text-[10px] text-neutral-600 flex items-center justify-between shrink-0 z-10 font-medium">

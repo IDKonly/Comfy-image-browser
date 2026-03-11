@@ -1,4 +1,6 @@
 use std::collections::{HashSet, HashMap};
+use std::path::PathBuf;
+use crate::db::DB;
 use serde::{Serialize, Deserialize};
 use crate::metadata::read_metadata;
 use rayon::prelude::*;
@@ -86,9 +88,30 @@ fn apply_filters(tags: HashSet<String>, filter: &WildcardFilter) -> HashSet<Stri
 }
 
 #[tauri::command]
-pub fn get_tag_counts(paths: Vec<String>) -> Result<HashMap<String, u32>, String> {
+pub fn get_tag_counts(app_handle: tauri::AppHandle, paths: Vec<String>) -> Result<HashMap<String, u32>, String> {
+    let mut db_prompts = HashMap::new();
+    if let Ok(db_path) = get_db_path_local(&app_handle) {
+        if let Ok(db) = DB::open(&db_path) {
+            if let Ok(images) = db.get_images_by_paths(&paths) {
+                for img in images {
+                    if let Some(p) = img.prompt {
+                        db_prompts.insert(img.path, p);
+                    }
+                }
+            }
+        }
+    }
+
     let counts: HashMap<String, u32> = paths.par_iter()
         .map(|path| {
+            if let Some(prompt) = db_prompts.get(path) {
+                return prompt.split(',')
+                    .map(|s| s.trim().to_string())
+                    .filter(|s| !s.is_empty())
+                    .collect::<Vec<_>>();
+            }
+            
+            // Fallback for non-indexed images
             if let Ok(meta) = read_metadata(path) {
                 if let Some(prompt) = meta.prompt {
                     return prompt.split(',')
@@ -114,30 +137,51 @@ pub fn get_tag_counts(paths: Vec<String>) -> Result<HashMap<String, u32>, String
     Ok(counts)
 }
 
+fn get_db_path_local(app_handle: &tauri::AppHandle) -> Result<PathBuf, String> {
+    let mut path = app_handle.path().app_data_dir().map_err(|e| e.to_string())?;
+    path.push(".image_manager_v2.db");
+    Ok(path)
+}
+
 #[tauri::command]
-pub fn generate_wildcards(window: Window, paths: Vec<String>, threshold: f32, filter: WildcardFilter) -> Result<Vec<String>, String> {
+pub fn generate_wildcards(app_handle: tauri::AppHandle, window: Window, paths: Vec<String>, threshold: f32, filter: WildcardFilter) -> Result<Vec<String>, String> {
     let total = paths.len();
     let current = Arc::new(AtomicUsize::new(0));
     let last_emitted_percent = Arc::new(AtomicUsize::new(0));
     let max_depth = if filter.max_depth == 0 { 3 } else { filter.max_depth };
     
+    let mut db_prompts = HashMap::new();
+    if let Ok(db_path) = get_db_path_local(&app_handle) {
+        if let Ok(db) = DB::open(&db_path) {
+            if let Ok(images) = db.get_images_by_paths(&paths) {
+                for img in images {
+                    if let Some(p) = img.prompt {
+                        db_prompts.insert(img.path, p);
+                    }
+                }
+            }
+        }
+    }
+
     let tag_sets: Vec<HashSet<String>> = paths.par_iter()
         .map(|path| {
-            let res = if let Ok(meta) = read_metadata(path) {
-                if let Some(prompt) = meta.prompt {
-                    let tags: HashSet<String> = prompt.split(',')
-                        .map(|s| s.trim().to_string())
-                        .filter(|s| !s.is_empty())
-                        .collect();
-                    
-                    let filtered = apply_filters(tags, &filter);
-                    if filter.min_tags > 0 && filtered.len() < filter.min_tags as usize {
-                        HashSet::new()
-                    } else {
-                        filtered
-                    }
-                } else {
+            let prompt_opt = if let Some(p) = db_prompts.get(path) {
+                Some(p.clone())
+            } else {
+                read_metadata(path).ok().and_then(|m| m.prompt)
+            };
+
+            let res = if let Some(prompt) = prompt_opt {
+                let tags: HashSet<String> = prompt.split(',')
+                    .map(|s| s.trim().to_string())
+                    .filter(|s| !s.is_empty())
+                    .collect();
+                
+                let filtered = apply_filters(tags, &filter);
+                if filter.min_tags > 0 && filtered.len() < filter.min_tags as usize {
                     HashSet::new()
+                } else {
+                    filtered
                 }
             } else {
                 HashSet::new()
@@ -146,7 +190,6 @@ pub fn generate_wildcards(window: Window, paths: Vec<String>, threshold: f32, fi
             let c = current.fetch_add(1, Ordering::SeqCst) + 1;
             let percent = (c * 100 / total) as usize;
             
-            // Throttle: Emit only when percentage increases
             let last = last_emitted_percent.load(Ordering::SeqCst);
             if percent > last || c == total {
                 last_emitted_percent.store(percent, Ordering::SeqCst);
@@ -175,18 +218,36 @@ pub fn generate_wildcards(window: Window, paths: Vec<String>, threshold: f32, fi
 }
 
 #[tauri::command]
-pub fn compare_tags(window: Window, target_paths: Vec<String>, comparison_paths: Vec<String>, threshold: f32, filter: WildcardFilter) -> Result<Vec<String>, String> {
+pub fn compare_tags(app_handle: tauri::AppHandle, window: Window, target_paths: Vec<String>, comparison_paths: Vec<String>, threshold: f32, filter: WildcardFilter) -> Result<Vec<String>, String> {
     let total = target_paths.len() + comparison_paths.len();
     let current = Arc::new(AtomicUsize::new(0));
     let last_emitted_percent = Arc::new(AtomicUsize::new(0));
     let max_depth = if filter.max_depth == 0 { 3 } else { filter.max_depth };
 
+    let mut db_prompts = HashMap::new();
+    if let Ok(db_path) = get_db_path_local(&app_handle) {
+        if let Ok(db) = DB::open(&db_path) {
+            let all_paths: Vec<_> = target_paths.iter().chain(comparison_paths.iter()).cloned().collect();
+            if let Ok(images) = db.get_images_by_paths(&all_paths) {
+                for img in images {
+                    if let Some(p) = img.prompt {
+                        db_prompts.insert(img.path, p);
+                    }
+                }
+            }
+        }
+    }
+
     let target_tags_sets: Vec<HashSet<String>> = target_paths.par_iter()
         .map(|path| {
-            let tags = if let Ok(meta) = read_metadata(path) {
-                if let Some(prompt) = meta.prompt {
-                    prompt.split(',').map(|s| s.trim().to_string()).filter(|s| !s.is_empty()).collect::<HashSet<_>>()
-                } else { HashSet::new() }
+            let prompt_opt = if let Some(p) = db_prompts.get(path) {
+                Some(p.clone())
+            } else {
+                read_metadata(path).ok().and_then(|m| m.prompt)
+            };
+
+            let tags = if let Some(prompt) = prompt_opt {
+                prompt.split(',').map(|s| s.trim().to_string()).filter(|s| !s.is_empty()).collect::<HashSet<_>>()
             } else { HashSet::new() };
             
             let c = current.fetch_add(1, Ordering::SeqCst) + 1;
@@ -202,10 +263,14 @@ pub fn compare_tags(window: Window, target_paths: Vec<String>, comparison_paths:
 
     let comparison_tags: HashSet<String> = comparison_paths.par_iter()
         .flat_map(|path| {
-            let res = if let Ok(meta) = read_metadata(path) {
-                if let Some(prompt) = meta.prompt {
-                    prompt.split(',').map(|s| s.trim().to_string()).filter(|s| !s.is_empty()).collect::<Vec<_>>()
-                } else { Vec::new() }
+            let prompt_opt = if let Some(p) = db_prompts.get(path) {
+                Some(p.clone())
+            } else {
+                read_metadata(path).ok().and_then(|m| m.prompt)
+            };
+
+            let res = if let Some(prompt) = prompt_opt {
+                prompt.split(',').map(|s| s.trim().to_string()).filter(|s| !s.is_empty()).collect::<Vec<_>>()
             } else { Vec::new() };
             
             let c = current.fetch_add(1, Ordering::SeqCst) + 1;

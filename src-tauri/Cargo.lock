@@ -620,6 +620,7 @@ dependencies = [
  "fern",
  "hmac",
  "image",
+ "lazy_static",
  "log",
  "percent-encoding",
  "rayon",

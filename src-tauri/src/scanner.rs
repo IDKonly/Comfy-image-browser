@@ -6,6 +6,13 @@ use rayon::prelude::*;
 use crate::db::DB;
 use crate::metadata::read_metadata;
 use tauri::{Manager, Emitter};
+use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
+use lazy_static::lazy_static;
+
+lazy_static! {
+    static ref CURRENT_SCAN_ID: Arc<AtomicU64> = Arc::new(AtomicU64::new(0));
+}
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct ImageInfo {
@@ -46,8 +53,17 @@ fn get_db_path(app_handle: &tauri::AppHandle) -> Result<PathBuf, String> {
     Ok(path)
 }
 
+fn sort_images(images: &mut Vec<ImageInfo>, method: SortMethod) {
+    match method {
+        SortMethod::Newest => images.sort_by(|a, b| b.mtime.cmp(&a.mtime)),
+        SortMethod::Oldest => images.sort_by(|a, b| a.mtime.cmp(&b.mtime)),
+        SortMethod::NameAsc => images.sort_by(|a, b| a.name.to_lowercase().cmp(&b.name.to_lowercase())),
+        SortMethod::NameDesc => images.sort_by(|a, b| b.name.to_lowercase().cmp(&a.name.to_lowercase())),
+    }
+}
+
 #[tauri::command]
-pub fn scan_directory(app_handle: tauri::AppHandle, path: String, sort_method: Option<SortMethod>, recursive: Option<bool>) -> Result<ScanResult, String> {
+pub fn scan_directory(app_handle: tauri::AppHandle, path: String, sort_method: Option<SortMethod>, recursive: Option<bool>, force_reindex: Option<bool>) -> Result<ScanResult, String> {
     let input_path = Path::new(&path);
     let (root, target_file) = if input_path.is_file() {
         (input_path.parent().ok_or("No parent directory")?, Some(input_path))
@@ -59,46 +75,20 @@ pub fn scan_directory(app_handle: tauri::AppHandle, path: String, sort_method: O
 
     let root_str = root.to_string_lossy().to_string().replace("\\", "/");
     let db_path = get_db_path(&app_handle)?;
-    let _ = DB::open(&db_path).map_err(|e| e.to_string())?;
-    
-    let depth = if recursive.unwrap_or(false) { 99 } else { 1 };
-
-    let entries: Vec<_> = WalkDir::new(root)
-        .max_depth(depth)
-        .into_iter()
-        .filter_map(|e| e.ok())
-        .filter(|e| e.file_type().is_file())
-        .collect();
-
-    let extensions = ["png", "jpg", "jpeg", "webp"];
-
-    let mut images: Vec<ImageInfo> = entries.par_iter().filter_map(|entry| {
-        if let Some(ext) = entry.path().extension().and_then(|s| s.to_str()) {
-            if extensions.contains(&ext.to_lowercase().as_str()) {
-                let metadata = entry.metadata().ok()?;
-                let mtime = metadata.modified().ok()?
-                    .duration_since(UNIX_EPOCH).ok()?
-                    .as_secs();
-
-                return Some(ImageInfo {
-                    path: entry.path().to_string_lossy().to_string(),
-                    name: entry.file_name().to_string_lossy().to_string(),
-                    mtime,
-                    size: metadata.len(),
-                });
-            }
-        }
-        None
-    }).collect();
-
-    // Sorting
+    let is_recursive = recursive.unwrap_or(false);
+    let is_forced = force_reindex.unwrap_or(false);
     let method = sort_method.unwrap_or(SortMethod::NameAsc);
-    match method {
-        SortMethod::Newest => images.sort_by(|a, b| b.mtime.cmp(&a.mtime)),
-        SortMethod::Oldest => images.sort_by(|a, b| a.mtime.cmp(&b.mtime)),
-        SortMethod::NameAsc => images.sort_by(|a, b| a.name.to_lowercase().cmp(&b.name.to_lowercase())),
-        SortMethod::NameDesc => images.sort_by(|a, b| b.name.to_lowercase().cmp(&a.name.to_lowercase())),
-    }
+
+    // 1. DB-First (unless forced)
+    let db = DB::open(&db_path).map_err(|e| e.to_string())?;
+    let mut images = if is_forced {
+        Vec::new()
+    } else {
+        db.get_images_in_folder_fast(&root_str, is_recursive).unwrap_or_default()
+    };
+    
+    // Sort results
+    sort_images(&mut images, method);
 
     let mut initial_index = 0;
     if let Some(target) = target_file {
@@ -108,55 +98,107 @@ pub fn scan_directory(app_handle: tauri::AppHandle, path: String, sort_method: O
         }
     }
 
-    // Background indexing for missing or changed metadata
-    let images_to_index = images.clone();
-    let db_path_clone = db_path.clone();
-    let scan_path = root_str.clone();
-    let is_recursive = recursive.unwrap_or(false);
-    
+    // 2. Cancellation
+    let scan_id = CURRENT_SCAN_ID.fetch_add(1, Ordering::SeqCst) + 1;
+
+    // 3. Background Sync & Indexing
+    let app_handle_clone = app_handle.clone();
+    let root_path_buf = root.to_path_buf();
+    let root_str_clone = root_str.clone();
+
     std::thread::spawn(move || {
-        let db = DB::open(&db_path_clone).unwrap();
+        let app_handle = app_handle_clone;
+        let db_path = get_db_path(&app_handle).unwrap();
+        let mut db = DB::open(&db_path).unwrap();
+
+        if CURRENT_SCAN_ID.load(Ordering::SeqCst) != scan_id { return; }
+
+        // A. Fast disk scan
+        let depth = if is_recursive { 99 } else { 1 };
+        let extensions = ["png", "jpg", "jpeg", "webp"];
         
-        // 1. Cleanup stale entries
-        if let Ok(existing_paths) = db.get_all_paths_in_folder(&scan_path, is_recursive) {
-            let current_paths: std::collections::HashSet<_> = images_to_index.iter().map(|img| &img.path).collect();
-            let stale_paths: Vec<_> = existing_paths.into_iter()
-                .filter(|p| !current_paths.contains(p))
-                .collect();
-            
+        let disk_entries: Vec<ImageInfo> = WalkDir::new(&root_path_buf)
+            .max_depth(depth)
+            .into_iter()
+            .filter_map(|e| e.ok())
+            .filter(|e| e.file_type().is_file())
+            .filter_map(|entry| {
+                if let Some(ext) = entry.path().extension().and_then(|s| s.to_str()) {
+                    if extensions.contains(&ext.to_lowercase().as_str()) {
+                        let metadata = entry.metadata().ok()?;
+                        let mtime = metadata.modified().ok()?
+                            .duration_since(UNIX_EPOCH).ok()?
+                            .as_secs();
+                        return Some(ImageInfo {
+                            path: entry.path().to_string_lossy().to_string(),
+                            name: entry.file_name().to_string_lossy().to_string(),
+                            mtime,
+                            size: metadata.len(),
+                        });
+                    }
+                }
+                None
+            })
+            .collect();
+
+        if CURRENT_SCAN_ID.load(Ordering::SeqCst) != scan_id { return; }
+
+        // B. Identify Changes
+        let mut current_images = disk_entries.clone();
+        sort_images(&mut current_images, method);
+
+        let _ = app_handle.emit("folder-updated", ScanResult { 
+            images: current_images.clone(), 
+            initial_index, 
+            folder: root_str_clone.clone() 
+        });
+
+        // C. Cleanup stale DB entries
+        if let Ok(indexed_paths) = db.get_all_paths_in_folder(&root_str_clone, is_recursive) {
+            let disk_paths: std::collections::HashSet<_> = disk_entries.iter().map(|img| &img.path).collect();
+            let stale_paths: Vec<_> = indexed_paths.into_iter().filter(|p| !disk_paths.contains(p)).collect();
             if !stale_paths.is_empty() {
-                log::info!("Cleaning up {} stale entries for {}", stale_paths.len(), scan_path);
                 let _ = db.delete_images(&stale_paths);
             }
         }
 
-        // 2. Filter images that actually need update
-        let needs_update: Vec<_> = images_to_index.into_iter().filter(|img| {
-            match db.get_indexed_mtime(&img.path) {
-                Ok(Some(m)) => m != img.mtime,
+        // D. Filter images that need indexing
+        let needs_indexing: Vec<_> = disk_entries.into_iter().filter(|img| {
+            if is_forced { return true; } // Force Reindex ignores DB stats
+            match db.get_indexed_stats(&img.path) {
+                Ok(Some((m, s))) => m != img.mtime || s != img.size,
                 _ => true,
             }
         }).collect();
 
-        if needs_update.is_empty() { return; }
+        if needs_indexing.is_empty() { return; }
 
-        // Read metadata in parallel
-        let results: Vec<_> = needs_update.par_iter().map(|img| {
-            (img, read_metadata(&img.path))
-        }).collect();
-
-        // Batch insert results (DB write must be sequential for now, but WAL mode helps)
-        let total = results.len();
+        // E. Parallel Metadata Extraction
+        let total = needs_indexing.len();
         let _ = app_handle.emit("index-progress", IndexProgress { total, current: 0, is_indexing: true });
-        
-        for (i, (img, meta_res)) in results.into_iter().enumerate() {
-            if let Ok(meta) = meta_res {
-                let _ = db.insert_image(img, &meta);
+
+        for (chunk_idx, chunk) in needs_indexing.chunks(100).enumerate() {
+            if CURRENT_SCAN_ID.load(Ordering::SeqCst) != scan_id { 
+                let _ = app_handle.emit("index-progress", IndexProgress { total, current: 0, is_indexing: false });
+                return; 
             }
-            if i % 50 == 0 || i == total - 1 {
-                let _ = app_handle.emit("index-progress", IndexProgress { total, current: i + 1, is_indexing: true });
+
+            let results: Vec<_> = chunk.par_iter().map(|img| {
+                (img, read_metadata(&img.path).unwrap_or_default())
+            }).collect();
+
+            if let Err(e) = db.insert_images_batch(results) {
+                log::error!("Batch insert failed: {}", e);
             }
+
+            let current_count = (chunk_idx + 1) * 100;
+            let _ = app_handle.emit("index-progress", IndexProgress { 
+                total, 
+                current: if current_count > total { total } else { current_count }, 
+                is_indexing: true 
+            });
         }
+
         let _ = app_handle.emit("index-progress", IndexProgress { total, current: total, is_indexing: false });
     });
 

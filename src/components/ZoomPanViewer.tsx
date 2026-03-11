@@ -1,13 +1,14 @@
 import { useState, useRef, useEffect } from "react";
-import { ZoomIn, ZoomOut, Maximize, Scan, RotateCcw } from "lucide-react";
+import { ZoomIn, ZoomOut, Maximize, Scan, RotateCcw, Scissors } from "lucide-react";
 
 interface ZoomPanViewerProps {
   src: string;
   alt?: string;
   className?: string;
+  onBatchCrop?: () => void;
 }
 
-export const ZoomPanViewer = ({ src, alt, className }: ZoomPanViewerProps) => {
+export const ZoomPanViewer = ({ src, alt, className, onBatchCrop }: ZoomPanViewerProps) => {
   const [scale, setScale] = useState(1);
   const [position, setPosition] = useState({ x: 0, y: 0 });
   const [isDragging, setIsDragging] = useState(false);
@@ -78,6 +79,8 @@ export const ZoomPanViewer = ({ src, alt, className }: ZoomPanViewerProps) => {
         <button onClick={handleFit} className="p-2 hover:bg-white/10 rounded-full transition-colors group/btn relative" title="Fit to Screen"><Maximize className="w-4 h-4 text-white" /></button>
         <button onClick={handleOriginal} className="p-2 hover:bg-white/10 rounded-full transition-colors" title="Toggle Zoom"><Scan className="w-4 h-4 text-white" /></button>
         <button onClick={() => { setScale(1); setPosition({x:0,y:0}); }} className="p-2 hover:bg-white/10 rounded-full transition-colors" title="Reset"><RotateCcw className="w-4 h-4 text-white" /></button>
+        <div className="w-px h-4 bg-white/10 mx-1" />
+        <button onClick={onBatchCrop} className="p-2 hover:bg-blue-600/50 hover:text-white rounded-full transition-all text-blue-400" title="Batch Crop"><Scissors className="w-4 h-4" /></button>
       </div>
 
       <div 
