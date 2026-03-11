@@ -92,7 +92,7 @@ pub fn scan_directory(app_handle: tauri::AppHandle, path: String, sort_method: O
 
     let mut initial_index = 0;
     if let Some(target) = target_file {
-        let target_str = target.to_string_lossy().to_string();
+        let target_str = target.to_string_lossy().to_string().replace("\\", "/");
         if let Some(pos) = images.iter().position(|img| img.path == target_str) {
             initial_index = pos;
         }

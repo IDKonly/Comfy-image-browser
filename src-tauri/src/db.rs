@@ -105,12 +105,13 @@ impl DB {
             )?;
 
             for (info, meta) in data {
-                let folder = Path::new(&info.path).parent()
-                    .map(|p| p.to_string_lossy().to_string().replace("\\", "/"))
+                let normalized_path = info.path.replace("\\", "/");
+                let folder = Path::new(&normalized_path).parent()
+                    .map(|p| p.to_string_lossy().to_string())
                     .unwrap_or_default();
 
                 stmt.execute(params![
-                    info.path,
+                    normalized_path,
                     info.name,
                     folder,
                     info.mtime as i64,
@@ -131,8 +132,9 @@ impl DB {
     }
 
     pub fn insert_image(&self, info: &ImageInfo, meta: &ImageMetadata) -> Result<()> {
-        let folder = Path::new(&info.path).parent()
-            .map(|p| p.to_string_lossy().to_string().replace("\\", "/"))
+        let normalized_path = info.path.replace("\\", "/");
+        let folder = Path::new(&normalized_path).parent()
+            .map(|p| p.to_string_lossy().to_string())
             .unwrap_or_default();
 
         self.conn.execute(
@@ -140,7 +142,7 @@ impl DB {
             (path, name, folder, mtime, size, prompt, negative_prompt, steps, sampler, cfg, seed, model, raw) 
             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13)",
             params![
-                info.path,
+                normalized_path,
                 info.name,
                 folder,
                 info.mtime as i64,
@@ -173,16 +175,18 @@ impl DB {
     }
 
     pub fn update_image_path(&self, old_path: &str, new_path: &str) -> Result<()> {
-        let new_folder = Path::new(new_path).parent()
-            .map(|p| p.to_string_lossy().to_string().replace("\\", "/"))
+        let normalized_old = old_path.replace("\\", "/");
+        let normalized_new = new_path.replace("\\", "/");
+        let new_folder = Path::new(&normalized_new).parent()
+            .map(|p| p.to_string_lossy().to_string())
             .unwrap_or_default();
-        let new_name = Path::new(new_path).file_name()
+        let new_name = Path::new(&normalized_new).file_name()
             .map(|n| n.to_string_lossy().to_string())
             .unwrap_or_default();
 
         self.conn.execute(
             "UPDATE images SET path = ?1, name = ?2, folder = ?3 WHERE path = ?4",
-            params![new_path, new_name, new_folder, old_path],
+            params![normalized_new, new_name, new_folder, normalized_old],
         )?;
         Ok(())
     }
