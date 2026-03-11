@@ -1,9 +1,8 @@
 import { useState, useEffect, useCallback, useRef, useMemo } from "react";
 import { invoke, convertFileSrc } from "@tauri-apps/api/core";
 import { open, confirm, message } from "@tauri-apps/plugin-dialog";
-import { LazyStore } from "@tauri-apps/plugin-store";
 import { useAppStore, ImageMetadata, Shortcuts, DEFAULT_SHORTCUTS } from "./store/useAppStore";
-import { FolderOpen, Image as ImageIcon, Layers, ChevronLeft, ChevronRight, Search, X, Settings, Keyboard, Filter, Wand2, ArrowDownAZ, ArrowUpAZ, Clock, History, Zap } from "lucide-react";
+import { FolderOpen, Image as ImageIcon, Layers, ChevronLeft, ChevronRight, Search, X, Settings, Keyboard, Filter, Wand2, ArrowDownAZ, ArrowUpAZ, Clock, History, Zap, Twitter, Dices } from "lucide-react";
 import { useToast } from "./components/Toast";
 import { ZoomPanViewer } from "./components/ZoomPanViewer";
 import { FilterPanel } from "./components/FilterPanel";
@@ -20,8 +19,6 @@ const List = ReactWindow.FixedSizeList || (ReactWindow as any).default?.FixedSiz
 import * as AutoSizerPkg from "react-virtualized-auto-sizer";
 // @ts-ignore
 const AutoSizer = AutoSizerPkg.default || AutoSizerPkg;
-
-const store = new LazyStore(".settings.json");
 
 // Simple concurrency limiter for thumbnail generation with priority support
 interface Task {
@@ -153,9 +150,28 @@ type SortMethod = 'Newest' | 'Oldest' | 'NameAsc' | 'NameDesc';
 
 function App() {
   const { 
-    folderPath, images, currentIndex, currentMetadata, shortcuts, batchMode, indexProgress,
-    setFolderPath, setImages, setCurrentIndex, setCurrentMetadata, removeImages, setShortcuts, setBatchMode, setIndexProgress
+    folderPath, images, currentIndex, currentMetadata, shortcuts, batchMode, indexProgress, twitterSettings, recursive, sortMethod,
+    setFolderPath, setImages, setCurrentIndex, setCurrentMetadata, removeImages, setShortcuts, setBatchMode, setIndexProgress, setTwitterSettings, setRecursive, setSortMethod
   } = useAppStore();
+
+  const handleTwitterUpload = useCallback(async () => {
+    if (images.length === 0 || !images[currentIndex]) return;
+    try {
+      showToast("Preparing X upload...", "info");
+      await invoke("twitter_upload", { 
+        path: images[currentIndex].path, 
+        settings: twitterSettings 
+      });
+      if (twitterSettings.apiKey && twitterSettings.accessToken) {
+        showToast("Directly Uploaded to X", "success");
+      } else {
+        showToast("Copied Image! Press Ctrl+V in browser", "success");
+      }
+    } catch (e: any) {
+      showToast(e.toString(), "error");
+    }
+  }, [images, currentIndex, twitterSettings]);
+
   const [batchRange, setBatchRange] = useState<[number, number] | null>(null);
   const [searchQuery, setSearchQuery] = useState("");
   const [isSearching, setIsSearching] = useState(false);
@@ -166,8 +182,6 @@ function App() {
   const [showDebug, setShowDebug] = useState(false);
   const [activeFilters, setActiveFilters] = useState({ model: "", sampler: "" });
   const [reloadTimestamp, setReloadTimestamp] = useState<number>(0);
-  const [sortMethod, setSortMethod] = useState<SortMethod>('NameAsc');
-  const [recursive, setRecursive] = useState(false);
   const [showViewerRefiner, setShowViewerRefiner] = useState(false);
   const [viewerTagCounts, setViewerTagCounts] = useState<Record<string, number>>({});
   const { showToast } = useToast();
@@ -206,46 +220,48 @@ function App() {
     return () => { unlisten.then(f => f()); };
   }, [setIndexProgress]);
 
+  // Initial load and settings change re-scan
+  const initialScanDone = useRef(false);
   useEffect(() => {
-    const init = async () => {
-      try {
-        const savedFolder = await store.get<string>("lastFolder");
-        const savedIndex = await store.get<number>("lastIndex");
-        const savedShortcuts = await store.get<Shortcuts>("shortcuts");
-        const savedSort = await store.get<SortMethod>("sortMethod");
-        const savedRecursive = await store.get<boolean>("recursive");
-        const savedBatchMode = await store.get<boolean>("batchMode");
-        
-        if (savedShortcuts) setShortcuts(savedShortcuts);
-        if (savedSort) setSortMethod(savedSort);
-        if (savedRecursive !== undefined) setRecursive(savedRecursive);
-        if (savedBatchMode !== undefined) setBatchMode(savedBatchMode);
-        
-        if (savedFolder) {
-          setFolderPath(savedFolder);
+    if (folderPath && !initialScanDone.current) {
+      const init = async () => {
+        try {
           const result = await invoke("scan_directory", { 
-            path: savedFolder, 
-            sortMethod: savedSort || sortMethod,
-            recursive: savedRecursive !== undefined ? savedRecursive : recursive
+            path: folderPath, 
+            sortMethod: sortMethod,
+            recursive: recursive
           }) as any;
           setImages(result.images);
-          if (savedIndex !== undefined && result.images.length > savedIndex) setCurrentIndex(savedIndex);
-        }
-      } catch (e) {}
-    };
-    init();
-  }, []);
-
-  useEffect(() => {
-    if (folderPath) {
-      store.set("lastFolder", folderPath);
-      store.set("lastIndex", currentIndex);
-      store.set("sortMethod", sortMethod);
-      store.set("recursive", recursive);
-      store.set("batchMode", batchMode);
-      store.save();
+          // Restore index if valid
+          if (currentIndex !== undefined && result.images.length > currentIndex) {
+            setCurrentIndex(currentIndex);
+          }
+          initialScanDone.current = true;
+        } catch (e) {}
+      };
+      init();
     }
-  }, [folderPath, currentIndex, sortMethod, recursive, batchMode]);
+  }, [folderPath]);
+
+  // Handle recursive/sort change automatically
+  useEffect(() => {
+    if (folderPath && initialScanDone.current) {
+        const rescan = async () => {
+            if (isSearching) {
+                handleSearch(activeFilters, sortMethod);
+            } else {
+                const currentPath = images[currentIndex]?.path;
+                const result = await invoke("scan_directory", { path: folderPath, sortMethod, recursive }) as any;
+                setImages(result.images);
+                if (currentPath) {
+                    const newIndex = result.images.findIndex((img: any) => img.path === currentPath);
+                    if (newIndex !== -1) setCurrentIndex(newIndex);
+                }
+            }
+        };
+        rescan();
+    }
+  }, [recursive, sortMethod]);
 
   useEffect(() => {
     if (listRef.current) {
@@ -259,6 +275,7 @@ function App() {
       const result = await invoke("scan_directory", { path: selected, sortMethod, recursive }) as any;
       setFolderPath(result.folder);
       setImages(result.images);
+      setCurrentIndex(result.initial_index);
       showToast(`Loaded ${ result.images.length } images`, 'success');
     }
   };
@@ -278,24 +295,6 @@ function App() {
         setImageSrc(`${convertFileSrc(current.path)}?t=${ts}`);
     }
     showToast("Reloaded", 'info');
-  };
-
-  const handleSortChange = async (method: SortMethod) => {
-    setSortMethod(method);
-    if (folderPath) {
-        if (isSearching) {
-            // Re-trigger search with new sort method
-            handleSearch(activeFilters, method);
-        } else {
-            const currentPath = images[currentIndex]?.path;
-            const result = await invoke("scan_directory", { path: folderPath, sortMethod: method, recursive }) as any;
-            setImages(result.images);
-            if (currentPath) {
-                const newIndex = result.images.findIndex((img: any) => img.path === currentPath);
-                if (newIndex !== -1) setCurrentIndex(newIndex);
-            }
-        }
-    }
   };
 
   const handleSearch = async (overrideFilters?: { model: string, sampler: string }, overrideSort?: SortMethod) => {
@@ -455,6 +454,12 @@ function App() {
     setCurrentIndex(batchMode && batchRange ? (batchRange[0] - 1 + images.length) % images.length : (currentIndex - 1 + images.length) % images.length);
   };
 
+  const handleRandom = useCallback(() => {
+    if (images.length === 0) return;
+    const randomIndex = Math.floor(Math.random() * images.length);
+    setCurrentIndex(randomIndex);
+  }, [images, setCurrentIndex]);
+
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
       if (document.activeElement?.tagName === 'INPUT' || showSettings) return;
@@ -462,16 +467,31 @@ function App() {
       if (e.ctrlKey && e.key.toLowerCase() === 'z') { e.preventDefault(); handleUndo(); return; }
       if (e.key.toLowerCase() === 'r') { handleReload(); return; }
       if (images.length === 0) return;
-      if (e.key === shortcuts.next) nextImage();
-      else if (e.key === shortcuts.prev) prevImage();
-      else if (e.key === shortcuts.delete) handleDelete();
-      else if (e.key === shortcuts.keep) handleKeep();
-      else if (e.key === shortcuts.batch) setBatchMode(!batchMode);
-      else if (e.key === shortcuts.search) { e.preventDefault(); document.getElementById('search-input')?.focus(); }
+      
+      const key = e.key.toLowerCase();
+      const s = {
+        next: shortcuts.next.toLowerCase(),
+        prev: shortcuts.prev.toLowerCase(),
+        delete: shortcuts.delete.toLowerCase(),
+        keep: shortcuts.keep.toLowerCase(),
+        batch: shortcuts.batch.toLowerCase(),
+        twitter: shortcuts.twitter.toLowerCase(),
+        search: shortcuts.search.toLowerCase(),
+        random: shortcuts.random.toLowerCase()
+      };
+
+      if (key === s.next || e.key === shortcuts.next) nextImage();
+      else if (key === s.prev || e.key === shortcuts.prev) prevImage();
+      else if (key === s.delete || e.key === shortcuts.delete) handleDelete();
+      else if (key === s.keep) handleKeep();
+      else if (key === s.batch) setBatchMode(!batchMode);
+      else if (key === s.twitter) handleTwitterUpload();
+      else if (key === s.random) handleRandom();
+      else if (key === s.search) { e.preventDefault(); document.getElementById('search-input')?.focus(); }
     };
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [images.length, currentIndex, batchMode, batchRange, shortcuts, showSettings, handleKeep, handleDelete, handleUndo]);
+  }, [images.length, currentIndex, batchMode, batchRange, shortcuts, showSettings, handleKeep, handleDelete, handleUndo, handleTwitterUpload, handleRandom]);
 
   useEffect(() => {
     if (images.length > 0 && images[currentIndex]) {
@@ -536,6 +556,14 @@ function App() {
                     <m.icon className="w-3.5 h-3.5" />
                 </button>
             ))}
+            <div className="w-px h-4 bg-white/5 mx-1" />
+            <button 
+                onClick={handleRandom}
+                title={`Random Image (${shortcuts.random})`}
+                className="p-1.5 rounded-lg transition-all text-neutral-500 hover:text-white hover:bg-white/5"
+            >
+                <Dices className="w-3.5 h-3.5" />
+            </button>
         </div>
         </div>
         <div className="flex items-center gap-3">{images.length > 0 && <div className="flex items-center gap-2 bg-neutral-800/50 p-1.5 rounded-xl border border-white/5">
@@ -646,9 +674,9 @@ function App() {
                     <button 
                         onClick={() => {
                             if (!currentMetadata?.prompt) return;
-                            const tags = currentMetadata.prompt.split(',').map(s => s.trim()).filter(Boolean);
+                            const tags = currentMetadata.prompt.split(',').map((s: string) => s.trim()).filter(Boolean);
                             const counts: Record<string, number> = {};
-                            tags.forEach(t => counts[t] = 1);
+                            tags.forEach((t: string) => counts[t] = 1);
                             setViewerTagCounts(counts);
                             setShowViewerRefiner(true);
                         }}
@@ -668,7 +696,13 @@ function App() {
         </section>
 
         <aside className="w-80 border-l border-white/5 bg-neutral-900 flex flex-col shrink-0 overflow-hidden text-left">
-          <div className="p-6 border-b border-white/5 flex items-center justify-between font-black uppercase tracking-widest text-[11px]"><span>Inspector</span>{currentMetadata && <button onClick={() => { navigator.clipboard.writeText(currentMetadata.raw); showToast('Raw Copied', 'success'); }} className="text-[9px] text-neutral-500 hover:text-white uppercase">Raw</button>}</div>
+          <div className="p-6 border-b border-white/5 flex items-center justify-between font-black uppercase tracking-widest text-[11px]">
+            <span>Inspector</span>
+            <div className="flex gap-3 items-center">
+                {currentMetadata && <button onClick={handleTwitterUpload} className="p-1.5 bg-blue-600/10 hover:bg-blue-600/20 text-blue-400 rounded-lg transition-all" title={`Share on X (${shortcuts.twitter})`}><Twitter className="w-3.5 h-3.5" /></button>}
+                {currentMetadata && <button onClick={() => { navigator.clipboard.writeText(currentMetadata.raw); showToast('Raw Copied', 'success'); }} className="text-[9px] text-neutral-500 hover:text-white uppercase transition-colors">Raw</button>}
+            </div>
+          </div>
           <div className="flex-1 overflow-y-auto p-6 space-y-8 scrollbar-thin">
             {currentMetadata ? (
               <>
@@ -690,9 +724,69 @@ function App() {
           <div className="bg-neutral-900 border border-white/10 rounded-3xl w-full max-w-md shadow-2xl overflow-hidden">
             <div className="p-6 border-b border-white/5 flex items-center justify-between"><div className="flex items-center gap-3 font-black uppercase tracking-widest text-sm text-white text-left"><Keyboard className="w-5 h-5 text-blue-500" /> Shortcuts</div>
             <button onClick={() => setShowSettings(false)} className="p-2 hover:bg-white/5 rounded-full transition-colors"><X className="w-5 h-5" /></button></div>
-            <div className="p-8 space-y-6">{(Object.keys(shortcuts) as (keyof Shortcuts)[]).map(key => (<div key={key} className="flex items-center justify-between group"><span className="text-[10px] font-black uppercase tracking-widest text-neutral-500 group-hover:text-neutral-300">{key}</span>
-            <input value={shortcuts[key]} onKeyDown={e => { e.preventDefault(); const newShortcuts = {...shortcuts, [key]: e.key}; setShortcuts(newShortcuts); store.set("shortcuts", newShortcuts); store.save(); }} readOnly className="bg-neutral-950 border border-white/5 rounded-xl px-4 py-2 text-center text-[11px] font-mono text-blue-400 w-32 focus:border-blue-500 focus:ring-4 focus:ring-blue-500/10 transition-all cursor-default" /></div>))}
-            <button onClick={() => { setShortcuts(DEFAULT_SHORTCUTS); store.set("shortcuts", DEFAULT_SHORTCUTS); store.save(); showToast('Shortcuts Reset', 'info'); }} className="w-full py-3 bg-white/5 hover:bg-red-900/20 rounded-2xl text-[10px] font-black uppercase tracking-widest text-neutral-500 hover:text-red-400 transition-all">Reset to Default</button></div>
+            <div className="p-8 space-y-6 max-h-[70vh] overflow-y-auto scrollbar-thin">
+              <div className="space-y-4">
+                <h4 className="text-[10px] font-black uppercase tracking-[0.2em] text-blue-500">Keyboard Shortcuts</h4>
+                {(Object.keys(shortcuts) as (keyof Shortcuts)[]).map(key => (<div key={key} className="flex items-center justify-between group"><span className="text-[10px] font-black uppercase tracking-widest text-neutral-500 group-hover:text-neutral-300">{key}</span>
+                <input value={shortcuts[key]} onKeyDown={e => { e.preventDefault(); const newShortcuts = {...shortcuts, [key]: e.key}; setShortcuts(newShortcuts); }} readOnly className="bg-neutral-950 border border-white/5 rounded-xl px-4 py-2 text-center text-[11px] font-mono text-blue-400 w-32 focus:border-blue-500 focus:ring-4 focus:ring-blue-500/10 transition-all cursor-default" /></div>))}
+              </div>
+
+              <div className="space-y-4 pt-6 border-t border-white/5">
+                <h4 className="text-[10px] font-black uppercase tracking-[0.2em] text-blue-500">Twitter (X) Integration</h4>
+                <p className="text-[9px] text-neutral-500 italic mb-4 leading-relaxed">
+                    Leave API keys empty to use the **Clipboard + Browser** method. 
+                    Fill them in for **Standard API Direct Upload**.
+                </p>
+                <div className="grid grid-cols-2 gap-3">
+                  <div className="space-y-2">
+                    <label className="text-[8px] font-black uppercase text-neutral-600 block tracking-widest">API Key</label>
+                    <input type="password" value={twitterSettings.apiKey} onChange={e => setTwitterSettings({...twitterSettings, apiKey: e.target.value})} className="w-full bg-neutral-950 border border-white/5 rounded-xl px-3 py-2 text-[10px] focus:outline-none focus:border-blue-500/50" />
+                  </div>
+                  <div className="space-y-2">
+                    <label className="text-[8px] font-black uppercase text-neutral-600 block tracking-widest">API Secret</label>
+                    <input type="password" value={twitterSettings.apiSecret} onChange={e => setTwitterSettings({...twitterSettings, apiSecret: e.target.value})} className="w-full bg-neutral-950 border border-white/5 rounded-xl px-3 py-2 text-[10px] focus:outline-none focus:border-blue-500/50" />
+                  </div>
+                  <div className="space-y-2">
+                    <label className="text-[8px] font-black uppercase text-neutral-600 block tracking-widest">Access Token</label>
+                    <input type="password" value={twitterSettings.accessToken} onChange={e => setTwitterSettings({...twitterSettings, accessToken: e.target.value})} className="w-full bg-neutral-950 border border-white/5 rounded-xl px-3 py-2 text-[10px] focus:outline-none focus:border-blue-500/50" />
+                  </div>
+                  <div className="space-y-2">
+                    <label className="text-[8px] font-black uppercase text-neutral-600 block tracking-widest">Access Secret</label>
+                    <input type="password" value={twitterSettings.accessSecret} onChange={e => setTwitterSettings({...twitterSettings, accessSecret: e.target.value})} className="w-full bg-neutral-950 border border-white/5 rounded-xl px-3 py-2 text-[10px] focus:outline-none focus:border-blue-500/50" />
+                  </div>
+                </div>
+                <div className="space-y-3 pt-2">
+                  <label className="text-[9px] font-bold uppercase text-neutral-500">Post Template</label>
+                  <textarea 
+                    value={twitterSettings.template} 
+                    onChange={e => setTwitterSettings({...twitterSettings, template: e.target.value})}
+                    className="w-full h-24 bg-neutral-950 border border-white/5 rounded-xl p-3 text-[11px] focus:outline-none focus:border-blue-500/50 resize-none scrollbar-thin"
+                    placeholder="{phrases} #AIart"
+                  />
+                  <p className="text-[8px] text-neutral-600 italic">Use {"{phrases}"} to insert picked tags.</p>
+                </div>
+                <div className="space-y-3">
+                  <label className="text-[9px] font-bold uppercase text-neutral-500">Phrases to Pick (Comma separated)</label>
+                  <input 
+                    type="text"
+                    value={twitterSettings.phrasesToPick.join(', ')} 
+                    onChange={e => setTwitterSettings({...twitterSettings, phrasesToPick: e.target.value.split(',').map(s => s.trim()).filter(Boolean)})}
+                    className="w-full bg-neutral-950 border border-white/5 rounded-xl px-4 py-2 text-[11px] focus:outline-none focus:border-blue-500/50"
+                  />
+                </div>
+                <label className="flex items-center justify-between group cursor-pointer">
+                  <span className="text-[10px] font-black uppercase tracking-widest text-neutral-500 group-hover:text-neutral-300">Auto-copy Image</span>
+                  <input 
+                    type="checkbox" 
+                    checked={twitterSettings.autoCopyImage} 
+                    onChange={e => setTwitterSettings({...twitterSettings, autoCopyImage: e.target.checked})}
+                    className="w-4 h-4 accent-blue-600"
+                  />
+                </label>
+              </div>
+
+              <button onClick={() => { setShortcuts(DEFAULT_SHORTCUTS); showToast('Shortcuts Reset', 'info'); }} className="w-full py-3 bg-white/5 hover:bg-red-900/20 rounded-2xl text-[10px] font-black uppercase tracking-widest text-neutral-500 hover:text-red-400 transition-all">Reset to Default</button>
+            </div>
           </div>
         </div>
       )}

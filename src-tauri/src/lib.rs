@@ -4,6 +4,7 @@ mod file_ops;
 mod db;
 mod thumbnails;
 mod wildcard;
+mod twitter;
 
 fn setup_logging() -> Result<(), fern::InitError> {
     fern::Dispatch::new()
@@ -61,7 +62,8 @@ pub fn run() {
             wildcard::get_tag_counts,
             wildcard::read_filter_file,
             wildcard::write_filter_file,
-            wildcard::save_to_file
+            wildcard::save_to_file,
+            twitter::twitter_upload
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

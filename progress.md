@@ -30,8 +30,12 @@
 - [x] Added `undo_move` command in `file_ops.rs` to revert renames.
 - [x] Added global `Ctrl+Z` listener in `App.tsx`.
 
-### 5. Search Function Fix
-- [x] Normalized all folder paths to use forward slashes (`/`) in DB to match frontend normalization.
-- [x] Moved SQLite database to stable `app_data_dir` to avoid CWD-related issues.
+### 6. New Features & Integration
+- [x] **Simple Wildcard Mode**: Added option to skip recursive compression and get raw unique filtered prompts.
+- [x] **Twitter (X) Integration**: 
+    - [x] Shortcut ('T') and Inspector button for quick sharing.
+    - [x] Automated tag picking from positive prompt based on keywords.
+    - [x] Clipboard automation (auto-copy text and image).
+    - [x] Configurable templates and keyword filters.
 
 

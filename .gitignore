@@ -31,3 +31,8 @@ dist-ssr
 *.njsproj
 *.sln
 *.sw?
+
+#agent.md
+gemini.md
+agent.md
+claude.md

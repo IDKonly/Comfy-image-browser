@@ -36,7 +36,9 @@
 - [x] **Undo System**: Revert accidental file moves with Ctrl+Z.
 - [x] **Persistence**: Secure storage of settings and database in app data directory.
 
-## Phase 5: Advanced Intelligence & Ecosystem (Future)
+## Phase 5: Advanced Intelligence & Ecosystem
+- [x] **Simple Wildcard Mode**: Added option to skip recursive compression for raw unique filtered prompts.
+- [x] **Social Sharing**: One-click Twitter (X) sharing with automated tag picking and clipboard integration.
 - [ ] **AI Tagging**: Auto-tagging images without metadata using local LLM/Vision models.
 - [ ] **Duplicate Detection**: Find and group identical or highly similar images.
 - [ ] **Mobile Remote**: View and sort images from a mobile device on the same network.

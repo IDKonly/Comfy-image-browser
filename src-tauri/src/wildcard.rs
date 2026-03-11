@@ -14,9 +14,37 @@ pub struct WildcardFilter {
     pub max_words: u32,
     pub min_tags: u32,
     pub max_depth: u32,
+    pub simple_mode: bool,
+    pub simple_exclusions: Vec<String>,
+}
+
+fn apply_simple_filter(tags: HashSet<String>, exclusions: &[String]) -> HashSet<String> {
+    let mut filtered = HashSet::new();
+    let ex_set: HashSet<_> = exclusions.iter().map(|s| s.to_lowercase()).collect();
+    for tag in tags {
+        let tag_low = tag.to_lowercase();
+        let mut should_exclude = false;
+        if ex_set.contains(&tag_low) {
+            should_exclude = true;
+        } else {
+            for ex in exclusions {
+                if !ex.is_empty() && tag_low.contains(&ex.to_lowercase()) {
+                    should_exclude = true;
+                    break;
+                }
+            }
+        }
+        if !should_exclude {
+            filtered.insert(tag);
+        }
+    }
+    filtered
 }
 
 fn apply_filters(tags: HashSet<String>, filter: &WildcardFilter) -> HashSet<String> {
+    if filter.simple_mode {
+        return apply_simple_filter(tags, &filter.simple_exclusions);
+    }
     let mut filtered_tags = HashSet::new();
     
     // Optimization: Use HashSet for O(1) lookups during filtering
@@ -91,7 +119,7 @@ pub fn generate_wildcards(window: Window, paths: Vec<String>, threshold: f32, fi
     let total = paths.len();
     let current = Arc::new(AtomicUsize::new(0));
     let last_emitted_percent = Arc::new(AtomicUsize::new(0));
-    let max_depth = if filter.max_depth == 0 { 5 } else { filter.max_depth };
+    let max_depth = if filter.max_depth == 0 { 3 } else { filter.max_depth };
     
     let tag_sets: Vec<HashSet<String>> = paths.par_iter()
         .map(|path| {
@@ -130,6 +158,19 @@ pub fn generate_wildcards(window: Window, paths: Vec<String>, threshold: f32, fi
         .filter(|s| !s.is_empty())
         .collect();
 
+    if filter.simple_mode {
+        let mut unique_prompts: HashSet<String> = tag_sets.into_iter()
+            .map(|s| {
+                let mut sorted: Vec<_> = s.into_iter().collect();
+                sorted.sort();
+                sorted.join(", ")
+            })
+            .collect();
+        let mut results: Vec<_> = unique_prompts.drain().collect();
+        results.sort();
+        return Ok(results);
+    }
+
     Ok(merge_tag_groups(tag_sets, threshold, max_depth))
 }
 
@@ -138,7 +179,7 @@ pub fn compare_tags(window: Window, target_paths: Vec<String>, comparison_paths:
     let total = target_paths.len() + comparison_paths.len();
     let current = Arc::new(AtomicUsize::new(0));
     let last_emitted_percent = Arc::new(AtomicUsize::new(0));
-    let max_depth = if filter.max_depth == 0 { 5 } else { filter.max_depth };
+    let max_depth = if filter.max_depth == 0 { 3 } else { filter.max_depth };
 
     let target_tags_sets: Vec<HashSet<String>> = target_paths.par_iter()
         .map(|path| {
@@ -185,6 +226,19 @@ pub fn compare_tags(window: Window, target_paths: Vec<String>, comparison_paths:
         })
         .filter(|s| !s.is_empty())
         .collect();
+    
+    if filter.simple_mode {
+        let mut unique_prompts: HashSet<String> = filtered_sets.into_iter()
+            .map(|s| {
+                let mut sorted: Vec<_> = s.into_iter().collect();
+                sorted.sort();
+                sorted.join(", ")
+            })
+            .collect();
+        let mut results: Vec<_> = unique_prompts.drain().collect();
+        results.sort();
+        return Ok(results);
+    }
     
     Ok(merge_tag_groups(filtered_sets, threshold, max_depth))
 }
@@ -252,80 +306,210 @@ fn recursive_merge(tag_sets: &[HashSet<String>], threshold: f32, current_depth: 
         return sorted.join(", ");
     }
 
-    if current_depth >= max_depth {
-        let mut parts: Vec<_> = tag_sets.iter().map(|s| {
-            let mut sorted: Vec<_> = s.iter().cloned().collect();
-            sorted.sort();
-            sorted.join(", ")
-        }).collect();
-        parts.sort();
-        return parts.join("|");
+    // 1. Extract Universal Common Base (Tags present in ALL sets)
+    let mut universal_base = tag_sets[0].clone();
+    for s in &tag_sets[1..] {
+        universal_base.retain(|tag| s.contains(tag));
     }
 
-    // Optimization: Parallel intersection for common base
-    let common_base: HashSet<String> = if tag_sets.len() > 1 {
-        tag_sets[1..].par_iter()
-            .fold(|| tag_sets[0].clone(), |mut acc, s| {
-                acc.retain(|tag| s.contains(tag));
-                acc
-            })
-            .reduce(|| tag_sets[0].clone(), |mut a, b| {
-                a.retain(|tag| b.contains(tag));
-                a
-            })
-    } else {
-        tag_sets[0].clone()
-    };
-
-    if common_base.is_empty() && tag_sets.len() > 1 {
-        let mut parts: Vec<_> = tag_sets.iter().map(|s| {
-            let mut sorted: Vec<_> = s.iter().cloned().collect();
-            sorted.sort();
-            sorted.join(", ")
-        }).collect();
-        parts.sort();
-        return parts.join("|");
-    }
-
-    let mut sorted_base: Vec<_> = common_base.iter().cloned().collect();
+    let mut sorted_base: Vec<_> = universal_base.iter().cloned().collect();
     sorted_base.sort();
     let base_str = sorted_base.join(", ");
 
-    // Optimization: Parallel difference calculation
-    let difference_sets: Vec<HashSet<String>> = tag_sets.par_iter()
-        .map(|s| s.difference(&common_base).cloned().collect())
+    // Calculate remainders after removing universal base
+    let mut pool: Vec<HashSet<String>> = tag_sets.iter()
+        .map(|s| s.difference(&universal_base).cloned().collect())
         .collect();
 
-    if difference_sets.iter().all(|s| s.is_empty()) { return base_str; }
-
-    let non_empty_diffs: Vec<HashSet<String>> = difference_sets.into_iter().filter(|s| !s.is_empty()).collect();
-    let merged_diffs = merge_tag_groups(non_empty_diffs, threshold, max_depth - current_depth);
-
-    let mut diff_parts = merged_diffs;
-    if tag_sets.iter().any(|s| (s.len() - common_base.len()) == 0) {
-        diff_parts.push(String::new());
+    // If everything was identical, just return the base
+    if pool.iter().all(|s| s.is_empty()) {
+        return base_str;
     }
 
-    diff_parts.sort_by(|a, b| {
-        if a.is_empty() { std::cmp::Ordering::Less }
-        else if b.is_empty() { std::cmp::Ordering::Greater }
-        else { a.cmp(b) }
-    });
+    // 2. If max depth reached, perform a flat join
+    if current_depth >= max_depth {
+        let mut parts: Vec<String> = pool.iter().map(|s| {
+            let mut sorted: Vec<_> = s.iter().cloned().collect();
+            sorted.sort();
+            sorted.join(", ")
+        }).collect();
+        parts.sort();
+        parts.dedup();
+        let diff_str = parts.join("|");
+        return if base_str.is_empty() {
+            format!("{{{}}}", diff_str)
+        } else {
+            format!("{}, {{{}}}", base_str, diff_str)
+        };
+    }
 
-    let processed_diffs: Vec<String> = if !base_str.is_empty() {
-        diff_parts.into_iter().map(|d| if d.is_empty() { String::new() } else { format!(", {}", d) }).collect()
+    // 3. Multi-way Factorization: Group sets by multiple common factors at once
+    let mut factor_groups = Vec::new();
+    
+    while !pool.is_empty() {
+        // Find best remaining tag
+        let mut counts = HashMap::new();
+        for s in &pool {
+            for tag in s {
+                *counts.entry(tag.clone()).or_insert(0) += 1;
+            }
+        }
+
+        let best_tag = counts.into_iter()
+            .filter(|(_, count)| *count >= 2)
+            .max_by_key(|(tag, count)| (*count - 1) * (tag.len() + 2));
+
+        if let Some((tag, _)) = best_tag {
+            let mut with_tag = Vec::new();
+            let mut next_pool = Vec::new();
+            for s in pool {
+                if s.contains(&tag) {
+                    let mut new_s = s.clone();
+                    new_s.remove(&tag);
+                    with_tag.push(new_s);
+                } else {
+                    next_pool.push(s);
+                }
+            }
+            
+            // --- NEW: Pull up common tags within the 'with_tag' group to avoid unnecessary nesting ---
+            let mut common_in_group = with_tag[0].clone();
+            for s in &with_tag[1..] {
+                common_in_group.retain(|t| s.contains(t));
+            }
+            
+            let mut tags_to_pull = vec![tag];
+            for t in common_in_group {
+                tags_to_pull.push(t);
+            }
+            tags_to_pull.sort();
+            let combined_factor = tags_to_pull.join(", ");
+            
+            let final_group_sets: Vec<HashSet<String>> = with_tag.iter()
+                .map(|s| {
+                    let mut new_s = s.clone();
+                    for t in &tags_to_pull {
+                        new_s.remove(t);
+                    }
+                    new_s
+                })
+                .collect();
+                
+            factor_groups.push((combined_factor, final_group_sets));
+            pool = next_pool;
+        } else {
+            // No more common factors for remaining sets
+            break;
+        }
+    }
+
+    // Process all groups and individual remainders
+    let mut alternatives = Vec::new();
+    
+    for (tag, group_sets) in factor_groups {
+        // --- NEW: Small group expansion to preserve probability distribution ---
+        if group_sets.len() < 3 {
+            for s in group_sets {
+                let mut sorted: Vec<_> = s.iter().cloned().collect();
+                sorted.sort();
+                let inner_str = sorted.join(", ");
+                if inner_str.is_empty() {
+                    alternatives.push(tag.clone());
+                } else {
+                    alternatives.push(format!("{}, {}", tag, inner_str));
+                }
+            }
+            continue;
+        }
+
+        let inner = recursive_merge(&group_sets, threshold, current_depth + 1, max_depth);
+        if inner.is_empty() {
+            alternatives.push(tag);
+        } else {
+            if (inner.contains('|') || inner.contains(',')) && !inner.starts_with('{') {
+                alternatives.push(format!("{}, {{{}}}", tag, inner));
+            } else {
+                alternatives.push(format!("{}, {}", tag, inner));
+            }
+        }
+    }
+
+    // Add remaining sets that couldn't be factorized
+    for s in pool {
+        let mut sorted: Vec<_> = s.iter().cloned().collect();
+        sorted.sort();
+        alternatives.push(sorted.join(", "));
+    }
+
+    alternatives.sort();
+    alternatives.dedup();
+    
+    let diff_str = alternatives.join("|");
+    
+    if base_str.is_empty() {
+        if alternatives.len() == 1 {
+            alternatives[0].clone()
+        } else {
+            format!("{{{}}}", diff_str)
+        }
     } else {
-        diff_parts
-    };
-
-    let diff_str = processed_diffs.join("|");
-    if base_str.is_empty() { format!("{{{}}}", diff_str) }
-    else { format!("{}{{{}}}", base_str, diff_str) }
+        if alternatives.is_empty() {
+            base_str
+        } else {
+            format!("{}, {{{}}}", base_str, diff_str)
+        }
+    }
 }
 
 pub fn merge_tag_groups(tag_groups: Vec<HashSet<String>>, threshold: f32, max_depth: u32) -> Vec<String> {
     if tag_groups.is_empty() { return Vec::new(); }
+    
+    // 1. Group identical sets and count frequencies
+    let mut set_counts: HashMap<Vec<String>, u32> = HashMap::new();
+    for s in tag_groups {
+        let mut v: Vec<_> = s.into_iter().collect();
+        v.sort();
+        *set_counts.entry(v).or_insert(0) += 1;
+    }
+
+    let total_instances: u32 = set_counts.values().sum();
+    let avg_freq = total_instances as f32 / set_counts.len() as f32;
+
+    // 2. Partition into "High Frequency" (Major) and "Long Tail" (Minor)
+    let mut major_sets = Vec::new();
+    let mut minor_sets = Vec::new();
+
+    for (tags, count) in set_counts {
+        let set: HashSet<String> = tags.into_iter().collect();
+        // If a set appears more than average or is very common, it's "Major"
+        if count as f32 > avg_freq * 1.5 || count > 5 {
+            for _ in 0..count { major_sets.push(set.clone()); }
+        } else {
+            for _ in 0..count { minor_sets.push(set.clone()); }
+        }
+    }
+
+    // 3. Process each partition independently
+    let mut final_results = Vec::new();
+    
+    let major_merged = if !major_sets.is_empty() {
+        process_merge_logic(major_sets, threshold, max_depth)
+    } else { Vec::new() };
+
+    let minor_merged = if !minor_sets.is_empty() {
+        process_merge_logic(minor_sets, threshold, max_depth)
+    } else { Vec::new() };
+
+    // Combine results (Major first, then Minor as variety)
+    final_results.extend(major_merged);
+    final_results.extend(minor_merged);
+    
+    final_results
+}
+
+fn process_merge_logic(tag_groups: Vec<HashSet<String>>, threshold: f32, max_depth: u32) -> Vec<String> {
     let num_sets = tag_groups.len();
+    if num_sets == 0 { return Vec::new(); }
     if num_sets == 1 {
         let mut sorted: Vec<_> = tag_groups[0].iter().cloned().collect();
         sorted.sort();
@@ -341,14 +525,12 @@ pub fn merge_tag_groups(tag_groups: Vec<HashSet<String>>, threshold: f32, max_de
     
     let tag_to_id: HashMap<String, u32> = all_tags.into_iter().enumerate().map(|(i, t)| (t, i as u32)).collect();
     
-    // Optimization: Parallel ID set construction
     let id_sets: Vec<Vec<u32>> = tag_groups.par_iter().map(|s| {
         let mut ids: Vec<_> = s.iter().map(|t| *tag_to_id.get(t).unwrap()).collect();
         ids.sort();
         ids
     }).collect();
 
-    // Parallel similarity graph construction
     let edges: Vec<(usize, usize)> = (0..num_sets).into_par_iter()
         .flat_map(|i| {
             let mut local_edges = Vec::new();
@@ -363,7 +545,6 @@ pub fn merge_tag_groups(tag_groups: Vec<HashSet<String>>, threshold: f32, max_de
 
     let components = find_connected_components(num_sets, &edges);
     
-    // Process components into (HashSet, String) pairs for similarity sorting
     let mut component_results: Vec<(HashSet<String>, String)> = components.into_par_iter().map(|component| {
         let component_sets: Vec<_> = component.iter().map(|&i| tag_groups[i].clone()).collect();
         let mut all_component_tags = HashSet::new();
@@ -377,8 +558,6 @@ pub fn merge_tag_groups(tag_groups: Vec<HashSet<String>>, threshold: f32, max_de
 
     if component_results.is_empty() { return Vec::new(); }
 
-    // Similarity-based sort (Greedy Nearest Neighbor)
-    // Start with the largest cluster for better stability
     component_results.sort_by(|a, b| b.0.len().cmp(&a.0.len()));
     
     let mut final_results = Vec::new();

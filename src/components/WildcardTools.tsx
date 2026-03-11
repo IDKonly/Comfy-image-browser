@@ -95,6 +95,7 @@ export const WildcardTools = ({ onClose, images, currentIndex, batchRange }: Wil
       const savedMinTags = await settingsStore.get<number>("workshop_min_tags");
       const savedMaxDepth = await settingsStore.get<number>("workshop_max_depth");
       const savedRecursive = await settingsStore.get<boolean>("workshop_recursive");
+      const savedSimpleMode = await settingsStore.get<boolean>("workshop_simple_mode");
       const savedFilter = await settingsStore.get<FilterState>("workshop_filter");
 
       if (savedThreshold != null) setThreshold(savedThreshold);
@@ -110,6 +111,8 @@ export const WildcardTools = ({ onClose, images, currentIndex, batchRange }: Wil
         max_words: savedMaxWords != null ? savedMaxWords : currentFilter.max_words,
         min_tags: savedMinTags != null ? savedMinTags : currentFilter.min_tags,
         max_depth: savedMaxDepth != null ? savedMaxDepth : currentFilter.max_depth,
+        simple_mode: savedSimpleMode != null ? savedSimpleMode : (currentFilter.simple_mode ?? false),
+        simple_exclusions: currentFilter.simple_exclusions || [],
       });
 
       // Load filter text lists ONLY if we don't have a saved filter state in settingsStore
@@ -145,6 +148,7 @@ export const WildcardTools = ({ onClose, images, currentIndex, batchRange }: Wil
     settingsStore.set("workshop_min_tags", filter.min_tags);
     settingsStore.set("workshop_max_depth", filter.max_depth);
     settingsStore.set("workshop_recursive", recursive);
+    settingsStore.set("workshop_simple_mode", filter.simple_mode);
     settingsStore.set("workshop_filter", filter);
     await settingsStore.save();
   };
@@ -208,7 +212,6 @@ export const WildcardTools = ({ onClose, images, currentIndex, batchRange }: Wil
 
   const addPathsRecursive = async (paths: string[]) => {
     let totalAdded = 0;
-    const validExtensions = ['png', 'jpg', 'jpeg', 'webp'];
     const newPaths: string[] = [];
 
     try {
@@ -327,7 +330,7 @@ export const WildcardTools = ({ onClose, images, currentIndex, batchRange }: Wil
   };
 
   const removePath = (path: string) => {
-    setTargetPaths(prev => prev.filter(p => p !== path));
+    setTargetPaths(targetPaths.filter(p => p !== path));
   };
 
   const clearPaths = () => setTargetPaths([]);
@@ -441,32 +444,57 @@ export const WildcardTools = ({ onClose, images, currentIndex, batchRange }: Wil
               </div>
 
               {/* Settings Bar */}
-              <div className="grid grid-cols-4 gap-4">
-                <div className="col-span-1 space-y-3">
-                    <div className="flex items-center justify-between">
-                        <span className="text-[10px] font-black uppercase text-neutral-500 tracking-wider">Similarity</span>
-                        <span className="text-[11px] font-mono text-blue-400 font-bold">{threshold.toFixed(2)}</span>
+              <div className="grid grid-cols-5 gap-4">
+                {!filter.simple_mode && (
+                  <>
+                    <div className="col-span-1 space-y-3">
+                        <div className="flex items-center justify-between">
+                            <span className="text-[10px] font-black uppercase text-neutral-500 tracking-wider">Similarity</span>
+                            <span className="text-[11px] font-mono text-blue-400 font-bold">{threshold.toFixed(2)}</span>
+                        </div>
+                        <input type="range" min="0" max="1" step="0.05" value={threshold} onChange={e => setThreshold(parseFloat(e.target.value))} className="w-full accent-blue-600" />
                     </div>
-                    <input type="range" min="0" max="1" step="0.05" value={threshold} onChange={e => setThreshold(parseFloat(e.target.value))} className="w-full accent-blue-600" />
-                </div>
-                <div className="bg-neutral-950 p-3 rounded-2xl border border-white/5 flex flex-col justify-center">
-                    <label className="text-[8px] font-black uppercase text-neutral-600 mb-1 block tracking-widest">Max Words/Tag</label>
-                    <input type="number" value={filter.max_words} onChange={e => setFilter({...filter, max_words: parseInt(e.target.value)})} className="bg-transparent text-[11px] font-bold text-neutral-300 w-full focus:outline-none" />
-                </div>
-                <div className="bg-neutral-950 p-3 rounded-2xl border border-white/5 flex flex-col justify-center">
-                    <label className="text-[8px] font-black uppercase text-neutral-600 mb-1 block tracking-widest">Min Tags/Group</label>
-                    <input type="number" value={filter.min_tags} onChange={e => setFilter({...filter, min_tags: parseInt(e.target.value)})} className="bg-transparent text-[11px] font-bold text-neutral-300 w-full focus:outline-none" />
-                </div>
-                <div className="bg-neutral-950 p-3 rounded-2xl border border-white/5 flex flex-col justify-center relative group">
-                    <div className="flex items-center justify-between mb-1">
-                        <label className="text-[8px] font-black uppercase text-neutral-600 block tracking-widest">Max Depth</label>
-                        <Info className="w-2.5 h-2.5 text-neutral-700 cursor-help" />
+                    <div className="bg-neutral-950 p-3 rounded-2xl border border-white/5 flex flex-col justify-center">
+                        <label className="text-[8px] font-black uppercase text-neutral-600 mb-1 block tracking-widest">Max Words/Tag</label>
+                        <input type="number" value={filter.max_words} onChange={e => setFilter({...filter, max_words: parseInt(e.target.value)})} className="bg-transparent text-[11px] font-bold text-neutral-300 w-full focus:outline-none" />
                     </div>
-                    <input type="number" value={filter.max_depth} onChange={e => setFilter({...filter, max_depth: parseInt(e.target.value)})} className="bg-transparent text-[11px] font-bold text-neutral-300 w-full focus:outline-none" />
-                    <div className="absolute left-0 bottom-full mb-2 w-48 p-2 bg-neutral-900 border border-white/10 rounded-lg text-[8px] text-neutral-400 opacity-0 group-hover:opacity-100 transition-opacity pointer-events-none z-10 shadow-2xl leading-tight">
-                        Limits recursive pattern matching to prevent errors. Lower values result in flatter, simpler wildcards.
+                    <div className="bg-neutral-950 p-3 rounded-2xl border border-white/5 flex flex-col justify-center">
+                        <label className="text-[8px] font-black uppercase text-neutral-600 mb-1 block tracking-widest">Min Tags/Group</label>
+                        <input type="number" value={filter.min_tags} onChange={e => setFilter({...filter, min_tags: parseInt(e.target.value)})} className="bg-transparent text-[11px] font-bold text-neutral-300 w-full focus:outline-none" />
                     </div>
-                </div>
+                    <div className="bg-neutral-950 p-3 rounded-2xl border border-white/5 flex flex-col justify-center relative group">
+                        <div className="flex items-center justify-between mb-1">
+                            <label className="text-[8px] font-black uppercase text-neutral-600 block tracking-widest">Max Depth</label>
+                            <Info className="w-2.5 h-2.5 text-neutral-700 cursor-help" />
+                        </div>
+                        <input type="number" value={filter.max_depth} onChange={e => setFilter({...filter, max_depth: parseInt(e.target.value)})} className="bg-transparent text-[11px] font-bold text-neutral-300 w-full focus:outline-none" />
+                        <div className="absolute left-0 bottom-full mb-2 w-48 p-2 bg-neutral-900 border border-white/10 rounded-lg text-[8px] text-neutral-400 opacity-0 group-hover:opacity-100 transition-opacity pointer-events-none z-10 shadow-2xl leading-tight">
+                            Limits recursive pattern matching to prevent errors. Lower values result in flatter, simpler wildcards.
+                        </div>
+                    </div>
+                  </>
+                )}
+                {filter.simple_mode && (
+                  <div className="col-span-4 bg-amber-600/5 border border-amber-500/20 rounded-2xl p-4 flex flex-col justify-center">
+                    <div className="flex items-center justify-between mb-2">
+                      <span className="text-[10px] font-black uppercase text-amber-500 tracking-wider">Simple Exclusions</span>
+                      <span className="text-[8px] text-amber-600 font-bold uppercase">Only basic string removal logic is applied</span>
+                    </div>
+                    <textarea 
+                      value={filter.simple_exclusions.join(', ')} 
+                      onChange={e => setFilter({...filter, simple_exclusions: e.target.value.split(',').map(s => s.trim()).filter(Boolean)})}
+                      className="bg-neutral-950/50 border border-white/5 rounded-xl p-2 text-[10px] font-mono text-neutral-300 h-12 focus:outline-none focus:border-amber-500/30 resize-none scrollbar-thin"
+                      placeholder="e.g. masterpiece, best quality, solo, rating:safe..."
+                    />
+                  </div>
+                )}
+                <button 
+                    onClick={() => setFilter({...filter, simple_mode: !filter.simple_mode})}
+                    className={`p-3 rounded-2xl border flex flex-col items-center justify-center transition-all ${filter.simple_mode ? 'bg-amber-600 border-amber-500 text-white shadow-lg shadow-amber-600/20' : 'bg-neutral-950 border-white/5 text-neutral-500 hover:text-neutral-300'}`}
+                >
+                    <label className={`text-[8px] font-black uppercase mb-1 block tracking-widest cursor-pointer ${filter.simple_mode ? 'text-amber-100' : 'text-neutral-600'}`}>Simple Mode</label>
+                    <span className="text-[10px] font-black uppercase">{filter.simple_mode ? 'Enabled' : 'Disabled'}</span>
+                </button>
               </div>
 
               {/* Action Button & Refiner */}

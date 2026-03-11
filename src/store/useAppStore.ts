@@ -1,39 +1,22 @@
 import { create } from 'zustand';
+import { persist, createJSONStorage } from 'zustand/middleware';
 
-export interface Shortcuts {
-  next: string;
-  prev: string;
-  delete: string;
-  keep: string;
-  batch: string;
-  search: string;
-}
-
-export const DEFAULT_SHORTCUTS: Shortcuts = {
-  next: 'ArrowRight',
-  prev: 'ArrowLeft',
-  delete: 'Delete',
-  keep: 'k',
-  batch: 'b',
-  search: '/',
-};
-
-export interface ImageMetadata {
-  prompt?: string;
-  negative_prompt?: string;
-  steps?: number;
-  sampler?: string;
-  cfg?: number;
-  seed?: number;
-  model?: string;
-  raw: string;
-}
-
-interface ImageInfo {
+export interface ImageInfo {
   path: string;
   name: string;
   mtime: number;
   size: number;
+}
+
+export interface ImageMetadata {
+  prompt: string | null;
+  negative_prompt: string | null;
+  steps: number | null;
+  sampler: string | null;
+  cfg: number | null;
+  seed: number | null;
+  model: string | null;
+  raw: string;
 }
 
 export interface IndexProgress {
@@ -48,6 +31,40 @@ export interface UndoAction {
   targetFolder: string;
 }
 
+export interface Shortcuts {
+  next: string;
+  prev: string;
+  delete: string;
+  keep: string;
+  batch: string;
+  search: string;
+  twitter: string;
+  random: string;
+}
+
+export const DEFAULT_SHORTCUTS: Shortcuts = {
+  next: 'ArrowRight',
+  prev: 'ArrowLeft',
+  delete: 'Delete',
+  keep: 'k',
+  batch: 'b',
+  search: '/',
+  twitter: 't',
+  random: 'q',
+};
+
+export interface TwitterSettings {
+  template: string;
+  phrasesToPick: string[];
+  autoCopyImage: boolean;
+  apiKey: string;
+  apiSecret: string;
+  accessToken: string;
+  accessSecret: string;
+}
+
+export type SortMethod = 'Newest' | 'Oldest' | 'NameAsc' | 'NameDesc';
+
 interface AppState {
   folderPath: string | null;
   images: ImageInfo[];
@@ -57,6 +74,9 @@ interface AppState {
   batchMode: boolean;
   undoStack: UndoAction[];
   indexProgress: IndexProgress | null;
+  twitterSettings: TwitterSettings;
+  recursive: boolean;
+  sortMethod: SortMethod;
   
   setFolderPath: (path: string | null) => void;
   setImages: (images: ImageInfo[]) => void;
@@ -69,6 +89,9 @@ interface AppState {
   setBatchMode: (mode: boolean) => void;
   pushUndo: (action: UndoAction) => void;
   popUndo: () => UndoAction | undefined;
+  setTwitterSettings: (settings: TwitterSettings) => void;
+  setRecursive: (recursive: boolean) => void;
+  setSortMethod: (method: SortMethod) => void;
 
   // Workshop State
   workshopTargetPaths: string[];
@@ -84,91 +107,142 @@ export interface FilterState {
   max_words: number;
   min_tags: number;
   max_depth: number;
+  simple_mode: boolean;
+  simple_exclusions: string[];
 }
 
-export const useAppStore = create<AppState>((set, get) => ({
-  folderPath: null,
-  images: [],
-  currentIndex: 0,
-  currentMetadata: null,
-  shortcuts: DEFAULT_SHORTCUTS,
-  batchMode: false,
-  undoStack: [],
-  indexProgress: null,
-
-  // Workshop Initial State
-  workshopTargetPaths: [],
-  workshopFilter: {
-    partial_match: [],
-    exact_match: [],
-    exceptions: [],
-    max_words: 5,
-    min_tags: 1,
-    max_depth: 5
-  },
-
-  setWorkshopTargetPaths: (paths) => set({ workshopTargetPaths: paths }),
-  setWorkshopFilter: (filter) => set({ workshopFilter: filter }),
-
-  setFolderPath: (path) => set({ folderPath: path, undoStack: [] }),
-  setImages: (images) => set({ images }),
-  setCurrentIndex: (index) => set({ currentIndex: index, currentMetadata: null }),
-  setCurrentMetadata: (metadata) => set({ currentMetadata: metadata }),
-  setIndexProgress: (progress) => set({ indexProgress: progress }),
-  setBatchMode: (mode) => set({ batchMode: mode }),
-  
-  pushUndo: (action) => set((state) => ({ 
-    undoStack: [action, ...state.undoStack].slice(0, 50) 
-  })),
-
-  popUndo: () => {
-    const { undoStack } = get();
-    if (undoStack.length === 0) return undefined;
-    const action = undoStack[0];
-    set({ undoStack: undoStack.slice(1) });
-    return action;
-  },
-
-  insertImage: (info, index) => set((state) => {
-    const newImages = [...state.images];
-    newImages.splice(index, 0, info);
-    return { images: newImages };
-  }),
-
-  removeImages: (indices, undoType) => set((state) => {
-    const sortedIndices = [...indices].sort((a, b) => b - a);
-    const removedImages: { info: ImageInfo, index: number }[] = [];
-    
-    let newImages = [...state.images];
-    for (const index of sortedIndices) {
-      removedImages.push({ info: newImages[index], index });
-      newImages.splice(index, 1);
-    }
-    
-    if (undoType) {
-        const targetFolder = undoType === 'keep' ? '_Keep' : undoType === 'trash' ? '_Trash' : '';
-        const undoAction: UndoAction = {
-            type: undoType,
-            originalImages: removedImages.reverse(), // Restore in original order
-            targetFolder
-        };
-        setTimeout(() => get().pushUndo(undoAction), 0);
-    }
-
-    let nextIndex = state.currentIndex;
-    if (indices.includes(state.currentIndex)) {
-        nextIndex = Math.min(state.currentIndex, newImages.length - 1);
-    } else {
-        const itemsBefore = indices.filter(i => i < state.currentIndex).length;
-        nextIndex = Math.max(0, state.currentIndex - itemsBefore);
-    }
-
-    return {
-      images: newImages,
-      currentIndex: Math.max(0, nextIndex),
+export const useAppStore = create<AppState>()(
+  persist(
+    (set, get) => ({
+      folderPath: null,
+      images: [],
+      currentIndex: 0,
       currentMetadata: null,
-    };
-  }),
+      shortcuts: DEFAULT_SHORTCUTS,
+      batchMode: false,
+      undoStack: [],
+      indexProgress: null,
+      recursive: false,
+      sortMethod: 'NameAsc',
+      twitterSettings: {
+        template: "{hashtags}\n\n{phrases}\n\n#AIArt #StableDiffusion #ComfyUI",
+        phrasesToPick: ["1girl", "masterpiece", "solo", "ultra detailed"],
+        autoCopyImage: true,
+        apiKey: "",
+        apiSecret: "",
+        accessToken: "",
+        accessSecret: "",
+      },
 
-  setShortcuts: (shortcuts) => set({ shortcuts }),
-}));
+      setTwitterSettings: (twitterSettings) => set({ twitterSettings }),
+      setRecursive: (recursive) => set({ recursive }),
+      setSortMethod: (sortMethod) => set({ sortMethod }),
+
+      // Workshop Initial State
+      workshopTargetPaths: [],
+      workshopFilter: {
+        partial_match: [],
+        exact_match: [],
+        exceptions: [],
+        max_words: 5,
+        min_tags: 1,
+        max_depth: 5,
+        simple_mode: false,
+        simple_exclusions: []
+      },
+
+      setWorkshopTargetPaths: (paths) => set({ workshopTargetPaths: paths }),
+      setWorkshopFilter: (filter) => set({ workshopFilter: filter }),
+
+      setFolderPath: (path) => set({ folderPath: path, undoStack: [] }),
+      setImages: (images) => set({ images }),
+      setCurrentIndex: (index) => set({ currentIndex: index, currentMetadata: null }),
+      setCurrentMetadata: (metadata) => set({ currentMetadata: metadata }),
+      setIndexProgress: (progress) => set({ indexProgress: progress }),
+      setBatchMode: (mode) => set({ batchMode: mode }),
+      
+      pushUndo: (action) => set((state) => ({ 
+        undoStack: [action, ...state.undoStack].slice(0, 50) 
+      })),
+
+      popUndo: () => {
+        const { undoStack } = get();
+        if (undoStack.length === 0) return undefined;
+        const action = undoStack[0];
+        set({ undoStack: undoStack.slice(1) });
+        return action;
+      },
+
+      insertImage: (info, index) => set((state) => {
+        const newImages = [...state.images];
+        newImages.splice(index, 0, info);
+        return { images: newImages };
+      }),
+
+      removeImages: (indices, undoType) => set((state) => {
+        const sortedIndices = [...indices].sort((a, b) => b - a);
+        const removedImages: { info: ImageInfo, index: number }[] = [];
+        
+        let newImages = [...state.images];
+        for (const index of sortedIndices) {
+          removedImages.push({ info: newImages[index], index });
+          newImages.splice(index, 1);
+        }
+        
+        if (undoType) {
+            const targetFolder = undoType === 'keep' ? '_Keep' : undoType === 'trash' ? '_Trash' : '';
+            const undoAction: UndoAction = {
+                type: undoType,
+                originalImages: removedImages.reverse(), // Restore in original order
+                targetFolder
+            };
+            setTimeout(() => get().pushUndo(undoAction), 0);
+        }
+
+        let nextIndex = state.currentIndex;
+        if (indices.includes(state.currentIndex)) {
+            nextIndex = Math.min(state.currentIndex, newImages.length - 1);
+        } else {
+            const itemsBefore = indices.filter(i => i < state.currentIndex).length;
+            nextIndex = Math.max(0, state.currentIndex - itemsBefore);
+        }
+
+        return {
+          images: newImages,
+          currentIndex: Math.max(0, nextIndex),
+          currentMetadata: null,
+        };
+      }),
+
+      setShortcuts: (shortcuts) => set({ shortcuts }),
+    }),
+    {
+      name: 'comfy-image-browser-storage',
+      version: 1, // Bump version to trigger migration
+      storage: createJSONStorage(() => localStorage),
+      migrate: (persistedState: any, version: number) => {
+        if (version === 0) {
+          // Merge existing shortcuts with DEFAULT_SHORTCUTS to ensure new keys (like 'random') exist
+          if (persistedState && persistedState.shortcuts) {
+            persistedState.shortcuts = {
+              ...DEFAULT_SHORTCUTS,
+              ...persistedState.shortcuts
+            };
+          }
+        }
+        return persistedState;
+      },
+      partialize: (state) => ({
+        folderPath: state.folderPath,
+        currentIndex: state.currentIndex,
+        shortcuts: state.shortcuts,
+        batchMode: state.batchMode,
+        twitterSettings: state.twitterSettings,
+        recursive: state.recursive,
+        sortMethod: state.sortMethod,
+        workshopFilter: state.workshopFilter,
+      }),
+    }
+  )
+);
+

@@ -15,6 +15,7 @@ call npm run tauri build
 
 if %errorlevel% neq 0 (
     echo [ERROR] Build failed!
+    pause
     exit /b %errorlevel%
 )
 
