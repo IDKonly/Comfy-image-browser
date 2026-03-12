@@ -32,10 +32,11 @@ dist-ssr
 *.sln
 *.sw?
 
-#agent.md
+# agent.md
 gemini.md
 agent.md
 claude.md
 project.md
+progress.md
 
 docs/*
