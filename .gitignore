@@ -36,3 +36,6 @@ dist-ssr
 gemini.md
 agent.md
 claude.md
+project.md
+
+docs/*
