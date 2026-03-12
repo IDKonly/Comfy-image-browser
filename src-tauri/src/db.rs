@@ -3,7 +3,6 @@ use std::path::Path;
 use crate::metadata::ImageMetadata;
 use crate::scanner::{ImageInfo, SortMethod};
 use tauri::Manager;
-use log;
 use serde::{Serialize, Deserialize};
 
 #[derive(Serialize, Deserialize, Debug, Clone)]

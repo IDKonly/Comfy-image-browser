@@ -1,4 +1,4 @@
-use std::fs::{self, File};
+use std::fs::File;
 use std::io::{Read, Cursor};
 use std::path::Path;
 use serde::{Serialize, Deserialize};
@@ -104,7 +104,7 @@ fn parse_png_chunk(kind: &str, data: &[u8]) -> Option<String> {
 fn extract_from_exif(data: Vec<u8>) -> String {
     if data.is_empty() { return String::new(); }
     let exif_slice = if data.starts_with(b"Exif\0\0") { &data[6..] } else { &data };
-    let mut cursor = Cursor::new(exif_slice);
+    let cursor = Cursor::new(exif_slice);
     if let Ok(reader) = ExifReader::new().read_raw(cursor.into_inner().to_vec()) {
         if let Some(field) = reader.get_field(Tag::UserComment, exif::In::PRIMARY) {
             match &field.value {
