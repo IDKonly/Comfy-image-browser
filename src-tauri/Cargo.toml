@@ -22,6 +22,9 @@ tauri = { version = "2", features = ["protocol-asset"] }
 tauri-plugin-opener = "2"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
+img-parts = "0.3.0"
+kamadak-exif = "0.5.5"
+flate2 = "1.0"
 walkdir = "2.5.0"
 rayon = "1.11.0"
 image = "0.25.9"
