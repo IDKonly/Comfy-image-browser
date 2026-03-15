@@ -286,6 +286,32 @@ impl DB {
         Ok(results)
     }
 
+    pub fn get_folder_stats(&self, folder: &str, recursive: bool) -> Result<std::collections::HashMap<String, (u64, u64)>> {
+        let normalized_folder = folder.replace("\\", "/").trim_end_matches('/').to_string();
+        let sql = if recursive {
+            "SELECT path, mtime, size FROM images WHERE (folder = ?1 COLLATE NOCASE OR folder LIKE ?1 || '/%' COLLATE NOCASE)"
+        } else {
+            "SELECT path, mtime, size FROM images WHERE folder = ?1 COLLATE NOCASE"
+        };
+
+        let mut stmt = self.conn.prepare(sql)?;
+        let rows = stmt.query_map(params![normalized_folder], |row| {
+            Ok((
+                row.get::<_, String>(0)?,
+                row.get::<_, i64>(1)? as u64,
+                row.get::<_, i64>(2)? as u64
+            ))
+        })?;
+
+        let mut stats = std::collections::HashMap::new();
+        for r in rows {
+            if let Ok((path, mtime, size)) = r {
+                stats.insert(path, (mtime, size));
+            }
+        }
+        Ok(stats)
+    }
+
     pub fn search(&self, folder: &str, query: &str) -> Result<Vec<ImageInfo>> {
         let normalized_folder = folder.replace("\\", "/").trim_end_matches('/').to_string();
         let mut stmt = self.conn.prepare(
@@ -321,6 +347,30 @@ impl DB {
         } else {
             Ok(None)
         }
+    }
+
+    pub fn get_indexed_stats_batch(&self, paths: &[String]) -> Result<std::collections::HashMap<String, (u64, u64)>> {
+        if paths.is_empty() { return Ok(std::collections::HashMap::new()); }
+        
+        let mut stats = std::collections::HashMap::new();
+        for chunk in paths.chunks(500) {
+            let placeholders: String = chunk.iter().map(|_| "?").collect::<Vec<_>>().join(",");
+            let sql = format!("SELECT path, mtime, size FROM images WHERE path IN ({}) COLLATE NOCASE", placeholders);
+            let mut stmt = self.conn.prepare(&sql)?;
+            let rows = stmt.query_map(rusqlite::params_from_iter(chunk), |row| {
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, i64>(1)? as u64,
+                    row.get::<_, i64>(2)? as u64
+                ))
+            })?;
+            for r in rows {
+                if let Ok((path, mtime, size)) = r {
+                    stats.insert(path, (mtime, size));
+                }
+            }
+        }
+        Ok(stats)
     }
 
     pub fn get_indexed_mtime(&self, path: &str) -> Result<Option<u64>> {

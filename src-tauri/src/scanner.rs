@@ -154,53 +154,45 @@ pub fn scan_directory(app_handle: tauri::AppHandle, path: String, sort_method: O
         });
 
         // C. Cleanup stale DB entries
-        if let Ok(indexed_paths) = db.get_all_paths_in_folder(&root_str_clone, is_recursive) {
-            let disk_paths: std::collections::HashSet<_> = disk_entries.iter().map(|img| &img.path).collect();
-            let stale_paths: Vec<_> = indexed_paths.into_iter().filter(|p| !disk_paths.contains(p)).collect();
-            if !stale_paths.is_empty() {
-                let _ = db.delete_images(&stale_paths);
-            }
+        let indexed_stats = db.get_folder_stats(&root_str_clone, is_recursive).unwrap_or_default();
+
+        let disk_paths: std::collections::HashSet<_> = disk_entries.iter().map(|img| img.path.clone()).collect();
+        let stale_paths: Vec<_> = indexed_stats.keys().filter(|p| !disk_paths.contains(*p)).cloned().collect();
+        if !stale_paths.is_empty() {
+            let _ = db.delete_images(&stale_paths);
         }
 
-        // D. Filter images that need indexing
+        // D. Filter images that need indexing using the HashMap
         let needs_indexing: Vec<_> = disk_entries.into_iter().filter(|img| {
             if is_forced { return true; } // Force Reindex ignores DB stats
-            match db.get_indexed_stats(&img.path) {
-                Ok(Some((m, s))) => m != img.mtime || s != img.size,
-                _ => true,
+            match indexed_stats.get(&img.path) {
+                Some(&(m, s)) => m != img.mtime || s != img.size,
+                None => true,
             }
         }).collect();
 
         if needs_indexing.is_empty() { return; }
 
-        // E. Parallel Metadata Extraction
+        // E. Parallel Metadata Extraction and Bulk Insert
         let total = needs_indexing.len();
         let _ = app_handle.emit("index-progress", IndexProgress { total, current: 0, is_indexing: true });
 
-        for (chunk_idx, chunk) in needs_indexing.chunks(100).enumerate() {
-            if CURRENT_SCAN_ID.load(Ordering::SeqCst) != scan_id { 
-                let _ = app_handle.emit("index-progress", IndexProgress { total, current: 0, is_indexing: false });
-                return; 
-            }
+        // Extract metadata in parallel
+        let results: Vec<_> = needs_indexing.par_iter().map(|img| {
+            (img, read_metadata(&img.path).unwrap_or_default())
+        }).collect();
 
-            let results: Vec<_> = chunk.par_iter().map(|img| {
-                (img, read_metadata(&img.path).unwrap_or_default())
-            }).collect();
-
-            if let Err(e) = db.insert_images_batch(results) {
-                log::error!("Batch insert failed: {}", e);
-            }
-
-            let current_count = (chunk_idx + 1) * 100;
-            let _ = app_handle.emit("index-progress", IndexProgress { 
-                total, 
-                current: if current_count > total { total } else { current_count }, 
-                is_indexing: true 
-            });
+        if CURRENT_SCAN_ID.load(Ordering::SeqCst) != scan_id {
+            let _ = app_handle.emit("index-progress", IndexProgress { total, current: 0, is_indexing: false });
+            return;
         }
 
-        let _ = app_handle.emit("index-progress", IndexProgress { total, current: total, is_indexing: false });
-    });
+        // Single batch insert transaction
+        if let Err(e) = db.insert_images_batch(results) {
+            log::error!("Batch insert failed: {}", e);
+        }
+
+        let _ = app_handle.emit("index-progress", IndexProgress { total, current: total, is_indexing: false });    });
 
     Ok(ScanResult { images, initial_index, folder: root_str })
 }
@@ -208,7 +200,7 @@ pub fn scan_directory(app_handle: tauri::AppHandle, path: String, sort_method: O
 #[tauri::command]
 pub fn scan_paths(app_handle: tauri::AppHandle, paths: Vec<String>, recursive: bool) -> Result<Vec<ImageInfo>, String> {
     let extensions = ["png", "jpg", "jpeg", "webp"];
-    
+
     let all_images: Vec<ImageInfo> = paths.par_iter().flat_map(|path| {
         let input_path = Path::new(path);
         if !input_path.exists() { return Vec::new(); }
@@ -221,7 +213,7 @@ pub fn scan_paths(app_handle: tauri::AppHandle, paths: Vec<String>, recursive: b
                             let mtime = mtime_res.duration_since(UNIX_EPOCH).unwrap_or_default().as_secs();
                             return vec![ImageInfo {
                                 path: input_path.to_string_lossy().to_string(),
-                                name: input_path.file_name().unwrap().to_string_lossy().to_string(),
+                                name: input_path.file_name().unwrap().to_string_lossy().to_string(),      
                                 mtime,
                                 size: metadata.len(),
                             }];
@@ -260,36 +252,32 @@ pub fn scan_paths(app_handle: tauri::AppHandle, paths: Vec<String>, recursive: b
             .collect::<Vec<_>>()
     }).collect();
 
-    // Background indexing
-    let images_to_index = all_images.clone();
+    // Synchronous Foreground Indexing
     let db_path = get_db_path(&app_handle)?;
-    
-    std::thread::spawn(move || {
-        if let Ok(db) = DB::open(&db_path) {
-            let needs_update: Vec<_> = images_to_index.into_iter().filter(|img| {
-                match db.get_indexed_mtime(&img.path) {
-                    Ok(Some(m)) => m != img.mtime,
-                    _ => true,
-                }
+    if let Ok(mut db) = DB::open(&db_path) {
+        let path_strings: Vec<String> = all_images.iter().map(|img| img.path.clone()).collect();
+        let indexed_stats = db.get_indexed_stats_batch(&path_strings).unwrap_or_default();
+
+        let needs_update: Vec<_> = all_images.iter().filter(|img| {
+            match indexed_stats.get(&img.path) {
+                Some(&(m, s)) => m != img.mtime || s != img.size,
+                None => true,
+            }
+        }).cloned().collect();
+
+        if !needs_update.is_empty() {
+            let results: Vec<_> = needs_update.par_iter().map(|img| {
+                (img, read_metadata(&img.path).unwrap_or_default())
             }).collect();
 
-            if !needs_update.is_empty() {
-                let results: Vec<_> = needs_update.par_iter().map(|img| {
-                    (img, read_metadata(&img.path))
-                }).collect();
-
-                for (img, meta_res) in results {
-                    if let Ok(meta) = meta_res {
-                        let _ = db.insert_image(img, &meta);
-                    }
-                }
+            if let Err(e) = db.insert_images_batch(results) {
+                log::error!("Batch insert failed during scan_paths: {}", e);
             }
         }
-    });
+    }
 
     Ok(all_images)
 }
-
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct FilterOptions {
     models: Vec<String>,
