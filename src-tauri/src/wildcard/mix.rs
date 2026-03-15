@@ -61,23 +61,28 @@ fn serialize_node(node: &WildcardNode) -> String {
         WildcardNode::Text(t) => t.clone(),
         WildcardNode::Sequence(nodes) => {
             let s = nodes.iter().map(serialize_node).collect::<Vec<_>>().join("");
+            let s = s.replace(", {", "{").replace(",{", "{");
             clean_commas(&s)
         }
         WildcardNode::Choice(options) => {
             let mut opts: Vec<_> = options.iter()
                 .map(serialize_node)
-                .map(|s| s.trim().to_string())
-                .filter(|s| !s.is_empty())
+                .map(|s| s.trim().trim_start_matches(',').trim().to_string())
                 .collect();
             
-            if opts.is_empty() { return String::new(); }
             opts.sort();
             opts.dedup();
             
-            if opts.len() == 1 {
-                format!("{{{}}}", opts[0])
+            if opts.is_empty() { return String::new(); }
+            
+            let comma_opts: Vec<_> = opts.into_iter().map(|o| {
+                if o.is_empty() { String::new() } else { format!(", {}", o) }
+            }).collect();
+            
+            if comma_opts.len() == 1 {
+                if comma_opts[0].is_empty() { String::new() } else { format!("{{{}}}", comma_opts[0]) }
             } else {
-                format!("{{{}}}", opts.join("|"))
+                format!("{{{}}}", comma_opts.join("|"))
             }
         }
     }
@@ -97,8 +102,9 @@ fn clean_commas(s: &str) -> String {
 fn extract_flat_options(node: &WildcardNode, out: &mut Vec<String>) {
     match node {
         WildcardNode::Text(t) => {
-            if !t.trim().is_empty() {
-                out.push(t.trim().to_string());
+            let cleaned = t.trim().trim_start_matches(',').trim();
+            if !cleaned.is_empty() {
+                out.push(cleaned.to_string());
             }
         },
         WildcardNode::Sequence(nodes) => {
@@ -106,8 +112,9 @@ fn extract_flat_options(node: &WildcardNode, out: &mut Vec<String>) {
             for n in nodes {
                 buf.push_str(&serialize_node(n));
             }
-            if !buf.trim().is_empty() {
-                out.push(buf.trim().to_string());
+            let cleaned = buf.trim().trim_start_matches(',').trim();
+            if !cleaned.is_empty() {
+                out.push(cleaned.to_string());
             }
         },
         WildcardNode::Choice(options) => {
@@ -179,7 +186,10 @@ pub fn mix_mode_transform(wildcard: &str, mix_depth: u32, tandem_min_branches: u
             }
             
             let regular_block = if !regular_features.is_empty() {
-                format!("{{{}}}", regular_features.join("|"))
+                let comma_opts: Vec<_> = regular_features.into_iter().map(|f| {
+                    if f.is_empty() { String::new() } else { format!(", {}", f) }
+                }).collect();
+                format!("{{{}}}", comma_opts.join("|"))
             } else {
                 String::new()
             };
@@ -189,11 +199,7 @@ pub fn mix_mode_transform(wildcard: &str, mix_depth: u32, tandem_min_branches: u
             }
             
             if !regular_block.is_empty() {
-                if result.is_empty() {
-                    result = regular_block;
-                } else {
-                    result = format!("{}, {}", result, regular_block);
-                }
+                result = format!("{}{}", result, regular_block);
             }
         }
     }
@@ -259,31 +265,19 @@ mod tests {
 
     #[test]
     fn test_mix_mode_transform() {
-        assert_eq!(mix_mode_transform("a b c", 1, 0, 0.51), "a b c");
+        assert_eq!(mix_mode_transform("a, b, c", 1, 0, 0.51), "a, b, c");
 
-        // "a {b|c} d" with depth 0 results in the feature {b|c} being kept as Choice since it's just text options.
-        assert_eq!(mix_mode_transform("a {b|c} d", 0, 0, 0.51), "a {b|c} d");
-        assert_eq!(mix_mode_transform("a {b|c} d", 1, 0, 0.51), "a {b|c} d");
+        assert_eq!(mix_mode_transform("a, {b|c}, d", 0, 0, 0.51), "a{, b|, c}, d");
+        assert_eq!(mix_mode_transform("a, {b|c}, d", 1, 0, 0.51), "a{, b|, c}, d");
         
         // Nested:
-        // {{b|c}|d} e depth 0
-        // Top-level Choice has 2 options. Total branches = 2.
-        // extracts {b|c}, leaves {d}.
-        // extracted features: 'b' (count 1), 'c' (count 1).
-        // Ratio: 1/2 = 0.5 < 0.51. Both 'b' and 'c' remain regular!
-        // Result: "a {d} e, {b|c}"
-        assert_eq!(mix_mode_transform("a {{b|c}|d} e", 0, 0, 0.51), "a {d} e, {b|c}");
+        let res_nested = mix_mode_transform("a, {{b|c}|d}, e", 0, 0, 0.51);
+        println!("Nested test: {}", res_nested);
+        assert_eq!(res_nested, "a{|, d}, e{, b|, c}");
 
-        // For tandem testing, we need something that repeats features.
-        // e.g. "{{a|b}|{a|c}}" at depth 0
-        // extract_and_flatten on `{a|b}` extracts `a` and `b`.
-        // extract_and_flatten on `{a|c}` extracts `a` and `c`.
-        // `a` has count 2. `b` has count 1, `c` has count 1.
-        // `a` is tandem: `{, a|}` (Ratio 1.0 > 0.51)
-        // `b`, `c` are regular: `{b|c}` (Ratio 0.5 < 0.51)
         let res_tandem = mix_mode_transform("{{a|b}|{a|c}}", 0, 0, 0.51);
         println!("Tandem test: {}", res_tandem);
-        assert_eq!(res_tandem, "{, a|}, {b|c}");
+        assert_eq!(res_tandem, "{, a|}{, b|, c}");
     }
 }
 

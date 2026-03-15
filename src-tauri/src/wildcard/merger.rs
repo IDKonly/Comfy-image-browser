@@ -39,11 +39,16 @@ pub fn recursive_merge(tag_sets: &[HashSet<String>], threshold: f32, current_dep
         }).collect();
         parts.sort();
         parts.dedup();
-        let diff_str = parts.join("|");
+        
+        let comma_parts: Vec<_> = parts.into_iter().map(|p| {
+            if p.is_empty() { String::new() } else { format!(", {}", p) }
+        }).collect();
+        let diff_str = comma_parts.join("|");
+        
         return if base_str.is_empty() {
             format!("{{{}}}", diff_str)
         } else {
-            format!("{}, {{{}}}", base_str, diff_str)
+            format!("{}{{{}}}", base_str, diff_str)
         };
     }
 
@@ -131,9 +136,13 @@ pub fn recursive_merge(tag_sets: &[HashSet<String>], threshold: f32, current_dep
             alternatives.push(tag);
         } else {
             if (inner.contains('|') || inner.contains(',')) && !inner.starts_with('{') {
-                alternatives.push(format!("{}, {{{}}}", tag, inner));
+                alternatives.push(format!("{}{{, {}}}", tag, inner));
             } else {
-                alternatives.push(format!("{}, {}", tag, inner));
+                if inner.starts_with('{') {
+                    alternatives.push(format!("{}{}", tag, inner));
+                } else {
+                    alternatives.push(format!("{}, {}", tag, inner));
+                }
             }
         }
     }
