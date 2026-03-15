@@ -109,6 +109,7 @@ export interface FilterState {
   max_depth: number;
   simple_mode: boolean;
   simple_exclusions: string[];
+  mix_mode: boolean;
 }
 
 export const useAppStore = create<AppState>()(
@@ -148,7 +149,9 @@ export const useAppStore = create<AppState>()(
         min_tags: 1,
         max_depth: 5,
         simple_mode: false,
-        simple_exclusions: []
+        simple_exclusions: [],
+        mix_mode: false,
+        mix_depth: 2
       },
 
       setWorkshopTargetPaths: (paths) => set({ workshopTargetPaths: paths }),

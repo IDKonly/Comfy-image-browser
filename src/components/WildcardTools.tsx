@@ -112,6 +112,8 @@ export const WildcardTools = ({ onClose, images, currentIndex, batchRange }: Wil
         min_tags: savedMinTags != null ? savedMinTags : currentFilter.min_tags,
         max_depth: savedMaxDepth != null ? savedMaxDepth : currentFilter.max_depth,
         simple_mode: savedSimpleMode != null ? savedSimpleMode : (currentFilter.simple_mode ?? false),
+        mix_mode: currentFilter.mix_mode ?? false,
+        mix_depth: currentFilter.mix_depth ?? 2,
         simple_exclusions: currentFilter.simple_exclusions || [],
       });
 
@@ -149,6 +151,8 @@ export const WildcardTools = ({ onClose, images, currentIndex, batchRange }: Wil
     settingsStore.set("workshop_max_depth", filter.max_depth);
     settingsStore.set("workshop_recursive", recursive);
     settingsStore.set("workshop_simple_mode", filter.simple_mode);
+    settingsStore.set("workshop_mix_mode", filter.mix_mode);
+    settingsStore.set("workshop_mix_depth", filter.mix_depth);
     settingsStore.set("workshop_filter", filter);
     await settingsStore.save();
   };
@@ -453,6 +457,21 @@ export const WildcardTools = ({ onClose, images, currentIndex, batchRange }: Wil
                             <span className="text-[11px] font-mono text-blue-400 font-bold">{threshold.toFixed(2)}</span>
                         </div>
                         <input type="range" min="0" max="1" step="0.05" value={threshold} onChange={e => setThreshold(parseFloat(e.target.value))} className="w-full accent-blue-600" />
+                        
+                        {filter.mix_mode && (
+                          <div className="pt-2 space-y-2 animate-in slide-in-from-top-2 duration-300">
+                              <div className="flex items-center justify-between">
+                                  <span className="text-[9px] font-black uppercase text-indigo-400 tracking-wider">Mix Depth (Start)</span>
+                                  <span className="text-[10px] font-mono text-indigo-400 font-bold">{filter.mix_depth}</span>
+                              </div>
+                              <input 
+                                  type="range" min="0" max="10" step="1" 
+                                  value={filter.mix_depth} 
+                                  onChange={e => setFilter({...filter, mix_depth: parseInt(e.target.value)})} 
+                                  className="w-full accent-indigo-600" 
+                              />
+                          </div>
+                        )}
                     </div>
                     <div className="bg-neutral-950 p-3 rounded-2xl border border-white/5 flex flex-col justify-center">
                         <label className="text-[8px] font-black uppercase text-neutral-600 mb-1 block tracking-widest">Max Words/Tag</label>
@@ -488,13 +507,22 @@ export const WildcardTools = ({ onClose, images, currentIndex, batchRange }: Wil
                     />
                   </div>
                 )}
-                <button 
-                    onClick={() => setFilter({...filter, simple_mode: !filter.simple_mode})}
-                    className={`p-3 rounded-2xl border flex flex-col items-center justify-center transition-all ${filter.simple_mode ? 'bg-amber-600 border-amber-500 text-white shadow-lg shadow-amber-600/20' : 'bg-neutral-950 border-white/5 text-neutral-500 hover:text-neutral-300'}`}
-                >
-                    <label className={`text-[8px] font-black uppercase mb-1 block tracking-widest cursor-pointer ${filter.simple_mode ? 'text-amber-100' : 'text-neutral-600'}`}>Simple Mode</label>
-                    <span className="text-[10px] font-black uppercase">{filter.simple_mode ? 'Enabled' : 'Disabled'}</span>
-                </button>
+                <div className="flex flex-col gap-2">
+                  <button 
+                      onClick={() => setFilter({...filter, simple_mode: !filter.simple_mode})}
+                      className={`p-3 rounded-2xl border flex flex-col items-center justify-center transition-all ${filter.simple_mode ? 'bg-amber-600 border-amber-500 text-white shadow-lg shadow-amber-600/20' : 'bg-neutral-950 border-white/5 text-neutral-500 hover:text-neutral-300'}`}
+                  >
+                      <label className={`text-[8px] font-black uppercase mb-1 block tracking-widest cursor-pointer ${filter.simple_mode ? 'text-amber-100' : 'text-neutral-600'}`}>Simple Mode</label>
+                      <span className="text-[10px] font-black uppercase">{filter.simple_mode ? 'Enabled' : 'Disabled'}</span>
+                  </button>
+                  <button 
+                      onClick={() => setFilter({...filter, mix_mode: !filter.mix_mode})}
+                      className={`p-3 rounded-2xl border flex flex-col items-center justify-center transition-all ${filter.mix_mode ? 'bg-indigo-600 border-indigo-500 text-white shadow-lg shadow-indigo-600/20' : 'bg-neutral-950 border-white/5 text-neutral-500 hover:text-neutral-300'}`}
+                  >
+                      <label className={`text-[8px] font-black uppercase mb-1 block tracking-widest cursor-pointer ${filter.mix_mode ? 'text-indigo-100' : 'text-neutral-600'}`}>Mix Mode</label>
+                      <span className="text-[10px] font-black uppercase">{filter.mix_mode ? 'Enabled' : 'Disabled'}</span>
+                  </button>
+                </div>
               </div>
 
               {/* Action Button & Refiner */}
