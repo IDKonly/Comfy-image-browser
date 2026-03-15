@@ -110,6 +110,9 @@ export interface FilterState {
   simple_mode: boolean;
   simple_exclusions: string[];
   mix_mode: boolean;
+  mix_depth: number;
+  mix_tandem_min_branches: number;
+  mix_tandem_ratio: number;
 }
 
 export const useAppStore = create<AppState>()(
@@ -151,7 +154,9 @@ export const useAppStore = create<AppState>()(
         simple_mode: false,
         simple_exclusions: [],
         mix_mode: false,
-        mix_depth: 2
+        mix_depth: 2,
+        mix_tandem_min_branches: 2,
+        mix_tandem_ratio: 0.51
       },
 
       setWorkshopTargetPaths: (paths) => set({ workshopTargetPaths: paths }),

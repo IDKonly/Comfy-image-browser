@@ -12,4 +12,6 @@ pub struct WildcardFilter {
     pub simple_exclusions: Vec<String>,
     pub mix_mode: bool,
     pub mix_depth: u32, // New: depth at which to start mixing features
+    pub mix_tandem_min_branches: u32, // Minimum branches to consider tandem
+    pub mix_tandem_ratio: f32, // Probability threshold for tandem
 }

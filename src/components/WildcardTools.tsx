@@ -114,6 +114,8 @@ export const WildcardTools = ({ onClose, images, currentIndex, batchRange }: Wil
         simple_mode: savedSimpleMode != null ? savedSimpleMode : (currentFilter.simple_mode ?? false),
         mix_mode: currentFilter.mix_mode ?? false,
         mix_depth: currentFilter.mix_depth ?? 2,
+        mix_tandem_min_branches: currentFilter.mix_tandem_min_branches ?? 2,
+        mix_tandem_ratio: currentFilter.mix_tandem_ratio ?? 0.51,
         simple_exclusions: currentFilter.simple_exclusions || [],
       });
 
@@ -468,6 +470,26 @@ export const WildcardTools = ({ onClose, images, currentIndex, batchRange }: Wil
                                   type="range" min="0" max="10" step="1" 
                                   value={filter.mix_depth} 
                                   onChange={e => setFilter({...filter, mix_depth: parseInt(e.target.value)})} 
+                                  className="w-full accent-indigo-600" 
+                              />
+                              <div className="flex items-center justify-between mt-2">
+                                  <span className="text-[9px] font-black uppercase text-indigo-400 tracking-wider">Min Branches</span>
+                                  <span className="text-[10px] font-mono text-indigo-400 font-bold">{filter.mix_tandem_min_branches}</span>
+                              </div>
+                              <input 
+                                  type="range" min="1" max="10" step="1" 
+                                  value={filter.mix_tandem_min_branches} 
+                                  onChange={e => setFilter({...filter, mix_tandem_min_branches: parseInt(e.target.value)})} 
+                                  className="w-full accent-indigo-600" 
+                              />
+                              <div className="flex items-center justify-between mt-2">
+                                  <span className="text-[9px] font-black uppercase text-indigo-400 tracking-wider">Tandem Ratio</span>
+                                  <span className="text-[10px] font-mono text-indigo-400 font-bold">{((filter.mix_tandem_ratio || 0.51) * 100).toFixed(0)}%</span>
+                              </div>
+                              <input 
+                                  type="range" min="0.1" max="1.0" step="0.01" 
+                                  value={filter.mix_tandem_ratio} 
+                                  onChange={e => setFilter({...filter, mix_tandem_ratio: parseFloat(e.target.value)})} 
                                   className="w-full accent-indigo-600" 
                               />
                           </div>

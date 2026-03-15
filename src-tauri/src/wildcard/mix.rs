@@ -118,7 +118,7 @@ fn extract_flat_options(node: &WildcardNode, out: &mut Vec<String>) {
     }
 }
 
-pub fn mix_mode_transform(wildcard: &str, mix_depth: u32) -> String {
+pub fn mix_mode_transform(wildcard: &str, mix_depth: u32, tandem_min_branches: u32, tandem_ratio: f32) -> String {
     if wildcard.is_empty() { return String::new(); }
     
     let mut chars = wildcard.chars().peekable();
@@ -147,22 +147,24 @@ pub fn mix_mode_transform(wildcard: &str, mix_depth: u32) -> String {
         }
         
         if !feature_counts.is_empty() {
-            // Determine frequency threshold for tandem conversion based on actual probability.
-            // total_branches represents the total number of options in the choices we flattened.
-            // If a tag appears in more than 50% of the branches, it becomes a tandem toggle.
-            // Using 0.51 ensures that simple {a|b} choices (50%) remain mutually exclusive.
-            let probability_threshold = 0.51; 
-            // Avoid division by zero
-            let denominator = if total_branches > 0 { total_branches as f32 } else { 1.0 };
-            
             let mut tandem_features = Vec::new();
             let mut regular_features = Vec::new();
-            
-            for (feat, count) in feature_counts {
-                let ratio = count as f32 / denominator;
-                if ratio >= probability_threshold {
-                    tandem_features.push(feat);
-                } else {
+
+            // Apply tandem logic only if we meet the minimum branch requirement.
+            if total_branches >= tandem_min_branches {
+                let denominator = if total_branches > 0 { total_branches as f32 } else { 1.0 };
+                
+                for (feat, count) in feature_counts {
+                    let ratio = count as f32 / denominator;
+                    if ratio >= tandem_ratio {
+                        tandem_features.push(feat);
+                    } else {
+                        regular_features.push(feat);
+                    }
+                }
+            } else {
+                // If we don't have enough branches, everything is a regular feature.
+                for (feat, _) in feature_counts {
                     regular_features.push(feat);
                 }
             }
@@ -170,10 +172,10 @@ pub fn mix_mode_transform(wildcard: &str, mix_depth: u32) -> String {
             tandem_features.sort();
             regular_features.sort();
             
-            // Build tandem block: "Base{|, A}{|, B}"
+            // Build tandem block: "Base{, A|}{, B|}"
             let mut tandem_block = String::new();
             for t in tandem_features {
-                tandem_block.push_str(&format!("{{|, {}}}", t));
+                tandem_block.push_str(&format!("{{, {}|}}", t));
             }
             
             let regular_block = if !regular_features.is_empty() {
@@ -257,11 +259,11 @@ mod tests {
 
     #[test]
     fn test_mix_mode_transform() {
-        assert_eq!(mix_mode_transform("a b c", 1), "a b c");
+        assert_eq!(mix_mode_transform("a b c", 1, 0, 0.51), "a b c");
 
         // "a {b|c} d" with depth 0 results in the feature {b|c} being kept as Choice since it's just text options.
-        assert_eq!(mix_mode_transform("a {b|c} d", 0), "a {b|c} d");
-        assert_eq!(mix_mode_transform("a {b|c} d", 1), "a {b|c} d");
+        assert_eq!(mix_mode_transform("a {b|c} d", 0, 0, 0.51), "a {b|c} d");
+        assert_eq!(mix_mode_transform("a {b|c} d", 1, 0, 0.51), "a {b|c} d");
         
         // Nested:
         // {{b|c}|d} e depth 0
@@ -270,18 +272,18 @@ mod tests {
         // extracted features: 'b' (count 1), 'c' (count 1).
         // Ratio: 1/2 = 0.5 < 0.51. Both 'b' and 'c' remain regular!
         // Result: "a {d} e, {b|c}"
-        assert_eq!(mix_mode_transform("a {{b|c}|d} e", 0), "a {d} e, {b|c}");
+        assert_eq!(mix_mode_transform("a {{b|c}|d} e", 0, 0, 0.51), "a {d} e, {b|c}");
 
         // For tandem testing, we need something that repeats features.
         // e.g. "{{a|b}|{a|c}}" at depth 0
         // extract_and_flatten on `{a|b}` extracts `a` and `b`.
         // extract_and_flatten on `{a|c}` extracts `a` and `c`.
         // `a` has count 2. `b` has count 1, `c` has count 1.
-        // `a` is tandem: `{|, a}` (Ratio 1.0 > 0.51)
+        // `a` is tandem: `{, a|}` (Ratio 1.0 > 0.51)
         // `b`, `c` are regular: `{b|c}` (Ratio 0.5 < 0.51)
-        let res_tandem = mix_mode_transform("{{a|b}|{a|c}}", 0);
+        let res_tandem = mix_mode_transform("{{a|b}|{a|c}}", 0, 0, 0.51);
         println!("Tandem test: {}", res_tandem);
-        assert_eq!(res_tandem, "{|, a}, {b|c}");
+        assert_eq!(res_tandem, "{, a|}, {b|c}");
     }
 }
 

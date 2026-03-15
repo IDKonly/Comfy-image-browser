@@ -136,7 +136,7 @@ pub fn generate_wildcards(app_handle: tauri::AppHandle, window: Window, paths: V
     let mut results = merge_tag_groups(tag_sets, threshold, max_depth);
     
     if filter.mix_mode {
-        results = results.into_iter().map(|s| super::mix::mix_mode_transform(&s, filter.mix_depth)).collect();
+        results = results.into_iter().map(|s| super::mix::mix_mode_transform(&s, filter.mix_depth, filter.mix_tandem_min_branches, filter.mix_tandem_ratio)).collect();
     }
     
     Ok(results)
@@ -233,7 +233,7 @@ pub fn compare_tags(app_handle: tauri::AppHandle, window: Window, target_paths: 
     let mut results = merge_tag_groups(filtered_sets, threshold, max_depth);
 
     if filter.mix_mode {
-        results = results.into_iter().map(|s| super::mix::mix_mode_transform(&s, filter.mix_depth)).collect();
+        results = results.into_iter().map(|s| super::mix::mix_mode_transform(&s, filter.mix_depth, filter.mix_tandem_min_branches, filter.mix_tandem_ratio)).collect();
     }
     
     Ok(results)
