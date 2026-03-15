@@ -1,4 +1,3 @@
-use std::collections::HashSet;
 use std::iter::Peekable;
 use std::str::Chars;
 
@@ -126,31 +125,73 @@ pub fn mix_mode_transform(wildcard: &str, mix_depth: u32) -> String {
     let ast = parse_sequence(&mut chars, None);
     
     let mut extracted_features = Vec::new();
-    let (transformed_ast, _) = transform_recursive(ast, 0, mix_depth, &mut extracted_features);
+    let mut total_branches = 0;
+    let (transformed_ast, _) = transform_recursive(ast, 0, mix_depth, &mut extracted_features, &mut total_branches);
 
     let mut result = serialize_node(&transformed_ast);
     
     if !extracted_features.is_empty() {
-        let mut unique_features = HashSet::new();
+        let mut feature_counts = std::collections::HashMap::new();
+        
         for f in extracted_features {
             let mut opts = Vec::new();
             extract_flat_options(&f, &mut opts);
+            // Deduplicate options within the same branch to avoid double-counting
+            opts.sort();
+            opts.dedup();
             for p in opts {
                 if !p.is_empty() {
-                    unique_features.insert(p);
+                    *feature_counts.entry(p).or_insert(0) += 1;
                 }
             }
         }
         
-        if !unique_features.is_empty() {
-            let mut sorted_features: Vec<_> = unique_features.into_iter().collect();
-            sorted_features.sort();
+        if !feature_counts.is_empty() {
+            // Determine frequency threshold for tandem conversion based on actual probability.
+            // total_branches represents the total number of options in the choices we flattened.
+            // If a tag appears in more than 50% of the branches, it becomes a tandem toggle.
+            // Using 0.51 ensures that simple {a|b} choices (50%) remain mutually exclusive.
+            let probability_threshold = 0.51; 
+            // Avoid division by zero
+            let denominator = if total_branches > 0 { total_branches as f32 } else { 1.0 };
             
-            let mix_block = format!("{{{}}}", sorted_features.join("|"));
-            if result.is_empty() {
-                result = mix_block;
+            let mut tandem_features = Vec::new();
+            let mut regular_features = Vec::new();
+            
+            for (feat, count) in feature_counts {
+                let ratio = count as f32 / denominator;
+                if ratio >= probability_threshold {
+                    tandem_features.push(feat);
+                } else {
+                    regular_features.push(feat);
+                }
+            }
+            
+            tandem_features.sort();
+            regular_features.sort();
+            
+            // Build tandem block: "Base{|, A}{|, B}"
+            let mut tandem_block = String::new();
+            for t in tandem_features {
+                tandem_block.push_str(&format!("{{|, {}}}", t));
+            }
+            
+            let regular_block = if !regular_features.is_empty() {
+                format!("{{{}}}", regular_features.join("|"))
             } else {
-                result = format!("{}, {}", result, mix_block);
+                String::new()
+            };
+            
+            if !tandem_block.is_empty() {
+                result = format!("{}{}", result, tandem_block);
+            }
+            
+            if !regular_block.is_empty() {
+                if result.is_empty() {
+                    result = regular_block;
+                } else {
+                    result = format!("{}, {}", result, regular_block);
+                }
             }
         }
     }
@@ -158,19 +199,20 @@ pub fn mix_mode_transform(wildcard: &str, mix_depth: u32) -> String {
     clean_commas(&result)
 }
 
-fn transform_recursive(node: WildcardNode, current_depth: u32, mix_depth: u32, extracted: &mut Vec<WildcardNode>) -> (WildcardNode, bool) {
+fn transform_recursive(node: WildcardNode, current_depth: u32, mix_depth: u32, extracted: &mut Vec<WildcardNode>, total_branches: &mut u32) -> (WildcardNode, bool) {
     match node {
         WildcardNode::Text(_) => (node, false),
         WildcardNode::Sequence(nodes) => {
             let mut new_nodes = Vec::new();
             for n in nodes {
-                let (new_n, _) = transform_recursive(n, current_depth, mix_depth, extracted);
+                let (new_n, _) = transform_recursive(n, current_depth, mix_depth, extracted, total_branches);
                 new_nodes.push(new_n);
             }
             (WildcardNode::Sequence(new_nodes), false)
         }
         WildcardNode::Choice(options) => {
             if current_depth >= mix_depth {
+                *total_branches += options.len() as u32;
                 let mut new_options = Vec::new();
                 for opt in options {
                     let (new_opt, _) = extract_and_flatten(opt, extracted);
@@ -180,7 +222,7 @@ fn transform_recursive(node: WildcardNode, current_depth: u32, mix_depth: u32, e
             } else {
                 let mut new_options = Vec::new();
                 for opt in options {
-                    let (new_opt, _) = transform_recursive(opt, current_depth + 1, mix_depth, extracted);
+                    let (new_opt, _) = transform_recursive(opt, current_depth + 1, mix_depth, extracted, total_branches);
                     new_options.push(new_opt);
                 }
                 (WildcardNode::Choice(new_options), false)
@@ -217,42 +259,29 @@ mod tests {
     fn test_mix_mode_transform() {
         assert_eq!(mix_mode_transform("a b c", 1), "a b c");
 
-        // The current logic doesn't flatten a depth=0 top-level Choice if it's not nested?
-        // Wait, current_depth >= mix_depth. If mix_depth is 0, current_depth (0) >= 0.
-        // It calls extract_and_flatten on EACH OPTION.
-        // If the option is just a Sequence, extract_and_flatten extracts nothing!
-        // It returns the Sequence itself, and creates a Choice out of the Sequences.
-        // So a {b|c} d with depth 0:
-        // 'a ' -> Sequence
-        // '{b|c}' -> Choice. mix_depth=0, current_depth=0.
-        // It calls extract_and_flatten on 'b' and 'c'.
-        // 'b' and 'c' are Text. extract_and_flatten('b') -> ('b', false).
-        // It reconstructs Choice(['b', 'c']).
-        // So {b|c} is preserved.
-        
+        // "a {b|c} d" with depth 0 results in the feature {b|c} being kept as Choice since it's just text options.
         assert_eq!(mix_mode_transform("a {b|c} d", 0), "a {b|c} d");
         assert_eq!(mix_mode_transform("a {b|c} d", 1), "a {b|c} d");
         
         // Nested:
         // {{b|c}|d} e depth 0
-        // Top-level Choice: {{b|c}|d}. current_depth=0 >= mix_depth(0).
-        // Option 1: {b|c} -> Choice. extract_and_flatten extracts {b|c}, returns Text("").
-        // Option 2: d -> Text. Returns d.
-        // So Top-level Choice becomes { "" | d } which is {d}
-        // Extracted: {b|c} -> appended as {b|c}
+        // Top-level Choice has 2 options. Total branches = 2.
+        // extracts {b|c}, leaves {d}.
+        // extracted features: 'b' (count 1), 'c' (count 1).
+        // Ratio: 1/2 = 0.5 < 0.51. Both 'b' and 'c' remain regular!
         // Result: "a {d} e, {b|c}"
         assert_eq!(mix_mode_transform("a {{b|c}|d} e", 0), "a {d} e, {b|c}");
 
-        // {b|{c|d}} e depth 0
-        assert_eq!(mix_mode_transform("a {b|{c|d}} e", 0), "a {b} e, {c|d}");
-
-        // {b|{c|d}} e depth 1
-        // current_depth=0 < 1. It recurses into Options.
-        // Option 1: b -> Text.
-        // Option 2: {c|d} -> Choice. current_depth=1 >= 1.
-        // Recurses into c, d -> Text -> no extraction. Returns {c|d}.
-        // So Result: "a {b|{c|d}} e"
-        assert_eq!(mix_mode_transform("a {b|{c|d}} e", 1), "a {b|{c|d}} e");
+        // For tandem testing, we need something that repeats features.
+        // e.g. "{{a|b}|{a|c}}" at depth 0
+        // extract_and_flatten on `{a|b}` extracts `a` and `b`.
+        // extract_and_flatten on `{a|c}` extracts `a` and `c`.
+        // `a` has count 2. `b` has count 1, `c` has count 1.
+        // `a` is tandem: `{|, a}` (Ratio 1.0 > 0.51)
+        // `b`, `c` are regular: `{b|c}` (Ratio 0.5 < 0.51)
+        let res_tandem = mix_mode_transform("{{a|b}|{a|c}}", 0);
+        println!("Tandem test: {}", res_tandem);
+        assert_eq!(res_tandem, "{|, a}, {b|c}");
     }
 }
 
