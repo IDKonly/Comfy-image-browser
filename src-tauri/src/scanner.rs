@@ -87,33 +87,58 @@ pub fn scan_directory(app_handle: tauri::AppHandle, path: String, sort_method: O
         db.get_images_in_folder_fast(&root_str, is_recursive).unwrap_or_default()
     };
     
+    // 2. Minimal Synchronous Fallback (Prevent Freeze)
+    // If we have a target file not in DB, JUST inject that single file temporarily.
+    let target_str = target_file.map(|t| t.to_string_lossy().to_string().replace("\\", "/"));
+    let mut initial_index = 0;
+
+    if let Some(ref target) = target_str {
+        if !images.iter().any(|img| &img.path == target) {
+            if let Ok(metadata) = std::fs::metadata(target) {
+                let mtime = metadata.modified().ok().and_then(|m| m.duration_since(UNIX_EPOCH).ok()).map(|d| d.as_secs()).unwrap_or(0);
+                images.push(ImageInfo {
+                    path: target.clone(),
+                    name: Path::new(target).file_name().unwrap_or_default().to_string_lossy().to_string(),
+                    mtime,
+                    size: metadata.len(),
+                });
+            }
+        }
+    }
+
     // Sort results
     sort_images(&mut images, method);
 
-    let mut initial_index = 0;
-    if let Some(target) = target_file {
-        let target_str = target.to_string_lossy().to_string().replace("\\", "/");
-        if let Some(pos) = images.iter().position(|img| img.path == target_str) {
+    // Find initial index
+    if let Some(ref target) = target_str {
+        if let Some(pos) = images.iter().position(|img| &img.path == target) {
             initial_index = pos;
         }
     }
 
-    // 2. Cancellation
+    // 3. Cancellation
     let scan_id = CURRENT_SCAN_ID.fetch_add(1, Ordering::SeqCst) + 1;
 
-    // 3. Background Sync & Indexing
+    // 4. Background Sync & Indexing
     let app_handle_clone = app_handle.clone();
     let root_path_buf = root.to_path_buf();
     let root_str_clone = root_str.clone();
+    let target_str_clone = target_str.clone();
 
     std::thread::spawn(move || {
         let app_handle = app_handle_clone;
-        let db_path = get_db_path(&app_handle).unwrap();
-        let mut db = DB::open(&db_path).unwrap();
+        let db_path = match get_db_path(&app_handle) {
+            Ok(p) => p,
+            Err(e) => { log::error!("Background scan failed to get DB path: {}", e); return; }
+        };
+        let mut db = match DB::open(&db_path) {
+            Ok(d) => d,
+            Err(e) => { log::error!("Background scan failed to open DB: {}", e); return; }
+        };
 
         if CURRENT_SCAN_ID.load(Ordering::SeqCst) != scan_id { return; }
 
-        // A. Fast disk scan
+        // A. Full disk scan for metadata update
         let depth = if is_recursive { 99 } else { 1 };
         let extensions = ["png", "jpg", "jpeg", "webp"];
         
@@ -130,7 +155,7 @@ pub fn scan_directory(app_handle: tauri::AppHandle, path: String, sort_method: O
                             .duration_since(UNIX_EPOCH).ok()?
                             .as_secs();
                         return Some(ImageInfo {
-                            path: entry.path().to_string_lossy().to_string(),
+                            path: entry.path().to_string_lossy().to_string().replace("\\", "/"),
                             name: entry.file_name().to_string_lossy().to_string(),
                             mtime,
                             size: metadata.len(),
@@ -143,18 +168,28 @@ pub fn scan_directory(app_handle: tauri::AppHandle, path: String, sort_method: O
 
         if CURRENT_SCAN_ID.load(Ordering::SeqCst) != scan_id { return; }
 
-        // B. Identify Changes
+        // B. Identify Changes & Recalculate Index
         let mut current_images = disk_entries.clone();
         sort_images(&mut current_images, method);
 
+        let mut bg_initial_index = 0;
+        if let Some(ref target) = target_str_clone {
+            if let Some(pos) = current_images.iter().position(|img| &img.path == target) {
+                bg_initial_index = pos;
+            }
+        }
+
         let _ = app_handle.emit("folder-updated", ScanResult { 
             images: current_images.clone(), 
-            initial_index, 
+            initial_index: bg_initial_index, 
             folder: root_str_clone.clone() 
         });
 
         // C. Cleanup stale DB entries
-        let indexed_stats = db.get_folder_stats(&root_str_clone, is_recursive).unwrap_or_default();
+        let indexed_stats = match db.get_folder_stats(&root_str_clone, is_recursive) {
+            Ok(s) => s,
+            Err(_) => std::collections::HashMap::new()
+        };
 
         let disk_paths: std::collections::HashSet<_> = disk_entries.iter().map(|img| img.path.clone()).collect();
         let stale_paths: Vec<_> = indexed_stats.keys().filter(|p| !disk_paths.contains(*p)).cloned().collect();
@@ -163,8 +198,8 @@ pub fn scan_directory(app_handle: tauri::AppHandle, path: String, sort_method: O
         }
 
         // D. Filter images that need indexing using the HashMap
-        let needs_indexing: Vec<_> = disk_entries.into_iter().filter(|img| {
-            if is_forced { return true; } // Force Reindex ignores DB stats
+        let mut needs_indexing: Vec<_> = disk_entries.into_iter().filter(|img| {
+            if is_forced { return true; }
             match indexed_stats.get(&img.path) {
                 Some(&(m, s)) => m != img.mtime || s != img.size,
                 None => true,
@@ -173,26 +208,45 @@ pub fn scan_directory(app_handle: tauri::AppHandle, path: String, sort_method: O
 
         if needs_indexing.is_empty() { return; }
 
-        // E. Parallel Metadata Extraction and Bulk Insert
+        // E. Prioritize Indexing Outwards from Current Index (Spread Algorithm)
+        // Map each needed image to its position in the sorted `current_images`
+        let path_to_index: std::collections::HashMap<_, _> = current_images.iter().enumerate().map(|(i, img)| (img.path.clone(), i)).collect();
+        
+        needs_indexing.sort_by_cached_key(|img| {
+            let pos = path_to_index.get(&img.path).copied().unwrap_or(0);
+            (pos as isize - bg_initial_index as isize).abs()
+        });
+
+        // F. Parallel Metadata Extraction in CHUNKS
         let total = needs_indexing.len();
         let _ = app_handle.emit("index-progress", IndexProgress { total, current: 0, is_indexing: true });
 
-        // Extract metadata in parallel
-        let results: Vec<_> = needs_indexing.par_iter().map(|img| {
-            (img, read_metadata(&img.path).unwrap_or_default())
-        }).collect();
+        let chunk_size = 50; // Process and save 50 images at a time
+        let mut processed_count = 0;
 
-        if CURRENT_SCAN_ID.load(Ordering::SeqCst) != scan_id {
-            let _ = app_handle.emit("index-progress", IndexProgress { total, current: 0, is_indexing: false });
-            return;
+        for chunk in needs_indexing.chunks(chunk_size) {
+            if CURRENT_SCAN_ID.load(Ordering::SeqCst) != scan_id {
+                let _ = app_handle.emit("index-progress", IndexProgress { total, current: processed_count, is_indexing: false });
+                return;
+            }
+
+            let results: Vec<_> = chunk.par_iter().map(|img| {
+                (img, read_metadata(&img.path).unwrap_or_default())
+            }).collect();
+
+            if let Err(e) = db.insert_images_batch(results) {
+                log::error!("Batch insert failed: {}", e);
+            }
+
+            processed_count += chunk.len();
+            let _ = app_handle.emit("index-progress", IndexProgress { total, current: processed_count, is_indexing: true });
+            
+            // Emit partial update so UI knows metadata is available for the current center
+            let _ = app_handle.emit("metadata-chunk-updated", ());
         }
 
-        // Single batch insert transaction
-        if let Err(e) = db.insert_images_batch(results) {
-            log::error!("Batch insert failed: {}", e);
-        }
-
-        let _ = app_handle.emit("index-progress", IndexProgress { total, current: total, is_indexing: false });    });
+        let _ = app_handle.emit("index-progress", IndexProgress { total, current: total, is_indexing: false });
+    });
 
     Ok(ScanResult { images, initial_index, folder: root_str })
 }

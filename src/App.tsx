@@ -218,10 +218,45 @@ function App() {
     const unlistenProgress = listen('index-progress', (event: any) => setIndexProgress(event.payload));
     const unlistenUpdate = listen('folder-updated', (event: any) => {
       const payload = event.payload as any;
-      if (payload.folder === folderPath || recursive) setImages(payload.images);
+      if (payload.folder === folderPath || recursive) {
+        const state = useAppStore.getState();
+        const currentImages = state.images;
+        const currentIdx = state.currentIndex;
+        
+        let targetIndex = payload.initial_index !== undefined ? payload.initial_index : 0;
+        if (currentImages.length > 0 && currentIdx !== undefined && currentImages[currentIdx]) {
+            const currentPath = currentImages[currentIdx].path;
+            const newIndex = payload.images.findIndex((img: any) => img.path === currentPath);
+            if (newIndex !== -1) {
+                targetIndex = newIndex;
+            }
+        }
+        
+        setImages(payload.images);
+        setCurrentIndex(targetIndex);
+      }
     });
-    return () => { unlistenProgress.then(f => f()); unlistenUpdate.then(f => f()); };
-  }, [setIndexProgress, folderPath, recursive, setImages]);
+
+    const unlistenChunk = listen('metadata-chunk-updated', () => {
+        // When a chunk of metadata is saved to DB, re-fetch metadata for the CURRENT image
+        // just in case it was part of that chunk and is currently missing details.
+        const state = useAppStore.getState();
+        if (state.images.length > 0 && state.currentIndex !== undefined) {
+            const currentImg = state.images[state.currentIndex];
+            if (currentImg && !state.currentMetadata?.prompt) {
+                invoke("get_metadata", { path: currentImg.path })
+                    .then(m => setCurrentMetadata(m as ImageMetadata))
+                    .catch(() => {});
+            }
+        }
+    });
+
+    return () => { 
+        unlistenProgress.then(f => f()); 
+        unlistenUpdate.then(f => f()); 
+        unlistenChunk.then(f => f());
+    };
+  }, [setIndexProgress, folderPath, recursive, setImages, setCurrentMetadata]);
 
   // Scans & Updates
   const initialScanDone = useRef(false);
