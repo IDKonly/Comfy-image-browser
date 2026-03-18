@@ -22,9 +22,68 @@ import { AppFooter } from "./components/layout/AppFooter";
 
 export type SortMethod = 'Newest' | 'Oldest' | 'NameAsc' | 'NameDesc';
 
+// Pre-caching components
+const ImageCache = ({ images, currentIndex, batchMode, batchRange, reloadTimestamp, cacheSize }: { 
+  images: any[], currentIndex: number, batchMode: boolean, batchRange: [number, number] | null, reloadTimestamp: number, cacheSize: number 
+}) => {
+  const fullImageIndices = new Set<number>();
+  const thumbIndices = new Set<number>();
+
+  if (images.length > 0) {
+    if (batchMode && batchRange) {
+      // In batch mode, cache thumbnails for the adjacent batches
+      for (let i = 1; i <= cacheSize; i++) {
+        const prev = batchRange[0] - i;
+        const next = batchRange[1] + i;
+        if (prev >= 0) thumbIndices.add(prev);
+        if (next < images.length) thumbIndices.add(next);
+      }
+      // Cache full images for the first few in the current batch (for instant zoom view)
+      for (let i = batchRange[0]; i <= Math.min(batchRange[1], batchRange[0] + 3); i++) {
+        fullImageIndices.add(i);
+      }
+    } else {
+      // Single mode logic
+      for (let i = 1; i <= cacheSize; i++) {
+        if (currentIndex + i < images.length) fullImageIndices.add(currentIndex + i);
+        if (currentIndex - i >= 0) fullImageIndices.add(currentIndex - i);
+      }
+    }
+  }
+
+  return (
+    <div className="hidden" aria-hidden="true">
+      {Array.from(fullImageIndices).map(idx => {
+        const img = images[idx];
+        if (!img || !img.path) return null;
+        return (
+          <img 
+            key={`full-${img.path}-${reloadTimestamp}`}
+            src={reloadTimestamp ? `${convertFileSrc(img.path.replace(/\//g, '\\'))}?t=${reloadTimestamp}` : convertFileSrc(img.path.replace(/\//g, '\\'))} 
+          />
+        );
+      })}
+      {Array.from(thumbIndices).map(idx => {
+        const img = images[idx];
+        if (!img || !img.path) return null;
+        return (
+          <Thumbnail 
+            key={`thumb-${img.path}-${reloadTimestamp}`}
+            path={img.path}
+            mtime={img.mtime}
+            reloadTimestamp={reloadTimestamp}
+            delay={0}
+            className="hidden"
+          />
+        );
+      })}
+    </div>
+  );
+};
+
 function App() {
   const { 
-    folderPath, images, currentIndex, currentMetadata, shortcuts, batchMode, indexProgress, twitterSettings, recursive, sortMethod,
+    folderPath, images, currentIndex, currentMetadata, shortcuts, batchMode, indexProgress, twitterSettings, recursive, sortMethod, imageCacheSize,
     setFolderPath, setImages, setCurrentIndex, setCurrentMetadata, removeImages, setShortcuts, setBatchMode, setIndexProgress, setTwitterSettings, setRecursive, setSortMethod: setAppSortMethod,
     setWorkshopTargetPaths, workshopFilter, setWorkshopFilter
   } = useAppStore();
@@ -330,14 +389,21 @@ function App() {
   useEffect(() => {
     if (images.length === 0) return;
     const timer = setTimeout(() => {
-      const start = Math.max(0, currentIndex - 40);
-      const end = Math.min(images.length - 1, currentIndex + 40);
+      let start, end;
+      if (batchMode && batchRange) {
+        // In batch mode, pre-generate thumbnails for more images around the range
+        start = Math.max(0, batchRange[0] - 60);
+        end = Math.min(images.length - 1, batchRange[1] + 60);
+      } else {
+        start = Math.max(0, currentIndex - 40);
+        end = Math.min(images.length - 1, currentIndex + 40);
+      }
       for (let i = start; i <= end; i++) {
         if (i !== currentIndex) scheduleThumbnailGeneration(images[i].path, false).catch(() => {});
       }
     }, 300);
     return () => clearTimeout(timer);
-  }, [currentIndex, images]);
+  }, [currentIndex, images, batchMode, batchRange]);
 
   return (
     <div className="flex flex-col h-screen bg-neutral-950 text-neutral-100 font-sans overflow-hidden">
@@ -380,7 +446,7 @@ function App() {
                 {images.slice(batchRange?.[0] || currentIndex, (batchRange?.[1] || currentIndex) + 1).map((img) => (
                   <Thumbnail 
                     key={`${img.path}-${reloadTimestamp}`} 
-                    path={img.path} mtime={img.mtime} reloadTimestamp={reloadTimestamp} fit="contain" 
+                    path={img.path} mtime={img.mtime} reloadTimestamp={reloadTimestamp} fit="contain" delay={0}
                     onClick={() => setCurrentIndex(images.indexOf(img))}
                     className={`w-full h-full min-h-0 cursor-pointer rounded-2xl border-4 transition-all duration-300 hover:scale-[1.02] shadow-2xl ${images.indexOf(img) === currentIndex ? 'border-blue-500 ring-[4px] ring-blue-500/30' : 'border-white/5 hover:border-white/10'}`}
                   />
@@ -460,6 +526,15 @@ function App() {
           }}
         />
       )}
+
+      <ImageCache 
+        images={images} 
+        currentIndex={currentIndex} 
+        batchMode={batchMode}
+        batchRange={batchRange}
+        reloadTimestamp={reloadTimestamp} 
+        cacheSize={imageCacheSize} 
+      />
     </div>
   );
 }

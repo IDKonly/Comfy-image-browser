@@ -44,18 +44,24 @@ pub fn read_metadata<P: AsRef<Path>>(path: P) -> Result<ImageMetadata, String> {
 
 fn extract_png(buf: &[u8]) -> Result<String, String> {
     let png = Png::from_bytes(buf.to_vec().into()).map_err(|e| e.to_string())?;
+    let mut best_text = String::new();
     for chunk in png.chunks() {
         let chunk_kind = chunk.kind();
         let kind = std::str::from_utf8(&chunk_kind).unwrap_or("");
         if ["tEXt", "iTXt", "zTXt"].contains(&kind) {
-            if let Some(text) = parse_png_chunk(kind, chunk.contents()) {
-                if text.contains("parameters") || text.contains("prompt") || text.contains("workflow") {
-                    return Ok(text);
+            let data = chunk.contents();
+            let parts: Vec<&[u8]> = data.split(|&b| b == 0).collect();
+            if !parts.is_empty() {
+                let key = String::from_utf8_lossy(parts[0]).to_string();
+                if let Some(text) = parse_png_chunk(kind, data) {
+                    if key == "prompt" { return Ok(text); }
+                    if key == "parameters" { return Ok(text); }
+                    if key == "workflow" && best_text.is_empty() { best_text = text; }
                 }
             }
         }
     }
-    Ok(String::new())
+    Ok(best_text)
 }
 
 fn extract_jpeg(buf: &[u8]) -> Result<String, String> {
@@ -183,19 +189,37 @@ fn parse_comfyui_extended(raw: &str) -> ImageMetadata {
                 let class_type = node.get("class_type").and_then(|c| c.as_str()).unwrap_or("");
                 let inputs = node.get("inputs").and_then(|i| i.as_object());
 
-                if class_type == "CLIPTextEncode" {
-                    if let Some(text) = inputs.and_then(|i| i.get("text")).and_then(|t| t.as_str()) {
-                        let title = node.get("_meta").and_then(|m| m.get("title")).and_then(|t| t.as_str()).unwrap_or("").to_lowercase();
-                        if title.contains("negative") { if !text.is_empty() { negatives.push(text.to_string()); } }
-                        else { if !text.is_empty() { prompts.push(text.to_string()); } }
+                if class_type == "CLIPTextEncode" || class_type == "CLIPTextEncodeSDXL" || class_type == "CLIPTextEncodeSD3" {
+                    if let Some(inputs) = inputs {
+                        let text = inputs.get("text")
+                            .or_else(|| inputs.get("text_g"))
+                            .or_else(|| inputs.get("text_l"))
+                            .and_then(|t| t.as_str())
+                            .unwrap_or("");
+                        
+                        if !text.is_empty() {
+                            let title = node.get("_meta").and_then(|m| m.get("title")).and_then(|t| t.as_str()).unwrap_or("").to_lowercase();
+                            if title.contains("negative") { negatives.push(text.to_string()); }
+                            else { prompts.push(text.to_string()); }
+                        }
                     }
-                } else if class_type == "CheckpointLoaderSimple" {
-                    if let Some(model_name) = inputs.and_then(|i| i.get("ckpt_name")).and_then(|t| t.as_str()) {
-                        meta.model = Some(model_name.to_string());
+                } else if class_type == "CheckpointLoaderSimple" || class_type == "CheckpointLoader" {
+                    if let Some(i) = inputs {
+                        if let Some(model_name) = i.get("ckpt_name").and_then(|t| t.as_str()) {
+                            meta.model = Some(model_name.to_string());
+                        }
+                    }
+                } else if class_type == "UNETLoader" || class_type == "DiffusionLoader" || class_type == "ModelLoader" {
+                    if let Some(i) = inputs {
+                        if let Some(model_name) = i.get("unet_name")
+                            .or_else(|| i.get("model_name"))
+                            .or_else(|| i.get("ckpt_name"))
+                            .and_then(|t| t.as_str()) {
+                            meta.model = Some(model_name.to_string());
+                        }
                     }
                 }
 
-                // Any node having these keys is likely a sampler or detailer
                 if let Some(inputs) = inputs {
                     if meta.steps.is_none() { meta.steps = inputs.get("steps").and_then(|s| s.as_u64()).map(|s| s as u32); }
                     if meta.seed.is_none() { meta.seed = inputs.get("seed").or_else(|| inputs.get("noise_seed")).and_then(|s| s.as_u64()); }

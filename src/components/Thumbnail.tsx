@@ -73,9 +73,10 @@ interface ThumbnailProps {
   className?: string;
   onClick?: () => void;
   fit?: "cover" | "contain";
+  delay?: number;
 }
 
-export const Thumbnail = ({ path, mtime, reloadTimestamp, className, onClick, fit = "cover" }: ThumbnailProps) => {
+export const Thumbnail = ({ path, mtime, reloadTimestamp, className, onClick, fit = "cover", delay = 100 }: ThumbnailProps) => {
   const [src, setSrc] = useState<string | null>(null);
   const pathRef = useRef(path);
 
@@ -83,28 +84,36 @@ export const Thumbnail = ({ path, mtime, reloadTimestamp, className, onClick, fi
     pathRef.current = path;
     let active = true;
     
-    const timer = setTimeout(() => {
+    const fetchThumb = () => {
       scheduleThumbnailGeneration(path)
         .then(res => {
-        if (active && pathRef.current === path) {
-          const normalizedRes = (res as string).replace(/\//g, '\\');
-          const url = convertFileSrc(normalizedRes);
-          setSrc(reloadTimestamp ? `${url}?t=${reloadTimestamp}` : url);
-        }
+          if (active && pathRef.current === path) {
+            const normalizedRes = (res as string).replace(/\//g, '\\');
+            const url = convertFileSrc(normalizedRes);
+            setSrc(reloadTimestamp ? `${url}?t=${reloadTimestamp}` : url);
+          }
         })
         .catch((err) => {
-        console.error("Thumbnail failed", path, err);
-        if (active && pathRef.current === path) {
-           const url = convertFileSrc(path.replace(/\//g, '\\'));
-           setSrc(reloadTimestamp ? `${url}?t=${reloadTimestamp}` : url);
-        }
-        });    }, 100);
+          console.error("Thumbnail failed", path, err);
+          if (active && pathRef.current === path) {
+             const url = convertFileSrc(path.replace(/\//g, '\\'));
+             setSrc(reloadTimestamp ? `${url}?t=${reloadTimestamp}` : url);
+          }
+        });
+    };
+
+    let timer: any;
+    if (delay > 0) {
+      timer = setTimeout(fetchThumb, delay);
+    } else {
+      fetchThumb();
+    }
     
     return () => { 
       active = false; 
-      clearTimeout(timer);
+      if (timer) clearTimeout(timer);
     };
-  }, [path, mtime, reloadTimestamp]);
+  }, [path, mtime, reloadTimestamp, delay]);
 
   return (
     <div 

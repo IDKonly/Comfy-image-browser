@@ -37,12 +37,28 @@ const Row = ({ index, style, data }: any) => {
 
 export const ImageGrid = ({ images, currentIndex, batchRange, setCurrentIndex, reloadTimestamp }: ImageGridProps) => {
   const listRef = useRef<any>(null);
+  const [isLocked, setIsLocked] = React.useState(true);
+  const lastProgrammaticScroll = useRef<number>(0);
 
+  // Re-lock and scroll when currentIndex changes (navigation)
   useEffect(() => {
-    if (listRef.current) {
-      listRef.current.scrollToItem(Math.floor(currentIndex / 2));
+    if (listRef.current && isLocked) {
+      listRef.current.scrollToItem(Math.floor(currentIndex / 2), "center");
     }
+  }, [currentIndex, isLocked]);
+
+  // Re-lock when navigation buttons are used (detected by currentIndex changing while not scrolling)
+  useEffect(() => {
+    setIsLocked(true);
   }, [currentIndex]);
+
+  const handleScroll = ({ scrollDirection, scrollOffset, scrollUpdateWasRequested }: any) => {
+    if (!scrollUpdateWasRequested && isLocked) {
+      // If the scroll was NOT requested by scrollToItem but we are locked, 
+      // it means the user is manually scrolling.
+      setIsLocked(false);
+    }
+  };
 
   const itemData = React.useMemo(() => ({
     images,
@@ -67,6 +83,7 @@ export const ImageGrid = ({ images, currentIndex, batchRange, setCurrentIndex, r
             itemSize={width / 2}
             width={width}
             itemData={itemData}
+            onScroll={handleScroll}
             className="scrollbar-thin absolute inset-0"
           >
             {Row}

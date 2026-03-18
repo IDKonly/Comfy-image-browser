@@ -130,6 +130,7 @@ impl DB {
         Ok(())
     }
 
+    #[allow(dead_code)]
     pub fn insert_image(&self, info: &ImageInfo, meta: &ImageMetadata) -> Result<()> {
         let normalized_path = info.path.replace("\\", "/");
         let folder = Path::new(&normalized_path).parent()
@@ -190,6 +191,7 @@ impl DB {
         Ok(())
     }
 
+    #[allow(dead_code)]
     pub fn get_all_paths_in_folder(&self, folder: &str, recursive: bool) -> Result<Vec<String>> {
         let normalized_folder = folder.replace("\\", "/").trim_end_matches('/').to_string();
         let sql = if recursive {
@@ -337,6 +339,7 @@ impl DB {
         Ok(results)
     }
 
+    #[allow(dead_code)]
     pub fn get_indexed_stats(&self, path: &str) -> Result<Option<(u64, u64)>> {
         let mut stmt = self.conn.prepare("SELECT mtime, size FROM images WHERE path = ?1 COLLATE NOCASE")?;
         let mut rows = stmt.query(params![path])?;
@@ -373,6 +376,7 @@ impl DB {
         Ok(stats)
     }
 
+    #[allow(dead_code)]
     pub fn get_indexed_mtime(&self, path: &str) -> Result<Option<u64>> {
         let mut stmt = self.conn.prepare("SELECT mtime FROM images WHERE path = ?1 COLLATE NOCASE")?;
         let mut rows = stmt.query(params![path])?;

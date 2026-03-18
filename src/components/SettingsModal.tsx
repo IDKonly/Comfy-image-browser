@@ -1,5 +1,5 @@
-import { X, Keyboard, History } from "lucide-react";
-import { Shortcuts, DEFAULT_SHORTCUTS } from "../store/useAppStore";
+import { X, Keyboard, History, Zap } from "lucide-react";
+import { Shortcuts, DEFAULT_SHORTCUTS, useAppStore } from "../store/useAppStore";
 import { invoke } from "@tauri-apps/api/core";
 import { confirm } from "@tauri-apps/plugin-dialog";
 
@@ -30,6 +30,7 @@ export const SettingsModal = ({
   setImages,
   showToast,
 }: SettingsModalProps) => {
+  const { imageCacheSize, setImageCacheSize } = useAppStore();
   if (!show) return null;
 
   return (
@@ -37,7 +38,7 @@ export const SettingsModal = ({
       <div className="bg-neutral-900 border border-white/10 rounded-3xl w-full max-w-md shadow-2xl overflow-hidden">
         <div className="p-6 border-b border-white/5 flex items-center justify-between">
           <div className="flex items-center gap-3 font-black uppercase tracking-widest text-sm text-white text-left">
-            <Keyboard className="w-5 h-5 text-blue-500" /> Shortcuts
+            <Keyboard className="w-5 h-5 text-blue-500" /> Settings
           </div>
           <button onClick={onClose} className="p-2 hover:bg-white/5 rounded-full transition-colors">
             <X className="w-5 h-5" />
@@ -46,6 +47,25 @@ export const SettingsModal = ({
         
         <div className="p-8 space-y-6 max-h-[70vh] overflow-y-auto scrollbar-thin">
           <div className="space-y-4">
+            <h4 className="text-[10px] font-black uppercase tracking-[0.2em] text-blue-500 flex items-center gap-2"><Zap className="w-3 h-3" /> Performance</h4>
+            <div className="flex items-center justify-between group">
+              <div className="space-y-1">
+                <span className="text-[10px] font-black uppercase tracking-widest text-neutral-300 group-hover:text-white block">Image Cache Range</span>
+                <p className="text-[8px] text-neutral-500 italic leading-relaxed uppercase">Number of images to pre-cache forward/backward.</p>
+              </div>
+              <div className="flex items-center gap-3">
+                <input 
+                  type="range" min="1" max="20" step="1"
+                  value={imageCacheSize} 
+                  onChange={e => setImageCacheSize(parseInt(e.target.value))}
+                  className="w-24 accent-blue-500 h-1 bg-neutral-950 rounded-lg appearance-none cursor-pointer"
+                />
+                <span className="text-[11px] font-mono text-blue-400 w-4 text-center">{imageCacheSize}</span>
+              </div>
+            </div>
+          </div>
+
+          <div className="space-y-4 pt-6 border-t border-white/5">
             <h4 className="text-[10px] font-black uppercase tracking-[0.2em] text-blue-500">Keyboard Shortcuts</h4>
             {(Object.keys(shortcuts) as (keyof Shortcuts)[]).map(key => (
               <div key={key} className="flex items-center justify-between group">

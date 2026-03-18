@@ -77,6 +77,7 @@ interface AppState {
   twitterSettings: TwitterSettings;
   recursive: boolean;
   sortMethod: SortMethod;
+  imageCacheSize: number;
   
   setFolderPath: (path: string | null) => void;
   setImages: (images: ImageInfo[]) => void;
@@ -92,6 +93,7 @@ interface AppState {
   setTwitterSettings: (settings: TwitterSettings) => void;
   setRecursive: (recursive: boolean) => void;
   setSortMethod: (method: SortMethod) => void;
+  setImageCacheSize: (size: number) => void;
 
   // Workshop State
   workshopTargetPaths: string[];
@@ -128,6 +130,7 @@ export const useAppStore = create<AppState>()(
       indexProgress: null,
       recursive: false,
       sortMethod: 'NameAsc',
+      imageCacheSize: 5,
       twitterSettings: {
         template: "{hashtags}\n\n{phrases}\n\n#AIArt #StableDiffusion #ComfyUI",
         phrasesToPick: ["1girl", "masterpiece", "solo", "ultra detailed"],
@@ -141,6 +144,7 @@ export const useAppStore = create<AppState>()(
       setTwitterSettings: (twitterSettings) => set({ twitterSettings }),
       setRecursive: (recursive) => set({ recursive }),
       setSortMethod: (sortMethod) => set({ sortMethod }),
+      setImageCacheSize: (imageCacheSize) => set({ imageCacheSize }),
 
       // Workshop Initial State
       workshopTargetPaths: [],
@@ -249,6 +253,7 @@ export const useAppStore = create<AppState>()(
         recursive: state.recursive,
         sortMethod: state.sortMethod,
         workshopFilter: state.workshopFilter,
+        imageCacheSize: state.imageCacheSize,
       }),
     }
   )
