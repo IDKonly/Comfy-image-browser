@@ -38,7 +38,6 @@ const Row = ({ index, style, data }: any) => {
 export const ImageGrid = ({ images, currentIndex, batchRange, setCurrentIndex, reloadTimestamp }: ImageGridProps) => {
   const listRef = useRef<any>(null);
   const [isLocked, setIsLocked] = React.useState(true);
-  const lastProgrammaticScroll = useRef<number>(0);
 
   // Re-lock and scroll when currentIndex changes (navigation)
   useEffect(() => {
@@ -52,7 +51,7 @@ export const ImageGrid = ({ images, currentIndex, batchRange, setCurrentIndex, r
     setIsLocked(true);
   }, [currentIndex]);
 
-  const handleScroll = ({ scrollDirection, scrollOffset, scrollUpdateWasRequested }: any) => {
+  const handleScroll = ({ scrollUpdateWasRequested }: any) => {
     if (!scrollUpdateWasRequested && isLocked) {
       // If the scroll was NOT requested by scrollToItem but we are locked, 
       // it means the user is manually scrolling.
