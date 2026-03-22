@@ -1,6 +1,9 @@
+import { useState, useEffect } from "react";
+import { invoke } from "@tauri-apps/api/core";
 import { Search, Zap, Filter } from "lucide-react";
 import { FilterPanel } from "../FilterPanel";
 import { ImageGrid } from "../ImageGrid";
+import { useAppStore } from "../../store/useAppStore";
 
 interface SidebarProps {
   searchQuery: string;
@@ -39,6 +42,50 @@ export const Sidebar = ({
   setCurrentIndex,
   reloadTimestamp
 }: SidebarProps) => {
+  const { recursive } = useAppStore();
+  const [suggestions, setSuggestions] = useState<string[]>([]);
+  const [showSuggestions, setShowSuggestions] = useState(false);
+
+  useEffect(() => {
+    if (!folderPath || !searchQuery) {
+      setSuggestions([]);
+      return;
+    }
+    const words = searchQuery.split(',');
+    const currentWord = words[words.length - 1].trim();
+    if (currentWord.length < 2) {
+      setSuggestions([]);
+      return;
+    }
+    const fetchSuggestions = async () => {
+      try {
+        const res = await invoke("get_tag_suggestions", {
+          folder: folderPath,
+          currentInput: currentWord,
+          recursive: recursive
+        }) as string[];
+        setSuggestions(res);
+      } catch (e) {
+        console.error("Failed to fetch suggestions", e);
+      }
+    };
+    const timer = setTimeout(fetchSuggestions, 300);
+    return () => clearTimeout(timer);
+  }, [searchQuery, folderPath, recursive]);
+
+  const handleKeyDown = (e: React.KeyboardEvent<HTMLInputElement>) => {
+    if (e.key === 'Enter') {
+      setShowSuggestions(false);
+      handleSearch();
+    } else if (e.key === 'Tab' && suggestions.length > 0 && showSuggestions) {
+      e.preventDefault();
+      const words = searchQuery.split(',');
+      words[words.length - 1] = " " + suggestions[0];
+      setSearchQuery(words.join(',').trimStart() + ", ");
+      setShowSuggestions(false);
+    }
+  };
+
   return (
     <aside className="w-72 border-r border-white/5 bg-neutral-900 flex flex-col shrink-0 overflow-hidden relative">
       <div className="p-4 space-y-3 shrink-0">
@@ -50,10 +97,31 @@ export const Sidebar = ({
               type="text" 
               placeholder="Search... (/)" 
               value={searchQuery} 
-              onChange={e => setSearchQuery(e.target.value)} 
-              onKeyDown={e => e.key === 'Enter' && handleSearch()} 
+              onChange={e => { setSearchQuery(e.target.value); setShowSuggestions(true); }} 
+              onKeyDown={handleKeyDown}
+              onBlur={() => setTimeout(() => setShowSuggestions(false), 200)}
+              onFocus={() => { if (suggestions.length > 0) setShowSuggestions(true); }}
               className="w-full bg-neutral-950 border border-white/5 rounded-xl py-2.5 pl-10 text-[11px] focus:outline-none focus:border-blue-500/50 transition-all" 
             />
+            {showSuggestions && suggestions.length > 0 && (
+              <div className="absolute top-full left-0 right-0 mt-1 bg-neutral-800 border border-white/10 rounded-xl overflow-hidden z-50 shadow-2xl">
+                {suggestions.map((sug, idx) => (
+                  <div 
+                    key={idx} 
+                    className="px-3 py-2 text-[10px] text-neutral-300 hover:bg-blue-600/30 hover:text-white cursor-pointer transition-colors"
+                    onClick={() => {
+                      const words = searchQuery.split(',');
+                      words[words.length - 1] = " " + sug;
+                      setSearchQuery(words.join(',').trimStart() + ", ");
+                      setShowSuggestions(false);
+                      document.getElementById('search-input')?.focus();
+                    }}
+                  >
+                    {sug}
+                  </div>
+                ))}
+              </div>
+            )}
           </div>
           <div className="flex gap-1">
             <button onClick={handleAutoClassify} title="Auto-Classify into subfolders" className="p-2.5 rounded-xl border bg-neutral-950 border-white/5 text-neutral-500 hover:text-amber-400 hover:border-amber-500/30 transition-all">

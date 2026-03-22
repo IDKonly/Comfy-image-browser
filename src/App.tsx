@@ -365,7 +365,7 @@ function App() {
   // Shortcuts
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
-      if (document.activeElement?.tagName === 'INPUT' || showSettings) return;
+      if (document.activeElement?.tagName === 'INPUT' || document.activeElement?.tagName === 'TEXTAREA' || showSettings || showWildcards || showBatchCrop || showViewerRefiner || showDebug) return;
       if (e.ctrlKey && e.altKey && e.key.toLowerCase() === 'd') { setShowDebug(prev => !prev); return; }
       if (e.ctrlKey && e.key.toLowerCase() === 'z') { e.preventDefault(); handleUndo(); return; }
       if (e.key.toLowerCase() === 'r') { handleReload(); return; }
@@ -383,7 +383,7 @@ function App() {
     };
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [images.length, currentIndex, batchMode, batchRange, shortcuts, showSettings, handleKeep, handleDelete, handleUndo, handleTwitterUpload, handleRandom, handleReload, nextImage, prevImage, setBatchMode]);
+  }, [images.length, currentIndex, batchMode, batchRange, shortcuts, showSettings, showWildcards, showBatchCrop, showViewerRefiner, showDebug, handleKeep, handleDelete, handleUndo, handleTwitterUpload, handleRandom, handleReload, nextImage, prevImage, setBatchMode]);
 
   // Pre-caching
   useEffect(() => {

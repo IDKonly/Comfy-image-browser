@@ -355,6 +355,36 @@ pub fn search_advanced_images(app_handle: tauri::AppHandle, folder: String, quer
 }
 
 #[tauri::command]
+pub fn get_tag_suggestions(app_handle: tauri::AppHandle, folder: String, current_input: String, recursive: bool) -> Result<Vec<String>, String> {
+    if current_input.trim().is_empty() {
+        return Ok(Vec::new());
+    }
+    
+    let db_path = get_db_path(&app_handle)?;
+    let db = DB::open(&db_path).map_err(|e| e.to_string())?;
+    let prompts = db.get_all_prompts(&folder, recursive).unwrap_or_default();
+    
+    let mut tag_counts: std::collections::HashMap<String, usize> = std::collections::HashMap::new();
+    let current_lower = current_input.trim().to_lowercase();
+    
+    for prompt in prompts {
+        for tag in prompt.split(',') {
+            let tag_trimmed = tag.trim();
+            let tag_lower = tag_trimmed.to_lowercase();
+            if tag_lower.starts_with(&current_lower) && tag_lower != current_lower {
+                *tag_counts.entry(tag_trimmed.to_string()).or_insert(0) += 1;
+            }
+        }
+    }
+    
+    let mut sorted_tags: Vec<_> = tag_counts.into_iter().collect();
+    sorted_tags.sort_by(|a, b| b.1.cmp(&a.1));
+    
+    let top_tags = sorted_tags.into_iter().take(5).map(|(tag, _)| tag).collect();
+    Ok(top_tags)
+}
+
+#[tauri::command]
 pub fn search_images(app_handle: tauri::AppHandle, folder: String, query: String) -> Result<Vec<ImageInfo>, String> {
     let db_path = get_db_path(&app_handle)?;
     let db = DB::open(&db_path).map_err(|e| e.to_string())?;

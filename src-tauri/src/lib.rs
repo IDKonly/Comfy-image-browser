@@ -62,6 +62,7 @@ pub fn run() {
             scanner::get_batch_range,
             scanner::search_images,
             scanner::search_advanced_images,
+            scanner::get_tag_suggestions,
             scanner::get_filter_options,
             db::get_db_status,
             db::clear_database,

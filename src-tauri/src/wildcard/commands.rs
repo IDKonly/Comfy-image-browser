@@ -32,7 +32,7 @@ pub fn get_tag_counts(app_handle: tauri::AppHandle, paths: Vec<String>) -> Resul
             if let Some(prompt) = db_prompts.get(path) {
                 return prompt.split(',')
                     .map(|s| remove_unbalanced_braces(s))
-                    .filter(|s| !s.is_empty())
+                    .filter(|s| !s.trim().is_empty())
                     .collect::<Vec<_>>();
             }
             
@@ -41,7 +41,7 @@ pub fn get_tag_counts(app_handle: tauri::AppHandle, paths: Vec<String>) -> Resul
                 if let Some(prompt) = meta.prompt {
                     return prompt.split(',')
                         .map(|s| remove_unbalanced_braces(s))
-                        .filter(|s| !s.is_empty())
+                        .filter(|s| !s.trim().is_empty())
                         .collect::<Vec<_>>();
                 }
             }
@@ -93,7 +93,7 @@ pub fn generate_wildcards(app_handle: tauri::AppHandle, window: Window, paths: V
             let res = if let Some(prompt) = prompt_opt {
                 let tags: HashSet<String> = prompt.split(',')
                     .map(|s| remove_unbalanced_braces(s))
-                    .filter(|s| !s.is_empty())
+                    .filter(|s| !s.trim().is_empty())
                     .collect();
                 
                 let filtered = apply_filters(tags, &filter);
@@ -172,7 +172,7 @@ pub fn compare_tags(app_handle: tauri::AppHandle, window: Window, target_paths: 
             };
 
             let tags = if let Some(prompt) = prompt_opt {
-                prompt.split(',').map(|s| remove_unbalanced_braces(s)).filter(|s| !s.is_empty()).collect::<HashSet<_>>()
+                prompt.split(',').map(|s| remove_unbalanced_braces(s)).filter(|s| !s.trim().is_empty()).collect::<HashSet<_>>()
             } else { HashSet::new() };
             
             let c = current.fetch_add(1, Ordering::SeqCst) + 1;
@@ -195,7 +195,7 @@ pub fn compare_tags(app_handle: tauri::AppHandle, window: Window, target_paths: 
             };
 
             let res = if let Some(prompt) = prompt_opt {
-                prompt.split(',').map(|s| remove_unbalanced_braces(s)).filter(|s| !s.is_empty()).collect::<Vec<_>>()
+                prompt.split(',').map(|s| remove_unbalanced_braces(s)).filter(|s| !s.trim().is_empty()).collect::<Vec<_>>()
             } else { Vec::new() };
             
             let c = current.fetch_add(1, Ordering::SeqCst) + 1;

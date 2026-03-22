@@ -314,6 +314,34 @@ impl DB {
         Ok(stats)
     }
 
+    pub fn get_all_prompts(&self, folder: &str, recursive: bool) -> Result<Vec<String>> {
+        let normalized_folder = folder.replace("\\", "/").trim_end_matches('/').to_string();
+        
+        let folder_condition = if recursive {
+            "(folder = ?1 COLLATE NOCASE OR folder LIKE ?1 || '/%' COLLATE NOCASE)"
+        } else {
+            "folder = ?1 COLLATE NOCASE"
+        };
+        
+        let query = format!(
+            "SELECT prompt FROM images WHERE {} AND prompt IS NOT NULL",
+            folder_condition
+        );
+        
+        let mut stmt = self.conn.prepare(&query)?;
+        let rows = stmt.query_map([normalized_folder], |row| {
+            row.get::<_, String>(0)
+        })?;
+        
+        let mut results = Vec::new();
+        for r in rows {
+            if let Ok(prompt) = r {
+                results.push(prompt);
+            }
+        }
+        Ok(results)
+    }
+
     pub fn search(&self, folder: &str, query: &str) -> Result<Vec<ImageInfo>> {
         let normalized_folder = folder.replace("\\", "/").trim_end_matches('/').to_string();
         let mut stmt = self.conn.prepare(
