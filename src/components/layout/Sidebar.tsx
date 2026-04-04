@@ -1,6 +1,6 @@
 import { useState, useEffect } from "react";
 import { invoke } from "@tauri-apps/api/core";
-import { Search, Zap, Filter } from "lucide-react";
+import { Search, Zap, Filter, Database } from "lucide-react";
 import { FilterPanel } from "../FilterPanel";
 import { ImageGrid } from "../ImageGrid";
 import { useAppStore } from "../../store/useAppStore";
@@ -22,6 +22,7 @@ interface SidebarProps {
   batchRange: [number, number] | null;
   setCurrentIndex: (index: number) => void;
   reloadTimestamp: number;
+  setShowTagClassifier: (v: boolean) => void;
 }
 
 export const Sidebar = ({
@@ -40,7 +41,8 @@ export const Sidebar = ({
   currentIndex,
   batchRange,
   setCurrentIndex,
-  reloadTimestamp
+  reloadTimestamp,
+  setShowTagClassifier
 }: SidebarProps) => {
   const { recursive } = useAppStore();
   const [suggestions, setSuggestions] = useState<string[]>([]);

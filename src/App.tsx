@@ -11,6 +11,7 @@ import { WildcardTools } from "./components/WildcardTools";
 import { DebugPanel } from "./components/DebugPanel";
 import { TagRefiner } from "./components/TagRefiner";
 import { BatchCropModule } from "./components/BatchCropModule";
+import { TagClassifier } from "./components/TagClassifier";
 
 // New Modular Components
 import { Thumbnail, scheduleThumbnailGeneration } from "./components/Thumbnail";
@@ -100,6 +101,7 @@ function App() {
   const [showWildcards, setShowWildcards] = useState(false);
   const [showDebug, setShowDebug] = useState(false);
   const [showBatchCrop, setShowBatchCrop] = useState(false);
+  const [showTagClassifier, setShowTagClassifier] = useState(false);
   const [activeFilters, setActiveFilters] = useState({ model: "", sampler: "" });
   const [reloadTimestamp, setReloadTimestamp] = useState<number>(0);
   const [showViewerRefiner, setShowViewerRefiner] = useState(false);
@@ -414,6 +416,7 @@ function App() {
         handleKeep={handleKeep} handleDelete={handleDelete} isTrashFolder={isTrashFolder}
         setShowSettings={setShowSettings} handleOpenFolder={handleOpenFolder} shortcuts={shortcuts}
         setWorkshopTargetPaths={setWorkshopTargetPaths}
+        setShowTagClassifier={setShowTagClassifier}
       />
 
       <main className="flex-1 overflow-hidden flex">
@@ -432,6 +435,7 @@ function App() {
           }}
           images={images} currentIndex={currentIndex} batchRange={batchRange}
           setCurrentIndex={setCurrentIndex} reloadTimestamp={reloadTimestamp}
+          setShowTagClassifier={setShowTagClassifier}
         />
 
         <section className="flex-1 flex flex-col bg-[#050505] overflow-hidden relative group">
@@ -491,6 +495,8 @@ function App() {
       <AppFooter folderPath={folderPath} indexProgress={indexProgress} images={images} currentIndex={currentIndex} />
 
       {showWildcards && <WildcardTools onClose={() => setShowWildcards(false)} images={images} currentIndex={currentIndex} batchRange={batchRange} />}
+      
+      {showTagClassifier && <TagClassifier onClose={() => setShowTagClassifier(false)} initialData="" />}
 
       {showViewerRefiner && (
         <TagRefiner 

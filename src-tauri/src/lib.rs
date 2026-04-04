@@ -70,6 +70,8 @@ pub fn run() {
             scanner::get_filter_options,
             db::get_db_status,
             db::clear_database,
+            db::get_all_prompts,
+            db::get_prompts_by_paths,
             metadata::get_metadata,
             file_ops::delete_to_trash,
             file_ops::move_to_keep,

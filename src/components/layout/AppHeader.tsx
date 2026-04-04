@@ -1,10 +1,11 @@
-import { FolderOpen, Layers, Wand2, ArrowDownAZ, ArrowUpAZ, History, Clock, Dices, Settings } from "lucide-react";
+import { FolderOpen, Layers, Wand2, ArrowDownAZ, ArrowUpAZ, History, Clock, Dices, Settings, Database } from "lucide-react";
 import { SortMethod } from "../../App";
 
 interface AppHeaderProps {
   batchMode: boolean;
   setBatchMode: (v: boolean) => void;
   setShowWildcards: (v: boolean) => void;
+  setShowTagClassifier: (v: boolean) => void;
   recursive: boolean;
   setRecursive: (v: boolean) => void;
   sortMethod: SortMethod;
@@ -24,6 +25,7 @@ export const AppHeader = ({
   batchMode,
   setBatchMode,
   setShowWildcards,
+  setShowTagClassifier,
   recursive,
   setRecursive,
   sortMethod,
@@ -58,6 +60,13 @@ export const AppHeader = ({
           className="flex items-center gap-2 px-4 py-1.5 rounded-full text-[10px] font-bold uppercase transition-all border bg-neutral-800 border-neutral-700 text-neutral-400 hover:text-white hover:border-blue-500/50"
         >
           <Wand2 className="w-3.5 h-3.5" />Wildcard
+        </button>
+
+        <button 
+          onClick={() => setShowTagClassifier(true)} 
+          className="flex items-center gap-2 px-4 py-1.5 rounded-full text-[10px] font-bold uppercase transition-all border bg-neutral-800 border-neutral-700 text-neutral-400 hover:text-white hover:border-indigo-500/50"
+        >
+          <Database className="w-3.5 h-3.5" />Classifier
         </button>
 
         <div className="flex items-center gap-2 bg-neutral-800/50 p-1 rounded-xl border border-white/5 ml-2">

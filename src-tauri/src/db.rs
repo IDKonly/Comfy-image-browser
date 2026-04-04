@@ -58,6 +58,61 @@ pub fn clear_database(app_handle: tauri::AppHandle) -> Result<(), String> {
     Ok(())
 }
 
+#[tauri::command]
+pub fn get_all_prompts(app_handle: tauri::AppHandle, folder: String, recursive: bool) -> Result<Vec<String>, String> {
+    let mut path = app_handle.path().app_data_dir().map_err(|e| e.to_string())?;
+    path.push(".image_manager_v2.db");
+    
+    let db = DB::open(&path).map_err(|e| e.to_string())?;
+    // Ensure folder path is cleaned for DB matching (Windows style to DB style)
+    let clean_folder = folder.replace("\\", "/").trim_end_matches('/').to_string();
+    
+    let folder_condition = if recursive {
+        "(folder = ?1 COLLATE NOCASE OR folder LIKE ?1 || '/%' COLLATE NOCASE)"
+    } else {
+        "folder = ?1 COLLATE NOCASE"
+    };
+    
+    let query = format!(
+        "SELECT prompt FROM images WHERE {} AND prompt IS NOT NULL",
+        folder_condition
+    );
+    
+    let mut stmt = db.conn.prepare(&query).map_err(|e| e.to_string())?;
+    let rows = stmt.query_map([clean_folder], |row| row.get::<_, String>(0)).map_err(|e| e.to_string())?;
+    
+    let mut results = Vec::new();
+    for r in rows {
+        if let Ok(prompt) = r { results.push(prompt); }
+    }
+    Ok(results)
+}
+
+#[tauri::command]
+pub fn get_prompts_by_paths(app_handle: tauri::AppHandle, paths: Vec<String>) -> Result<Vec<String>, String> {
+    if paths.is_empty() { return Ok(Vec::new()); }
+    let mut path = app_handle.path().app_data_dir().map_err(|e| e.to_string())?;
+    path.push(".image_manager_v2.db");
+    
+    let db = DB::open(&path).map_err(|e| e.to_string())?;
+    let mut results = Vec::new();
+    
+    // Normalize input paths to match DB storage (slashes)
+    let clean_paths: Vec<String> = paths.into_iter().map(|p| p.replace("\\", "/")).collect();
+    
+    // Process in chunks to avoid SQLite parameter limits
+    for chunk in clean_paths.chunks(500) {
+        let placeholders: String = chunk.iter().map(|_| "?").collect::<Vec<_>>().join(",");
+        let sql = format!("SELECT prompt FROM images WHERE path IN ({}) COLLATE NOCASE AND prompt IS NOT NULL", placeholders);
+        let mut stmt = db.conn.prepare(&sql).map_err(|e| e.to_string())?;
+        let rows = stmt.query_map(rusqlite::params_from_iter(chunk), |row| row.get::<_, String>(0)).map_err(|e| e.to_string())?;
+        for p in rows {
+            if let Ok(prompt) = p { results.push(prompt); }
+        }
+    }
+    Ok(results)
+}
+
 pub struct DB {
     conn: Connection,
 }

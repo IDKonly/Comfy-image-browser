@@ -4,14 +4,22 @@ import { X, Search, CheckSquare, Square, EyeOff, Filter } from "lucide-react";
 interface TagRefinerProps {
   tagCounts: Record<string, number>;
   initialExcluded: string[];
+  partialMatch?: string[];
   onApply: (excluded: string[]) => void;
   onClose: () => void;
 }
 
-export const TagRefiner = ({ tagCounts, initialExcluded, onApply, onClose }: TagRefinerProps) => {
+export const TagRefiner = ({ tagCounts, initialExcluded, partialMatch = [], onApply, onClose }: TagRefinerProps) => {
   const [searchTerm, setSearchTerm] = useState("");
   const [excludedTags, setExcludedTags] = useState<Set<string>>(new Set(initialExcluded));
   const [hideChecked, setHideChecked] = useState(false);
+
+  // Helper to check if a tag matches any partial filter
+  const isPartiallyMatched = (tag: string) => {
+    if (partialMatch.length === 0) return false;
+    const lowTag = tag.toLowerCase();
+    return partialMatch.some(p => p && p.trim() !== "" && lowTag.includes(p.toLowerCase().trim()));
+  };
 
   const sortedTags = useMemo(() => {
     return Object.entries(tagCounts).sort((a, b) => b[1] - a[1]);
@@ -20,10 +28,11 @@ export const TagRefiner = ({ tagCounts, initialExcluded, onApply, onClose }: Tag
   const filteredTags = useMemo(() => {
     return sortedTags.filter(([tag]) => {
       const matchesSearch = tag.toLowerCase().includes(searchTerm.toLowerCase());
-      const isHidden = hideChecked && excludedTags.has(tag);
+      const isExcluded = excludedTags.has(tag) || isPartiallyMatched(tag);
+      const isHidden = hideChecked && isExcluded;
       return matchesSearch && !isHidden;
     });
-  }, [sortedTags, searchTerm, hideChecked, excludedTags]);
+  }, [sortedTags, searchTerm, hideChecked, excludedTags, partialMatch]);
 
   const toggleTag = (tag: string) => {
     const newExcluded = new Set(excludedTags);
@@ -111,19 +120,25 @@ export const TagRefiner = ({ tagCounts, initialExcluded, onApply, onClose }: Tag
 
         {/* Tag List */}
         <div className="flex-1 overflow-y-auto p-4 space-y-1 scrollbar-thin">
-          {filteredTags.map(([tag, count]) => (
-            <button
-              key={tag}
-              onClick={() => toggleTag(tag)}
-              className={`w-full flex items-center justify-between px-4 py-2 rounded-xl transition-all group ${excludedTags.has(tag) ? 'bg-blue-600/10 text-blue-400' : 'hover:bg-white/5 text-neutral-400 hover:text-white'}`}
-            >
-              <div className="flex items-center gap-3 truncate">
-                {excludedTags.has(tag) ? <CheckSquare className="w-4 h-4 shrink-0" /> : <Square className="w-4 h-4 shrink-0 opacity-20 group-hover:opacity-100" />}
-                <span className="text-[11px] font-medium truncate">{tag}</span>
-              </div>
-              <span className={`text-[10px] font-mono px-2 py-0.5 rounded-md ${excludedTags.has(tag) ? 'bg-blue-600/20' : 'bg-neutral-800'}`}>{count}</span>
-            </button>
-          ))}
+          {filteredTags.map(([tag, count]) => {
+            const isPartial = isPartiallyMatched(tag);
+            const isChecked = excludedTags.has(tag) || isPartial;
+            
+            return (
+              <button
+                key={tag}
+                onClick={() => toggleTag(tag)}
+                className={`w-full flex items-center justify-between px-4 py-2 rounded-xl transition-all group ${isChecked ? 'bg-blue-600/10 text-blue-400' : 'hover:bg-white/5 text-neutral-400 hover:text-white'}`}
+              >
+                <div className="flex items-center gap-3 truncate">
+                  {isChecked ? <CheckSquare className={`w-4 h-4 shrink-0 ${isPartial ? 'text-amber-500' : ''}`} /> : <Square className="w-4 h-4 shrink-0 opacity-20 group-hover:opacity-100" />}
+                  <span className={`text-[11px] font-medium truncate ${isPartial ? 'text-amber-500/80' : ''}`}>{tag}</span>
+                  {isPartial && <span className="text-[7px] font-black uppercase bg-amber-500/20 text-amber-500 px-1 rounded shrink-0">Auto:Partial</span>}
+                </div>
+                <span className={`text-[10px] font-mono px-2 py-0.5 rounded-md ${isChecked ? 'bg-blue-600/20' : 'bg-neutral-800'}`}>{count}</span>
+              </button>
+            );
+          })}
           {filteredTags.length === 0 && (
             <div className="flex flex-col items-center justify-center h-full opacity-20 py-20">
               <Search className="w-12 h-12 mb-4" />

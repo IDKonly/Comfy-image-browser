@@ -1,0 +1,1068 @@
+import React, { useState, useMemo, useEffect, useRef } from 'react';
+import { Plus, Trash2, Play, ChevronRight, ChevronLeft, Tag, FileText, Layers, Trash, Database, Search, CheckCircle, XCircle, X, Settings2, Download, Upload, ArrowUp, ArrowDown } from 'lucide-react';
+
+const loadSavedState = (key, defaultVal) => {
+  try {
+    const saved = localStorage.getItem(key);
+    return saved ? JSON.parse(saved) : defaultVal;
+  } catch (e) {
+    return defaultVal;
+  }
+};
+
+function AutocompleteInput({ onAdd, placeholder, suggestions, className }) {
+  const [inputValue, setInputValue] = useState('');
+  const [showSuggestions, setShowSuggestions] = useState(false);
+  
+  const filtered = inputValue.trim() === '' 
+    ? [] 
+    : suggestions.filter(s => s.toLowerCase().includes(inputValue.toLowerCase()) && s !== inputValue);
+
+  const handleKeyDown = (e) => {
+    if (e.key === 'Enter') {
+      e.preventDefault();
+      if (inputValue.trim()) {
+        onAdd(inputValue);
+        setInputValue('');
+        setShowSuggestions(false);
+      }
+    }
+  };
+
+  const handleSelect = (val) => {
+    onAdd(val);
+    setInputValue('');
+    setShowSuggestions(false);
+  };
+
+  // 붙여넣기 이벤트 가로채기: 쉼표나 줄바꿈이 있는 텍스트는 즉시 전체 파싱 후 추가
+  const handlePaste = (e) => {
+    const pasteText = (e.clipboardData || window.clipboardData).getData('text');
+    if (pasteText.includes('\n') || pasteText.includes(',')) {
+      e.preventDefault();
+      onAdd(pasteText);
+      setInputValue('');
+      setShowSuggestions(false);
+    }
+  };
+
+  return (
+    <div className="relative w-full">
+      <input 
+        type="text"
+        value={inputValue}
+        onChange={(e) => { setInputValue(e.target.value); setShowSuggestions(true); }}
+        onKeyDown={handleKeyDown}
+        onPaste={handlePaste}
+        onFocus={() => setShowSuggestions(true)}
+        onBlur={() => setTimeout(() => setShowSuggestions(false), 200)}
+        placeholder={placeholder}
+        className={className}
+      />
+      {showSuggestions && filtered.length > 0 && (
+        <ul className="absolute z-10 w-full bg-white border border-gray-200 shadow-xl max-h-40 overflow-y-auto rounded-md mt-1 text-xs top-full left-0">
+          {filtered.map(s => (
+            <li key={s} onMouseDown={() => handleSelect(s)} className="p-2 hover:bg-indigo-50 cursor-pointer border-b border-gray-50 last:border-0 text-gray-700">
+              {s}
+            </li>
+          ))}
+        </ul>
+      )}
+    </div>
+  );
+}
+
+export default function App() {
+  const defaultDataset = `black shorts, cleavage, dolphin shorts, feet, head out of frame, indoors, lying, no shoes, notebook, on stomach, pen, shirt, shorts, socks, soles, solo, the pose, v, veins, white shirt, white socks
+apple, arm up, barbell piercing, belt, belt buckle, black apple, black belt, black collar, black eyeliner, black nails, black panties, black shirt, black shorts, bra strap, bracelet, buckle, chain, chain necklace, clipboard, clothes writing, collar, cowboy shot, crate, ear chain, ear piercing, eyeliner, fangs, fingernails, food, food bite, fruit, half-closed eyes, hand up, holding, holding food, holding fruit, industrial piercing, jewelry, linked piercing, long fingernails, loose belt, makeup, midriff, mole, mole on nose, nail polish, navel, neck tattoo, necklace, o-ring, o-ring thigh strap, open clothes, open fly, open mouth, open shorts, panties, pentagram necklace, piercing, pillar, ring, shirt, short shorts, short sleeves, shorts, single off shoulder, smile, solo, spiked belt, spiked bracelet, spiked collar, spiked ear piercing, spikes, standing, stomach, stomach tattoo, string panties, studded belt, studded collar, tattoo, teeth, thigh strap, tied shirt, torn clothes, torn shorts, underwear, white background`;
+
+  // 상태 관리
+  const [lines, setLines] = useState(defaultDataset.split('\n'));
+  const [viewMode, setViewMode] = useState('single');
+  const [currentIndex, setCurrentIndex] = useState(0);
+  
+  // 부분집합(키워드 그룹) 및 단어 묶음 상태
+  const [subsets, setSubsets] = useState(() => loadSavedState('tagClassifier_subsets', [
+    { id: 1, name: '의상 (Clothes)', keywords: ['shorts', 'shirt'], excludeKeywords: ['black'] }
+  ]));
+  
+  const [leftTab, setLeftTab] = useState('subsets');
+  const [wordGroups, setWordGroups] = useState(() => loadSavedState('tagClassifier_wordGroups', [
+    { id: 1, name: 'color', words: ['black', 'white', 'red', 'blue', 'aqua', 'green', 'yellow', 'brown', 'pink', 'purple'] }
+  ]));
+
+  const [fullResults, setFullResults] = useState([]);
+  const [hasProcessed, setHasProcessed] = useState(false);
+  
+  // 결과 아코디언(열림/닫힘) 상태 관리
+  const [expandedLines, setExpandedLines] = useState(new Set());
+
+  // 중복 제거 다운로드 옵션 상태 추가
+  const [removeDuplicates, setRemoveDuplicates] = useState(false);
+
+  // === 파일 I/O 레퍼런스 ===
+  const fileInputRef = useRef(null);
+
+  // === 태그 사전(Dictionary) 전용 상태 ===
+  const [dictActiveSubsetId, setDictActiveSubsetId] = useState(1);
+  const [dictActionMode, setDictActionMode] = useState('include');
+  const [tagSearchQuery, setTagSearchQuery] = useState('');
+
+  // 태그 병합 헬퍼 함수
+  const escapeRegExp = (string) => string.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  const getMergedTag = (tag, groups) => {
+    let merged = tag;
+    groups.forEach(wg => {
+      if (!wg.name || !wg.words || wg.words.length === 0) return;
+      const wgName = wg.name.trim();
+      if (!wgName) return;
+      
+      const sortedWords = [...wg.words].sort((a,b) => b.length - a.length);
+      sortedWords.forEach(word => {
+        const escapedWord = escapeRegExp(word);
+        const regex = new RegExp(`(^|\\s)${escapedWord}(?=\\s|$)`, 'gi');
+        merged = merged.replace(regex, `$1{${wgName}}`);
+      });
+    });
+    return merged;
+  };
+
+  // 데이터셋에서 고유 태그 목록 추출
+  const uniqueTags = useMemo(() => {
+    const tags = new Set();
+    lines.forEach(line => {
+      if (!line.trim()) return;
+      line.split(',').forEach(t => {
+        let cleaned = t.trim().toLowerCase();
+        if (cleaned) {
+          cleaned = getMergedTag(cleaned, wordGroups);
+          tags.add(cleaned);
+        }
+      });
+    });
+    return Array.from(tags).sort((a, b) => a.localeCompare(b));
+  }, [lines, wordGroups]);
+
+  // 활성 그룹 안전 교체
+  useEffect(() => {
+    if (subsets.length > 0 && !subsets.find(s => s.id === dictActiveSubsetId)) {
+      setDictActiveSubsetId(subsets[0].id);
+    } else if (subsets.length === 0) {
+      setDictActiveSubsetId(null);
+    }
+  }, [subsets, dictActiveSubsetId]);
+
+  // 자동 저장
+  useEffect(() => {
+    localStorage.setItem('tagClassifier_subsets', JSON.stringify(subsets));
+  }, [subsets]);
+
+  useEffect(() => {
+    localStorage.setItem('tagClassifier_wordGroups', JSON.stringify(wordGroups));
+  }, [wordGroups]);
+
+  // === JSON 내보내기/가져오기 ===
+  const handleExportConfig = () => {
+    const config = { subsets, wordGroups };
+    const dataStr = "data:text/json;charset=utf-8," + encodeURIComponent(JSON.stringify(config, null, 2));
+    const a = document.createElement('a');
+    a.href = dataStr;
+    a.download = "tag_classifier_settings.json";
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+  };
+
+  const handleImportConfig = (e) => {
+    const file = e.target.files[0];
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onload = (event) => {
+      try {
+        const config = JSON.parse(event.target.result);
+        if (config.subsets) setSubsets(config.subsets);
+        if (config.wordGroups) setWordGroups(config.wordGroups);
+        e.target.value = ''; // 동일한 파일 재업로드 지원
+        alert("설정을 성공적으로 불러왔습니다.");
+      } catch (error) {
+        alert("유효하지 않은 설정 파일(JSON)입니다.");
+      }
+    };
+    reader.readAsText(file);
+  };
+
+  // === 부분집합 관리 ===
+  const addSubset = () => {
+    const newId = subsets.length > 0 ? Math.max(...subsets.map(s => s.id)) + 1 : 1;
+    setSubsets([...subsets, { id: newId, name: `새 부분집합 ${newId}`, keywords: [], excludeKeywords: [] }]);
+  };
+
+  const removeSubset = (id) => setSubsets(subsets.filter(s => s.id !== id));
+  const updateSubset = (id, field, value) => setSubsets(subsets.map(s => s.id === id ? { ...s, [field]: value } : s));
+
+  // === 단어 묶음 관리 ===
+  const addWordGroup = () => {
+    const newId = wordGroups.length > 0 ? Math.max(...wordGroups.map(w => w.id)) + 1 : 1;
+    setWordGroups([...wordGroups, { id: newId, name: `group${newId}`, words: [] }]);
+  };
+
+  const removeWordGroup = (id) => setWordGroups(wordGroups.filter(w => w.id !== id));
+  const updateWordGroup = (id, field, value) => setWordGroups(wordGroups.map(w => w.id === id ? { ...w, [field]: value } : w));
+
+  // 복수 단어 쉼표, 줄바꿈 분리 처리 로직 적용
+  const handleAddWordToGroup = (groupId, value) => {
+    const group = wordGroups.find(w => w.id === groupId);
+    if (!group) return;
+    // 엔터(\n) 및 쉼표(,) 모두 기준으로 단어 분리
+    const newWords = value.split(/[\n,]+/).map(v => v.trim()).filter(v => v);
+    if (newWords.length === 0) return;
+
+    const updatedWords = [...group.words];
+    newWords.forEach(word => {
+      if (!updatedWords.includes(word)) updatedWords.push(word);
+    });
+    updateWordGroup(groupId, 'words', updatedWords);
+  };
+
+  const handleRemoveWordFromGroup = (groupId, wordToRemove) => {
+    const group = wordGroups.find(w => w.id === groupId);
+    if (!group) return;
+    updateWordGroup(groupId, 'words', group.words.filter(w => w !== wordToRemove));
+  };
+
+  const handleAddKeyword = (subsetId, field, value) => {
+    const subset = subsets.find(s => s.id === subsetId);
+    if (!subset) return;
+    
+    // 엔터(\n) 및 쉼표(,) 모두 기준으로 단어 분리
+    const newTags = value.split(/[\n,]+/).map(v => v.trim()).filter(v => v);
+    if (newTags.length === 0) return;
+
+    const current = subset[field] || [];
+    const updatedTags = [...current];
+
+    newTags.forEach(tag => {
+      if (!updatedTags.includes(tag)) {
+        updatedTags.push(tag);
+      }
+    });
+
+    updateSubset(subsetId, field, updatedTags);
+  };
+
+  const handleRemoveKeyword = (subsetId, field, keywordToRemove) => {
+    const subset = subsets.find(s => s.id === subsetId);
+    if (!subset) return;
+    const current = subset[field] || [];
+    updateSubset(subsetId, field, current.filter(k => k !== keywordToRemove));
+  };
+
+  // 그룹 순서 변경 (위/아래) - 순차 분류에서 순서가 중요하므로 추가됨
+  const moveSubsetUp = (index) => {
+    if (index === 0) return;
+    const newSubsets = [...subsets];
+    [newSubsets[index - 1], newSubsets[index]] = [newSubsets[index], newSubsets[index - 1]];
+    setSubsets(newSubsets);
+  };
+
+  const moveSubsetDown = (index) => {
+    if (index === subsets.length - 1) return;
+    const newSubsets = [...subsets];
+    [newSubsets[index + 1], newSubsets[index]] = [newSubsets[index], newSubsets[index + 1]];
+    setSubsets(newSubsets);
+  };
+
+  // === 한 줄 처리 핵심 로직 (순차적 Waterfall 워크플로우로 개편) ===
+  const parseLine = (lineStr) => {
+    if (!lineStr || !lineStr.trim()) return [];
+    
+    // 초기에는 해당 라인의 모든 태그가 '남은 태그'로 시작
+    let remainingTags = lineStr.split(',').map(t => t.trim()).filter(t => t);
+    
+    // 순차적으로 하위 그룹을 통과
+    const parsedSubsets = subsets.map(sub => {
+      const includes = sub.keywords.map(k => k.trim().toLowerCase()).filter(k => k);
+      const excludes = sub.excludeKeywords.map(k => k.trim().toLowerCase()).filter(k => k);
+
+      const matchedTags = [];
+      const nextRemaining = [];
+
+      remainingTags.forEach(tag => {
+        const lowerTag = tag.toLowerCase();
+        const mergedTag = getMergedTag(lowerTag, wordGroups).toLowerCase();
+        
+        if (includes.length === 0) {
+          nextRemaining.push(tag); // 포함 키워드가 없으면 모두 다음으로 패스
+          return;
+        }
+        
+        const hasInclude = includes.some(inc => lowerTag.includes(inc) || mergedTag.includes(inc));
+        
+        // 정확히 일치하는 포함 키워드가 있는지 확인
+        const isExactIncludeMatch = includes.some(inc => lowerTag === inc || mergedTag === inc);
+        
+        // 정확히 일치하는 포함 키워드가 있다면 제외 규칙을 무시 (예외 처리)
+        const hasExclude = !isExactIncludeMatch && excludes.length > 0 && excludes.some(exc => lowerTag.includes(exc) || mergedTag.includes(exc));
+        
+        if (hasInclude && !hasExclude) {
+          matchedTags.push(tag); // 이 그룹에 매칭됨 (흡수)
+        } else {
+          nextRemaining.push(tag); // 매칭되지 않은 태그는 다음 그룹으로 넘어감
+        }
+      });
+
+      // 이번 그룹에서 걸러지지 않은 태그들만 다음 그룹의 입력으로 갱신
+      remainingTags = nextRemaining;
+
+      return { id: sub.id, name: sub.name, matches: matchedTags };
+    });
+
+    // 모든 그룹을 통과하고도 남은 태그들을 '미분류' 그룹(+1)으로 추가
+    parsedSubsets.push({
+      id: 'unclassified',
+      name: '미분류 태그',
+      matches: remainingTags
+    });
+
+    return parsedSubsets;
+  };
+
+  // === UI 이벤트 핸들러 ===
+  const handleBulkChange = (e) => {
+    setLines(e.target.value.split('\n'));
+    setCurrentIndex(0);
+  };
+
+  const handleSingleLineChange = (e) => {
+    const newLines = [...lines];
+    newLines[currentIndex] = e.target.value;
+    setLines(newLines);
+  };
+
+  const addLineAfterCurrent = () => {
+    const newLines = [...lines];
+    newLines.splice(currentIndex + 1, 0, '');
+    setLines(newLines);
+    setCurrentIndex(currentIndex + 1);
+  };
+
+  const deleteCurrentLine = () => {
+    if (lines.length <= 1) {
+      setLines(['']);
+      return;
+    }
+    const newLines = lines.filter((_, i) => i !== currentIndex);
+    setLines(newLines);
+    if (currentIndex >= newLines.length) {
+      setCurrentIndex(newLines.length - 1);
+    }
+  };
+
+  // 태그 사전(Dictionary) 스마트 토글 (3단계 상태 변경 로직 적용)
+  const toggleTagInDictionary = (tag) => {
+    if (!dictActiveSubsetId) return;
+    const subset = subsets.find(s => s.id === dictActiveSubsetId);
+    if (!subset) return;
+
+    const targetField = dictActionMode === 'include' ? 'keywords' : 'excludeKeywords';
+    let currentTags = [...(subset[targetField] || [])];
+    
+    // {변수} 가 포함되어 있는지 검사하고, 기본 키워드(baseTag)를 추출
+    const hasVariable = /\{.*?\}/.test(tag);
+    const baseTag = tag.replace(/\{.*?\}/g, '').replace(/\s+/g, ' ').trim();
+
+    if (hasVariable) {
+      if (currentTags.includes(tag)) {
+        // [3번째 클릭] 변수 포함 풀태그가 이미 등록된 경우 -> 아예 제거
+        currentTags = currentTags.filter(t => t !== tag);
+      } else if (currentTags.includes(baseTag)) {
+        // [2번째 클릭] 기본 키워드가 등록된 경우 -> 기본 제거 후 풀태그 등록
+        currentTags = currentTags.filter(t => t !== baseTag);
+        currentTags.push(tag);
+      } else {
+        // [1번째 클릭] 아무것도 없는 경우 -> 기본 키워드 먼저 등록
+        currentTags.push(baseTag);
+      }
+    } else {
+      // 일반 태그의 경우 토글만 수행
+      if (currentTags.includes(tag)) {
+        currentTags = currentTags.filter(t => t !== tag);
+      } else {
+        currentTags.push(tag);
+      }
+    }
+    
+    updateSubset(dictActiveSubsetId, targetField, currentTags);
+  };
+
+  const processAllData = () => {
+    const newResults = lines
+      .map((line, index) => {
+        if (!line.trim()) return null;
+        return {
+          lineIndex: index + 1,
+          subsetsData: parseLine(line)
+        };
+      })
+      .filter(Boolean);
+
+    setFullResults(newResults);
+    setHasProcessed(true);
+    setExpandedLines(new Set()); // 실행 시 열려있던 아코디언 초기화
+  };
+
+  // 결과 아코디언 토글
+  const toggleLineExpansion = (lineIndex) => {
+    setExpandedLines(prev => {
+      const next = new Set(prev);
+      if (next.has(lineIndex)) next.delete(lineIndex);
+      else next.add(lineIndex);
+      return next;
+    });
+  };
+
+  // === Export 기능 ===
+  const handleExportAll = () => {
+    if (fullResults.length === 0) return;
+    let linesToExport = [];
+    fullResults.forEach(result => {
+      const allLineMatches = [];
+      result.subsetsData.forEach(sub => {
+        // 통합 내보내기에서는 '미분류 태그'는 제외하고 분류된 것만 모음
+        if (sub.id !== 'unclassified' && sub.matches.length > 0) {
+          allLineMatches.push(...sub.matches);
+        }
+      });
+      const uniqueMatches = [...new Set(allLineMatches)];
+      linesToExport.push(uniqueMatches.length > 0 ? uniqueMatches.join(', ') : '');
+    });
+
+    // 중복 라인 제거 옵션이 켜져있을 경우
+    if (removeDuplicates) {
+      linesToExport = [...new Set(linesToExport.filter(line => line.trim() !== ''))];
+    }
+
+    const text = linesToExport.join('\n');
+    
+    const blob = new Blob([text], { type: 'text/plain;charset=utf-8' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `tag_classification_all.txt`;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+  };
+
+  const handleExportGroup = (subsetId, subsetName) => {
+    if (fullResults.length === 0) return;
+    let linesToExport = [];
+    fullResults.forEach(result => {
+      const subData = result.subsetsData.find(s => s.id === subsetId);
+      if (subData && subData.matches.length > 0) {
+        const uniqueMatches = [...new Set(subData.matches)];
+        linesToExport.push(uniqueMatches.join(', '));
+      } else {
+        linesToExport.push('');
+      }
+    });
+
+    // 중복 라인 제거 옵션이 켜져있을 경우
+    if (removeDuplicates) {
+      linesToExport = [...new Set(linesToExport.filter(line => line.trim() !== ''))];
+    }
+
+    const text = linesToExport.join('\n');
+    
+    const blob = new Blob([text], { type: 'text/plain;charset=utf-8' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `tags_${subsetName}.txt`;
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
+    URL.revokeObjectURL(url);
+  };
+
+  const currentLineStr = lines[currentIndex] || '';
+  const livePreviewData = useMemo(() => parseLine(currentLineStr), [currentLineStr, subsets]);
+
+  return (
+    <div className="min-h-screen bg-gray-50 p-6 font-sans text-gray-800 pb-20">
+      {/* 숨겨진 파일 인풋 (설정 불러오기용) */}
+      <input 
+        type="file" 
+        accept=".json" 
+        ref={fileInputRef} 
+        style={{ display: 'none' }} 
+        onChange={handleImportConfig} 
+      />
+
+      <div className="max-w-6xl mx-auto space-y-6">
+        {/* 헤더 */}
+        <div className="bg-white p-6 rounded-xl shadow-sm border border-gray-100 flex items-center justify-between">
+          <div>
+            <h1 className="text-2xl font-bold flex items-center gap-2 text-indigo-700">
+              <Tag className="w-6 h-6" />
+              Sequential Tag Classifier
+            </h1>
+            <p className="text-gray-500 mt-2 text-sm">
+              포함/제외 키워드를 설정하고, 데이터를 한 줄씩 실시간으로 확인하며 정교하게 분류하세요.
+            </p>
+          </div>
+          <button 
+            onClick={processAllData}
+            className="hidden md:flex items-center gap-2 bg-indigo-600 text-white px-6 py-3 rounded-lg hover:bg-indigo-700 transition-colors font-medium shadow-sm"
+          >
+            <Play className="w-4 h-4" /> 전체 실행
+          </button>
+        </div>
+
+        <div className="grid grid-cols-1 lg:grid-cols-12 gap-6">
+          {/* 왼쪽 컬럼 */}
+          <div className="lg:col-span-4 bg-white p-5 rounded-xl shadow-sm border border-gray-100 flex flex-col h-[600px]">
+            <div className="flex border-b border-gray-200 mb-4">
+              <button
+                className={`flex-1 py-2.5 text-sm font-medium border-b-2 transition-colors text-center ${
+                  leftTab === 'subsets' ? 'border-indigo-600 text-indigo-600' : 'border-transparent text-gray-500 hover:text-gray-700'
+                }`}
+                onClick={() => setLeftTab('subsets')}
+              >
+                분류 그룹 설정
+              </button>
+              <button
+                className={`flex-1 flex items-center justify-center gap-1 py-2.5 text-sm font-medium border-b-2 transition-colors text-center ${
+                  leftTab === 'wordGroups' ? 'border-indigo-600 text-indigo-600' : 'border-transparent text-gray-500 hover:text-gray-700'
+                }`}
+                onClick={() => setLeftTab('wordGroups')}
+              >
+                <Settings2 className="w-4 h-4" /> 단어 묶음 (변수)
+              </button>
+            </div>
+
+            {leftTab === 'subsets' ? (
+              <>
+                <div className="flex justify-between items-center mb-4">
+                  <h2 className="text-lg font-semibold flex items-center gap-2">
+                    <Layers className="w-5 h-5 text-gray-400" /> 키워드 설정
+                  </h2>
+                  <div className="flex gap-1">
+                    <button onClick={handleExportConfig} title="설정 백업(내보내기)" className="flex items-center text-xs bg-gray-100 text-gray-600 p-1.5 rounded hover:bg-gray-200">
+                      <Download className="w-4 h-4" />
+                    </button>
+                    <button onClick={() => fileInputRef.current?.click()} title="설정 복원(가져오기)" className="flex items-center text-xs bg-gray-100 text-gray-600 p-1.5 rounded hover:bg-gray-200 mr-1">
+                      <Upload className="w-4 h-4" />
+                    </button>
+                    <button onClick={addSubset} className="flex items-center gap-1 text-xs bg-indigo-50 text-indigo-600 px-2 py-1.5 rounded hover:bg-indigo-100">
+                      <Plus className="w-3.5 h-3.5" /> 그룹 추가
+                    </button>
+                  </div>
+                </div>
+                
+                <p className="text-[11px] text-gray-500 mb-3 leading-relaxed">
+                  ※ 그룹은 위에서부터 <b className="text-indigo-600">순차적으로 적용</b>됩니다. 상위 그룹에서 분류된 태그는 다음 그룹으로 넘어가지 않습니다.
+                </p>
+
+                <div className="flex-1 space-y-4 overflow-y-auto pr-2 custom-scrollbar">
+                  {subsets.map((subset, index) => (
+                    <div key={subset.id} className="p-4 bg-gray-50 border border-gray-200 rounded-lg relative group transition-all hover:border-indigo-200">
+                      
+                      {/* 우측 상단 컨트롤 패널 (순서 이동 및 삭제) */}
+                      <div className="absolute top-2 right-2 flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity bg-gray-50/80 rounded px-1">
+                        <button onClick={() => moveSubsetUp(index)} disabled={index === 0} className="text-gray-400 hover:text-indigo-600 disabled:opacity-30 disabled:hover:text-gray-400 p-1">
+                          <ArrowUp className="w-4 h-4" />
+                        </button>
+                        <button onClick={() => moveSubsetDown(index)} disabled={index === subsets.length - 1} className="text-gray-400 hover:text-indigo-600 disabled:opacity-30 disabled:hover:text-gray-400 p-1">
+                          <ArrowDown className="w-4 h-4" />
+                        </button>
+                        <div className="w-px h-3 bg-gray-300 mx-1"></div>
+                        <button onClick={() => removeSubset(subset.id)} className="text-gray-400 hover:text-red-500 p-1" title="그룹 삭제">
+                          <Trash2 className="w-4 h-4" />
+                        </button>
+                      </div>
+
+                      <div className="space-y-3">
+                        <div className="flex items-center gap-2">
+                          <span className="text-xs font-bold text-gray-400 w-5 h-5 flex items-center justify-center bg-white border border-gray-200 rounded-full">{index + 1}</span>
+                          <input 
+                            type="text" 
+                            value={subset.name}
+                            onChange={(e) => updateSubset(subset.id, 'name', e.target.value)}
+                            placeholder="부분집합 이름"
+                            className="flex-1 font-semibold text-sm p-1.5 bg-transparent border-b border-gray-300 focus:border-indigo-500 focus:outline-none placeholder-gray-400"
+                          />
+                        </div>
+                        <div>
+                          <label className="block text-[11px] font-medium text-indigo-600 mb-1">포함할 키워드 (+)</label>
+                          <div className="flex flex-wrap gap-1 mb-2">
+                            {subset.keywords.map(kw => (
+                              <span key={kw} className="bg-indigo-100 text-indigo-700 text-[11px] px-2 py-1 rounded flex items-center gap-1">
+                                {kw}
+                                <button onClick={() => handleRemoveKeyword(subset.id, 'keywords', kw)} className="hover:text-indigo-900 focus:outline-none">
+                                  <X className="w-3 h-3" />
+                                </button>
+                              </span>
+                            ))}
+                          </div>
+                          <AutocompleteInput 
+                            placeholder="키워드 입력(붙여넣기 지원) 후 Enter"
+                            className="w-full text-xs p-2 border border-indigo-100 rounded focus:ring-1 focus:ring-indigo-500 outline-none font-mono"
+                            suggestions={uniqueTags}
+                            onAdd={(val) => handleAddKeyword(subset.id, 'keywords', val)}
+                          />
+                        </div>
+                        <div>
+                          <label className="block text-[11px] font-medium text-red-500 mb-1">제외할 키워드 (-)</label>
+                          <div className="flex flex-wrap gap-1 mb-2">
+                            {subset.excludeKeywords.map(kw => (
+                              <span key={kw} className="bg-red-100 text-red-700 text-[11px] px-2 py-1 rounded flex items-center gap-1">
+                                {kw}
+                                <button onClick={() => handleRemoveKeyword(subset.id, 'excludeKeywords', kw)} className="hover:text-red-900 focus:outline-none">
+                                  <X className="w-3 h-3" />
+                                </button>
+                              </span>
+                            ))}
+                          </div>
+                          <AutocompleteInput 
+                            placeholder="키워드 입력(붙여넣기 지원) 후 Enter"
+                            className="w-full text-xs p-2 border border-red-100 bg-red-50/30 rounded focus:ring-1 focus:ring-red-400 outline-none font-mono"
+                            suggestions={uniqueTags}
+                            onAdd={(val) => handleAddKeyword(subset.id, 'excludeKeywords', val)}
+                          />
+                        </div>
+                      </div>
+                    </div>
+                  ))}
+                  {subsets.length === 0 && (
+                    <div className="text-center text-sm text-gray-500 py-8 border-2 border-dashed border-gray-200 rounded-lg">
+                      그룹이 없습니다. 추가해주세요.
+                    </div>
+                  )}
+                </div>
+              </>
+            ) : (
+              <>
+                <div className="flex justify-between items-center mb-4">
+                  <h2 className="text-lg font-semibold flex items-center gap-2">
+                    <Settings2 className="w-5 h-5 text-gray-400" /> 단어 묶음 관리
+                  </h2>
+                  <div className="flex gap-1">
+                    <button onClick={handleExportConfig} title="설정 백업(내보내기)" className="flex items-center text-xs bg-gray-100 text-gray-600 p-1.5 rounded hover:bg-gray-200">
+                      <Download className="w-4 h-4" />
+                    </button>
+                    <button onClick={() => fileInputRef.current?.click()} title="설정 복원(가져오기)" className="flex items-center text-xs bg-gray-100 text-gray-600 p-1.5 rounded hover:bg-gray-200 mr-1">
+                      <Upload className="w-4 h-4" />
+                    </button>
+                    <button onClick={addWordGroup} className="flex items-center gap-1 text-xs bg-emerald-50 text-emerald-600 px-2.5 py-1.5 rounded-md hover:bg-emerald-100">
+                      <Plus className="w-3.5 h-3.5" /> 묶음 추가
+                    </button>
+                  </div>
+                </div>
+                <p className="text-[11px] text-gray-500 mb-3 leading-relaxed">
+                  특정 단어들을 하나의 변수로 치환합니다. <br/>예) 이름: <b>color</b>, 단어: <b>black, blue</b><br/>👉 "black shirts"는 <b>{"{color} shirts"}</b>로 통합 처리됩니다.
+                </p>
+                
+                <div className="flex-1 space-y-4 overflow-y-auto pr-2 custom-scrollbar">
+                  {wordGroups.map((group) => (
+                    <div key={group.id} className="p-4 bg-emerald-50/30 border border-emerald-100 rounded-lg relative group transition-all hover:border-emerald-300">
+                      <button 
+                        onClick={() => removeWordGroup(group.id)}
+                        className="absolute top-3 right-3 text-gray-400 hover:text-red-500 opacity-0 group-hover:opacity-100 transition-opacity"
+                      >
+                        <Trash2 className="w-4 h-4" />
+                      </button>
+                      <div className="space-y-3">
+                        <div>
+                          <div className="flex items-center gap-1 mb-1">
+                            <span className="text-emerald-600 font-mono font-bold text-sm">{"{"}</span>
+                            <input 
+                              type="text" 
+                              value={group.name}
+                              onChange={(e) => updateWordGroup(group.id, 'name', e.target.value.replace(/[^a-zA-Z0-9_-]/g, ''))}
+                              placeholder="변수명 (영문/숫자)"
+                              className="w-full font-bold text-sm p-1 bg-white border border-emerald-200 rounded focus:border-emerald-500 focus:outline-none placeholder-gray-400 text-emerald-800"
+                            />
+                            <span className="text-emerald-600 font-mono font-bold text-sm">{"}"}</span>
+                          </div>
+                        </div>
+                        <div>
+                          <label className="block text-[11px] font-medium text-emerald-700 mb-1">포함할 단어 목록</label>
+                          <div className="flex flex-wrap gap-1 mb-2">
+                            {group.words.map(word => (
+                              <span key={word} className="bg-white border border-emerald-200 text-emerald-700 text-[11px] px-2 py-1 rounded flex items-center gap-1 shadow-sm">
+                                {word}
+                                <button onClick={() => handleRemoveWordFromGroup(group.id, word)} className="hover:text-emerald-900 focus:outline-none">
+                                  <X className="w-3 h-3" />
+                                </button>
+                              </span>
+                            ))}
+                          </div>
+                          <AutocompleteInput 
+                            placeholder="단어 입력(붙여넣기 지원) 후 Enter"
+                            className="w-full text-xs p-2 border border-emerald-200 rounded focus:ring-1 focus:ring-emerald-500 outline-none font-mono bg-white"
+                            suggestions={uniqueTags}
+                            onAdd={(val) => handleAddWordToGroup(group.id, val)}
+                          />
+                        </div>
+                      </div>
+                    </div>
+                  ))}
+                  {wordGroups.length === 0 && (
+                    <div className="text-center text-sm text-gray-500 py-8 border-2 border-dashed border-gray-200 rounded-lg">
+                      정의된 단어 묶음이 없습니다.
+                    </div>
+                  )}
+                </div>
+              </>
+            )}
+          </div>
+
+          {/* 오른쪽 컬럼 */}
+          <div className="lg:col-span-8 bg-white p-5 rounded-xl shadow-sm border border-gray-100 flex flex-col h-[600px]">
+            <div className="flex border-b border-gray-200 mb-4 overflow-x-auto custom-scrollbar flex-shrink-0">
+              <button
+                className={`flex items-center gap-2 px-4 py-2.5 text-sm font-medium border-b-2 transition-colors whitespace-nowrap ${
+                  viewMode === 'single' ? 'border-indigo-600 text-indigo-600' : 'border-transparent text-gray-500 hover:text-gray-700'
+                }`}
+                onClick={() => setViewMode('single')}
+              >
+                <FileText className="w-4 h-4" /> 한 줄씩 보며 입력
+              </button>
+              <button
+                className={`flex items-center gap-2 px-4 py-2.5 text-sm font-medium border-b-2 transition-colors whitespace-nowrap ${
+                  viewMode === 'bulk' ? 'border-indigo-600 text-indigo-600' : 'border-transparent text-gray-500 hover:text-gray-700'
+                }`}
+                onClick={() => setViewMode('bulk')}
+              >
+                <Layers className="w-4 h-4" /> 전체 데이터셋 편집
+              </button>
+              <button
+                className={`flex items-center gap-2 px-4 py-2.5 text-sm font-medium border-b-2 transition-colors whitespace-nowrap ${
+                  viewMode === 'dictionary' ? 'border-indigo-600 text-indigo-600' : 'border-transparent text-gray-500 hover:text-gray-700'
+                }`}
+                onClick={() => setViewMode('dictionary')}
+              >
+                <Database className="w-4 h-4" /> 전체 태그 목록 (클릭)
+              </button>
+            </div>
+
+            {viewMode === 'single' && (
+              <div className="flex flex-col h-full space-y-4">
+                <div className="flex justify-between items-center bg-gray-50 p-2 rounded-lg border border-gray-200">
+                  <div className="flex items-center gap-3">
+                    <button 
+                      onClick={() => setCurrentIndex(prev => Math.max(0, prev - 1))}
+                      disabled={currentIndex === 0}
+                      className="p-1.5 rounded bg-white border border-gray-300 disabled:opacity-50 hover:bg-gray-100"
+                    >
+                      <ChevronLeft className="w-4 h-4" />
+                    </button>
+                    <span className="text-sm font-medium text-gray-600 w-24 text-center">
+                      Line {currentIndex + 1} <span className="text-gray-400 font-normal">/ {lines.length}</span>
+                    </span>
+                    <button 
+                      onClick={() => setCurrentIndex(prev => Math.min(lines.length - 1, prev + 1))}
+                      disabled={currentIndex === lines.length - 1}
+                      className="p-1.5 rounded bg-white border border-gray-300 disabled:opacity-50 hover:bg-gray-100"
+                    >
+                      <ChevronRight className="w-4 h-4" />
+                    </button>
+                  </div>
+                  <div className="flex gap-2">
+                    <button onClick={addLineAfterCurrent} className="text-xs flex items-center gap-1 px-2 py-1.5 bg-white border border-gray-300 rounded hover:bg-gray-100">
+                      <Plus className="w-3.5 h-3.5" /> 라인 추가
+                    </button>
+                    <button onClick={deleteCurrentLine} className="text-xs flex items-center gap-1 px-2 py-1.5 bg-white border border-gray-300 text-red-600 rounded hover:bg-red-50">
+                      <Trash className="w-3.5 h-3.5" /> 라인 삭제
+                    </button>
+                  </div>
+                </div>
+
+                <div className="flex-1 flex flex-col min-h-0">
+                  <label className="text-xs font-semibold text-gray-500 mb-1 uppercase tracking-wider">원본 태그 데이터</label>
+                  <textarea
+                    className="flex-1 w-full p-4 border border-gray-300 rounded-lg focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 outline-none resize-none font-mono text-sm shadow-inner bg-gray-50/50"
+                    value={lines[currentIndex] || ''}
+                    onChange={handleSingleLineChange}
+                    placeholder="태그를 쉼표(,)로 구분하여 입력하세요..."
+                  />
+                </div>
+
+                <div className="h-48 border-t-2 border-dashed border-gray-200 pt-4 flex flex-col">
+                  <label className="text-xs font-semibold text-indigo-500 mb-2 uppercase tracking-wider flex items-center gap-1">
+                    <Play className="w-3 h-3" /> 실시간 분류 결과 미리보기
+                  </label>
+                  <div className="flex-1 overflow-y-auto bg-indigo-50/50 p-3 rounded-lg border border-indigo-100 space-y-2 custom-scrollbar">
+                    {livePreviewData.map(subData => (
+                      <div key={subData.id} className={`flex flex-col sm:flex-row sm:items-start gap-2 bg-white p-2 rounded border ${subData.id === 'unclassified' ? 'border-gray-200 bg-gray-50/50' : 'border-indigo-50'}`}>
+                        <span className={`text-xs font-bold px-2 py-1 rounded w-fit sm:w-32 flex-shrink-0 text-center ${subData.id === 'unclassified' ? 'text-gray-500 bg-gray-200' : 'text-indigo-700 bg-indigo-100'}`}>
+                          {subData.name}
+                        </span>
+                        <div className="flex-1 text-sm font-mono text-gray-800 break-words flex flex-wrap gap-1">
+                          {subData.matches.length > 0 ? (
+                            subData.matches.map((match, i) => (
+                              <span key={i} className={`px-1.5 py-0.5 rounded text-xs border ${subData.id === 'unclassified' ? 'bg-white border-gray-300 text-gray-500' : 'bg-gray-100 border-gray-200'}`}>{match}</span>
+                            ))
+                          ) : (
+                            <span className="text-gray-400 italic text-xs py-0.5">매칭된 태그 없음</span>
+                          )}
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              </div>
+            )}
+            
+            {viewMode === 'bulk' && (
+              <div className="flex flex-col h-full">
+                <p className="text-xs text-gray-500 mb-2">각 라인은 하나의 태그 집합입니다. 전체 데이터를 자유롭게 복사/붙여넣기 하세요.</p>
+                <textarea
+                  className="flex-1 w-full p-4 border border-gray-300 rounded-lg focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 outline-none resize-none font-mono text-sm leading-relaxed whitespace-pre custom-scrollbar"
+                  value={lines.join('\n')}
+                  onChange={handleBulkChange}
+                  placeholder="여러 줄의 태그 데이터를 입력하세요..."
+                />
+              </div>
+            )}
+
+            {viewMode === 'dictionary' && (
+              <div className="flex flex-col h-full space-y-4">
+                <div className="flex flex-col sm:flex-row gap-3 bg-gray-50 p-3 rounded-lg border border-gray-200">
+                  <div className="flex-1">
+                    <label className="block text-xs font-semibold text-gray-500 mb-1">대상 그룹 선택</label>
+                    <select 
+                      className="w-full text-sm p-2 border border-gray-300 rounded focus:ring-2 focus:ring-indigo-500 outline-none bg-white"
+                      value={dictActiveSubsetId || ''}
+                      onChange={(e) => setDictActiveSubsetId(Number(e.target.value))}
+                      disabled={subsets.length === 0}
+                    >
+                      {subsets.length === 0 && <option value="">그룹을 먼저 생성해주세요</option>}
+                      {subsets.map(sub => (
+                        <option key={sub.id} value={sub.id}>{sub.name}</option>
+                      ))}
+                    </select>
+                  </div>
+                  <div>
+                    <label className="block text-xs font-semibold text-gray-500 mb-1">태그 클릭 시 동작</label>
+                    <div className="flex rounded-lg overflow-hidden border border-gray-300">
+                      <button 
+                        onClick={() => setDictActionMode('include')}
+                        className={`px-3 py-1.5 text-sm font-medium flex items-center gap-1 transition-colors ${
+                          dictActionMode === 'include' ? 'bg-indigo-100 text-indigo-700' : 'bg-white text-gray-500 hover:bg-gray-50'
+                        }`}
+                      >
+                        <CheckCircle className="w-4 h-4" /> 포함(+)
+                      </button>
+                      <button 
+                        onClick={() => setDictActionMode('exclude')}
+                        className={`px-3 py-1.5 text-sm font-medium flex items-center gap-1 transition-colors border-l border-gray-300 ${
+                          dictActionMode === 'exclude' ? 'bg-red-100 text-red-700' : 'bg-white text-gray-500 hover:bg-gray-50'
+                        }`}
+                      >
+                        <XCircle className="w-4 h-4" /> 제외(-)
+                      </button>
+                    </div>
+                  </div>
+                  <div className="flex-1">
+                    <label className="block text-xs font-semibold text-gray-500 mb-1">태그 검색</label>
+                    <div className="relative">
+                      <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 w-4 h-4 text-gray-400" />
+                      <input 
+                        type="text" 
+                        value={tagSearchQuery}
+                        onChange={(e) => setTagSearchQuery(e.target.value)}
+                        placeholder="찾고 싶은 태그 검색..."
+                        className="w-full text-sm pl-8 p-2 border border-gray-300 rounded focus:ring-2 focus:ring-indigo-500 outline-none bg-white"
+                      />
+                    </div>
+                  </div>
+                </div>
+
+                <div className="flex-1 overflow-y-auto border border-gray-200 rounded-lg p-4 bg-white custom-scrollbar">
+                  {subsets.length === 0 ? (
+                    <div className="h-full flex items-center justify-center text-gray-400 text-sm">
+                      먼저 좌측에서 그룹을 생성해주세요.
+                    </div>
+                  ) : (
+                    <div className="flex flex-wrap gap-2 content-start">
+                      {uniqueTags
+                        .filter(tag => tag.toLowerCase().includes(tagSearchQuery.toLowerCase()))
+                        .map(tag => {
+                          const activeSub = subsets.find(s => s.id === dictActiveSubsetId);
+                          
+                          const explicitIn = activeSub ? (activeSub.keywords || []).includes(tag) : false;
+                          const explicitEx = activeSub ? (activeSub.excludeKeywords || []).includes(tag) : false;
+                          
+                          const implicitIn = !explicitIn && activeSub ? (activeSub.keywords || []).some(kw => tag.toLowerCase().includes(kw.toLowerCase())) : false;
+                          const implicitEx = !explicitEx && activeSub ? (activeSub.excludeKeywords || []).some(kw => tag.toLowerCase().includes(kw.toLowerCase())) : false;
+                          
+                          let btnStyle = "bg-gray-50 text-gray-600 border-gray-200 hover:bg-gray-200";
+                          
+                          if (implicitIn) btnStyle = "bg-indigo-50 text-indigo-500 border-indigo-300 border-dashed hover:bg-indigo-100";
+                          
+                          // 제외 조건 적용 (단, '포함할 키워드'에 정확히 일치(explicitIn)하는 경우는 제외 무시)
+                          if (!explicitIn) {
+                            if (implicitEx) btnStyle = "bg-red-50 text-red-500 border-red-300 border-dashed hover:bg-red-100";
+                            if (explicitEx) btnStyle = "bg-red-100 text-red-800 border-red-400 hover:bg-red-200 shadow-sm font-bold";
+                          }
+
+                          // 정확히 일치하는 직접 포함 조건이 디자인 우선순위가 가장 높음
+                          if (explicitIn) btnStyle = "bg-indigo-100 text-indigo-800 border-indigo-400 hover:bg-indigo-200 shadow-sm font-bold";
+
+                          const hasVariable = /\{.*?\}/.test(tag);
+                          
+                          return (
+                            <button
+                              key={tag}
+                              onClick={() => toggleTagInDictionary(tag)}
+                              className={`px-2.5 py-1.5 rounded-md text-xs font-mono border transition-colors ${btnStyle}`}
+                              title={hasVariable ? "클릭 1: 기본단어 포함 | 클릭 2: 전체 포맷 포함 | 클릭 3: 제거" : (implicitIn ? "간접 포함됨" : implicitEx ? "간접 제외됨" : "")}
+                            >
+                              {tag}
+                            </button>
+                          );
+                      })}
+                      {uniqueTags.filter(tag => tag.toLowerCase().includes(tagSearchQuery.toLowerCase())).length === 0 && (
+                        <div className="w-full text-center text-gray-400 text-sm py-8">
+                          검색 결과가 없습니다.
+                        </div>
+                      )}
+                    </div>
+                  )}
+                </div>
+                
+                <div className="flex flex-col gap-2 mt-1">
+                  <div className="flex flex-wrap items-center gap-3 text-[11px] text-gray-500 px-1">
+                    <div className="flex items-center gap-1"><span className="w-3 h-3 rounded bg-indigo-100 border border-indigo-400 inline-block"></span> 직접 포함</div>
+                    <div className="flex items-center gap-1"><span className="w-3 h-3 rounded bg-indigo-50 border border-indigo-300 border-dashed inline-block"></span> 간접 포함</div>
+                    <div className="flex items-center gap-1"><span className="w-3 h-3 rounded bg-red-100 border border-red-400 inline-block"></span> 직접 제외</div>
+                    <div className="flex items-center gap-1"><span className="w-3 h-3 rounded bg-red-50 border border-red-300 border-dashed inline-block"></span> 간접 제외</div>
+                  </div>
+                </div>
+              </div>
+            )}
+          </div>
+        </div>
+
+        <button 
+          onClick={processAllData}
+          className="md:hidden w-full flex items-center justify-center gap-2 bg-indigo-600 text-white py-4 rounded-xl hover:bg-indigo-700 transition-colors font-bold shadow-lg mt-4"
+        >
+          <Play className="w-5 h-5" /> 전체 데이터 분류 실행
+        </button>
+
+        {hasProcessed && (
+          <div className="bg-white p-6 rounded-xl shadow-sm border border-gray-200 mt-8 animate-fade-in">
+            <h2 className="text-xl font-bold mb-4 flex items-center gap-2 border-b pb-3">
+              <FileText className="w-5 h-5 text-indigo-600" /> 전체 분류 완료 결과
+              <div className="ml-auto flex items-center gap-3">
+                <span className="text-sm font-normal text-gray-500 bg-gray-100 px-2 py-1 rounded">
+                  총 {fullResults.length} 라인
+                </span>
+                
+                {fullResults.length > 0 && (
+                  <div className="flex items-center gap-2 border-l pl-3 border-gray-200 overflow-x-auto">
+                    <span className="text-xs text-gray-400 font-normal whitespace-nowrap">다운로드:</span>
+                    
+                    <label className="flex items-center gap-1.5 text-xs text-gray-600 cursor-pointer whitespace-nowrap mr-1 hover:text-indigo-600 transition-colors">
+                      <input 
+                        type="checkbox" 
+                        checked={removeDuplicates}
+                        onChange={(e) => setRemoveDuplicates(e.target.checked)}
+                        className="rounded border-gray-300 text-indigo-600 focus:ring-indigo-500 w-3.5 h-3.5 cursor-pointer"
+                      />
+                      중복 라인 제거
+                    </label>
+
+                    <button 
+                      onClick={handleExportAll}
+                      className="flex items-center gap-1 bg-gray-100 text-gray-700 text-xs px-2.5 py-1.5 rounded hover:bg-gray-200 transition-colors whitespace-nowrap"
+                      title="분류된 모든 그룹을 통합하여 저장 (미분류 제외)"
+                    >
+                      <Download className="w-3 h-3" /> 분류 통합
+                    </button>
+                    {fullResults[0].subsetsData.map(sub => (
+                      <button 
+                        key={sub.id}
+                        onClick={() => handleExportGroup(sub.id, sub.name)}
+                        className={`flex items-center gap-1 text-xs px-2.5 py-1.5 rounded transition-colors shadow-sm whitespace-nowrap border ${
+                          sub.id === 'unclassified' 
+                            ? 'bg-gray-100 text-gray-600 border-gray-300 hover:bg-gray-200' 
+                            : 'bg-indigo-50 text-indigo-700 border-indigo-200 hover:bg-indigo-100'
+                        }`}
+                      >
+                        <Download className="w-3 h-3" /> {sub.name}
+                      </button>
+                    ))}
+                  </div>
+                )}
+              </div>
+            </h2>
+            
+            <div className="space-y-4 max-h-[600px] overflow-y-auto pr-2 custom-scrollbar">
+              <p className="text-xs text-gray-400 px-1 mb-2 italic">※ 결과를 클릭하면 원본 라인의 태그 데이터를 펼쳐볼 수 있습니다.</p>
+              {fullResults.map((result) => (
+                <div 
+                  key={result.lineIndex} 
+                  className="p-4 border border-gray-200 hover:border-indigo-300 transition-colors bg-white rounded-lg shadow-sm cursor-pointer"
+                  onClick={() => toggleLineExpansion(result.lineIndex)}
+                >
+                  <div className="font-semibold text-sm text-gray-500 mb-3 flex justify-between">
+                    <span>Line {result.lineIndex}</span>
+                    <span className="text-xs text-indigo-400 font-normal">{expandedLines.has(result.lineIndex) ? '▲ 접기' : '▼ 원본 데이터 보기'}</span>
+                  </div>
+                  
+                  <div className="space-y-2 pl-1">
+                    {result.subsetsData.map(subData => {
+                      if (subData.matches.length === 0) return null;
+                      return (
+                        <div key={subData.id} className="flex flex-col sm:flex-row sm:items-start gap-2">
+                          <span className={`text-xs font-bold px-2 py-1 rounded w-fit sm:w-36 flex-shrink-0 ${
+                            subData.id === 'unclassified' ? 'text-gray-500 bg-gray-200' : 'text-gray-700 bg-gray-100'
+                          }`}>
+                            {subData.name}
+                          </span>
+                          <div className={`flex-1 text-sm font-mono break-words pt-0.5 ${
+                            subData.id === 'unclassified' ? 'text-gray-500' : 'text-indigo-900'
+                          }`}>
+                            {subData.matches.join(', ')}
+                          </div>
+                        </div>
+                      )
+                    })}
+                    {result.subsetsData.every(s => s.matches.length === 0) && (
+                      <span className="text-gray-400 italic text-sm">해당 라인에서 매칭된 태그가 없습니다.</span>
+                    )}
+                  </div>
+
+                  {/* 원본 데이터 표시 (아코디언 토글) */}
+                  {expandedLines.has(result.lineIndex) && (
+                    <div className="mt-4 pt-3 border-t border-gray-100">
+                      <span className="text-xs font-bold text-gray-500 mb-1 block">원본 라인 데이터:</span>
+                      <div className="text-sm font-mono text-gray-600 bg-gray-50 p-3 rounded border border-gray-200 break-words leading-relaxed">
+                        {lines[result.lineIndex - 1]}
+                      </div>
+                    </div>
+                  )}
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
+
+      </div>
+
+      <style dangerouslySetInnerHTML={{__html: `
+        .custom-scrollbar::-webkit-scrollbar { width: 8px; height: 8px; }
+        .custom-scrollbar::-webkit-scrollbar-track { background: #f1f5f9; border-radius: 4px; }
+        .custom-scrollbar::-webkit-scrollbar-thumb { background: #cbd5e1; border-radius: 4px; }
+        .custom-scrollbar::-webkit-scrollbar-thumb:hover { background: #94a3b8; }
+        .animate-fade-in { animation: fadeIn 0.4s ease-out forwards; }
+        @keyframes fadeIn { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: translateY(0); } }
+      `}} />
+    </div>
+  );
+}
