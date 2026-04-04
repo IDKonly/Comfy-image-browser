@@ -6,13 +6,21 @@ use rayon::prelude::*;
 use crate::db::DB;
 use crate::metadata::read_metadata;
 use tauri::{Manager, Emitter};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use std::sync::atomic::{AtomicU64, Ordering};
 use lazy_static::lazy_static;
+use notify::{Watcher, RecursiveMode, Config};
 
 lazy_static! {
     static ref CURRENT_SCAN_ID: Arc<AtomicU64> = Arc::new(AtomicU64::new(0));
 }
+
+pub struct FolderWatcher {
+    pub watcher: Option<notify::RecommendedWatcher>,
+    pub current_path: Option<String>,
+}
+
+pub struct WatcherState(pub Mutex<FolderWatcher>);
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct ImageInfo {
@@ -62,8 +70,113 @@ fn sort_images(images: &mut Vec<ImageInfo>, method: SortMethod) {
     }
 }
 
+fn setup_watcher(app_handle: tauri::AppHandle, path: &Path, is_recursive: bool, sort_method: SortMethod) -> notify::Result<notify::RecommendedWatcher> {
+    let app_handle_clone = app_handle.clone();
+    let path_buf = path.to_path_buf();
+    
+    // Use a simple debouncer logic: only trigger if last event was more than 500ms ago
+    let last_event = Arc::new(Mutex::new(std::time::Instant::now()));
+
+    let mut watcher = notify::RecommendedWatcher::new(move |res: notify::Result<notify::Event>| {
+        match res {
+            Ok(event) => {
+                // Filter events: Create, Remove, Modify (data), Rename
+                if event.kind.is_modify() || event.kind.is_create() || event.kind.is_remove() {
+                    let mut last = last_event.lock().unwrap();
+                    if last.elapsed() > std::time::Duration::from_millis(500) {
+                        *last = std::time::Instant::now();
+                        
+                        let app = app_handle_clone.clone();
+                        let p = path_buf.to_string_lossy().to_string();
+                        // Trigger a re-scan.
+                        let _ = std::thread::spawn(move || {
+                             let extensions = ["png", "jpg", "jpeg", "webp"];
+                             let depth = if is_recursive { 99 } else { 1 };
+                             let disk_entries: Vec<ImageInfo> = WalkDir::new(&p)
+                                .max_depth(depth)
+                                .into_iter()
+                                .filter_map(|e| e.ok())
+                                .filter(|e| e.file_type().is_file())
+                                .filter_map(|entry| {
+                                    if let Some(ext) = entry.path().extension().and_then(|s| s.to_str()) {
+                                        if extensions.contains(&ext.to_lowercase().as_str()) {
+                                            let metadata = entry.metadata().ok()?;
+                                            let mtime = metadata.modified().ok()?
+                                                .duration_since(UNIX_EPOCH).ok()?
+                                                .as_secs();
+                                            return Some(ImageInfo {
+                                                path: entry.path().to_string_lossy().to_string().replace("\\", "/"),
+                                                name: entry.file_name().to_string_lossy().to_string(),
+                                                mtime,
+                                                size: metadata.len(),
+                                            });
+                                        }
+                                    }
+                                    None
+                                })
+                                .collect();
+
+                            let mut images = disk_entries.clone();
+                            sort_images(&mut images, sort_method);
+                            
+                            let folder_str = p.replace("\\", "/");
+                            let _ = app.emit("folder-updated", ScanResult {
+                                images: images.clone(),
+                                initial_index: 0,
+                                folder: folder_str.clone(),
+                            });
+
+                            // Also trigger indexing for new/changed files in background
+                            if let Ok(db_path) = get_db_path(&app) {
+                                if let Ok(mut db) = DB::open(&db_path) {
+                                    let indexed_stats = db.get_folder_stats(&folder_str, is_recursive).unwrap_or_default();
+                                    
+                                    // Cleanup stale
+                                    let disk_paths: std::collections::HashSet<_> = disk_entries.iter().map(|img| img.path.clone()).collect();
+                                    let stale_paths: Vec<_> = indexed_stats.keys().filter(|path| !disk_paths.contains(*path)).cloned().collect();
+                                    if !stale_paths.is_empty() {
+                                        let _ = db.delete_images(&stale_paths);
+                                    }
+
+                                    let needs_indexing: Vec<_> = disk_entries.into_iter().filter(|img| {
+                                        match indexed_stats.get(&img.path) {
+                                            Some(&(m, s)) => m != img.mtime || s != img.size,
+                                            None => true,
+                                        }
+                                    }).collect();
+
+                                    if !needs_indexing.is_empty() {
+                                        // Parallel Indexing
+                                        let results: Vec<_> = needs_indexing.par_iter().map(|img| {
+                                            (img, read_metadata(&img.path).unwrap_or_default())
+                                        }).collect();
+                                        let _ = db.insert_images_batch(results);
+                                        let _ = app.emit("metadata-chunk-updated", ());
+                                    }
+                                }
+                            }
+                        });
+                    }
+                }
+            },
+            Err(e) => log::error!("Watcher error: {:?}", e),
+        }
+    }, Config::default())?;
+
+    let mode = if is_recursive { RecursiveMode::Recursive } else { RecursiveMode::NonRecursive };
+    watcher.watch(path, mode)?;
+    Ok(watcher)
+}
+
 #[tauri::command]
-pub fn scan_directory(app_handle: tauri::AppHandle, path: String, sort_method: Option<SortMethod>, recursive: Option<bool>, force_reindex: Option<bool>) -> Result<ScanResult, String> {
+pub fn scan_directory(
+    app_handle: tauri::AppHandle, 
+    watcher_state: tauri::State<'_, WatcherState>,
+    path: String, 
+    sort_method: Option<SortMethod>, 
+    recursive: Option<bool>, 
+    force_reindex: Option<bool>
+) -> Result<ScanResult, String> {
     let input_path = Path::new(&path);
     let (root, target_file) = if input_path.is_file() {
         (input_path.parent().ok_or("No parent directory")?, Some(input_path))
@@ -74,56 +187,74 @@ pub fn scan_directory(app_handle: tauri::AppHandle, path: String, sort_method: O
     };
 
     let root_str = root.to_string_lossy().to_string().replace("\\", "/");
-    let db_path = get_db_path(&app_handle)?;
     let is_recursive = recursive.unwrap_or(false);
-    let is_forced = force_reindex.unwrap_or(false);
     let method = sort_method.unwrap_or(SortMethod::NameAsc);
 
-    // 1. DB-First (unless forced)
-    let db = DB::open(&db_path).map_err(|e| e.to_string())?;
-    let mut images = if is_forced {
-        Vec::new()
-    } else {
-        db.get_images_in_folder_fast(&root_str, is_recursive).unwrap_or_default()
-    };
-    
-    // 2. Minimal Synchronous Fallback (Prevent Freeze)
-    // If we have a target file not in DB, JUST inject that single file temporarily.
-    let target_str = target_file.map(|t| t.to_string_lossy().to_string().replace("\\", "/"));
-    let mut initial_index = 0;
-
-    if let Some(ref target) = target_str {
-        if !images.iter().any(|img| &img.path == target) {
-            if let Ok(metadata) = std::fs::metadata(target) {
-                let mtime = metadata.modified().ok().and_then(|m| m.duration_since(UNIX_EPOCH).ok()).map(|d| d.as_secs()).unwrap_or(0);
-                images.push(ImageInfo {
-                    path: target.clone(),
-                    name: Path::new(target).file_name().unwrap_or_default().to_string_lossy().to_string(),
-                    mtime,
-                    size: metadata.len(),
-                });
+    // Update Watcher
+    {
+        let mut ws = watcher_state.0.lock().unwrap();
+        if ws.current_path.as_ref() != Some(&root_str) {
+            // Stop old watcher (happens automatically when dropped, but let's be explicit)
+            ws.watcher = None; 
+            match setup_watcher(app_handle.clone(), root, is_recursive, method) {
+                Ok(w) => {
+                    ws.watcher = Some(w);
+                    ws.current_path = Some(root_str.clone());
+                    log::info!("Started watching: {}", root_str);
+                },
+                Err(e) => log::error!("Failed to start watcher: {}", e),
             }
         }
     }
 
-    // Sort results
+    let is_forced = force_reindex.unwrap_or(false);
+
+    // 1. Synchronous Disk Scan (FAST)
+    let depth = if is_recursive { 99 } else { 1 };
+    let extensions = ["png", "jpg", "jpeg", "webp"];
+    
+    let disk_entries: Vec<ImageInfo> = WalkDir::new(root)
+        .max_depth(depth)
+        .into_iter()
+        .filter_map(|e| e.ok())
+        .filter(|e| e.file_type().is_file())
+        .filter_map(|entry| {
+            if let Some(ext) = entry.path().extension().and_then(|s| s.to_str()) {
+                if extensions.contains(&ext.to_lowercase().as_str()) {
+                    let metadata = entry.metadata().ok()?;
+                    let mtime = metadata.modified().ok()?
+                        .duration_since(UNIX_EPOCH).ok()?
+                        .as_secs();
+                    return Some(ImageInfo {
+                        path: entry.path().to_string_lossy().to_string().replace("\\", "/"),
+                        name: entry.file_name().to_string_lossy().to_string(),
+                        mtime,
+                        size: metadata.len(),
+                    });
+                }
+            }
+            None
+        })
+        .collect();
+
+    let mut images = disk_entries.clone();
     sort_images(&mut images, method);
 
-    // Find initial index
+    let target_str = target_file.map(|t| t.to_string_lossy().to_string().replace("\\", "/"));
+    let mut initial_index = 0;
     if let Some(ref target) = target_str {
         if let Some(pos) = images.iter().position(|img| &img.path == target) {
             initial_index = pos;
         }
     }
 
-    // 3. Cancellation
+    // 2. Cancellation
     let scan_id = CURRENT_SCAN_ID.fetch_add(1, Ordering::SeqCst) + 1;
 
-    // 4. Background Sync & Indexing
+    // 3. Background Indexing
     let app_handle_clone = app_handle.clone();
-    let root_path_buf = root.to_path_buf();
     let root_str_clone = root_str.clone();
-    let target_str_clone = target_str.clone();
+    let images_for_bg = images.clone(); // Clone for the background thread
 
     std::thread::spawn(move || {
         let app_handle = app_handle_clone;
@@ -138,66 +269,19 @@ pub fn scan_directory(app_handle: tauri::AppHandle, path: String, sort_method: O
 
         if CURRENT_SCAN_ID.load(Ordering::SeqCst) != scan_id { return; }
 
-        // A. Full disk scan for metadata update
-        let depth = if is_recursive { 99 } else { 1 };
-        let extensions = ["png", "jpg", "jpeg", "webp"];
-        
-        let disk_entries: Vec<ImageInfo> = WalkDir::new(&root_path_buf)
-            .max_depth(depth)
-            .into_iter()
-            .filter_map(|e| e.ok())
-            .filter(|e| e.file_type().is_file())
-            .filter_map(|entry| {
-                if let Some(ext) = entry.path().extension().and_then(|s| s.to_str()) {
-                    if extensions.contains(&ext.to_lowercase().as_str()) {
-                        let metadata = entry.metadata().ok()?;
-                        let mtime = metadata.modified().ok()?
-                            .duration_since(UNIX_EPOCH).ok()?
-                            .as_secs();
-                        return Some(ImageInfo {
-                            path: entry.path().to_string_lossy().to_string().replace("\\", "/"),
-                            name: entry.file_name().to_string_lossy().to_string(),
-                            mtime,
-                            size: metadata.len(),
-                        });
-                    }
-                }
-                None
-            })
-            .collect();
-
-        if CURRENT_SCAN_ID.load(Ordering::SeqCst) != scan_id { return; }
-
-        // B. Identify Changes & Recalculate Index
-        let mut current_images = disk_entries.clone();
-        sort_images(&mut current_images, method);
-
-        let mut bg_initial_index = 0;
-        if let Some(ref target) = target_str_clone {
-            if let Some(pos) = current_images.iter().position(|img| &img.path == target) {
-                bg_initial_index = pos;
-            }
-        }
-
-        let _ = app_handle.emit("folder-updated", ScanResult { 
-            images: current_images.clone(), 
-            initial_index: bg_initial_index, 
-            folder: root_str_clone.clone() 
-        });
-
-        // C. Cleanup stale DB entries
+        // A. Identify what needs indexing
         let indexed_stats = match db.get_folder_stats(&root_str_clone, is_recursive) {
             Ok(s) => s,
             Err(_) => std::collections::HashMap::new()
         };
 
+        // Cleanup stale DB entries
         let disk_paths: std::collections::HashSet<_> = disk_entries.iter().map(|img| img.path.clone()).collect();
         let stale_paths: Vec<_> = indexed_stats.keys().filter(|p| !disk_paths.contains(*p)).cloned().collect();
         if !stale_paths.is_empty() {
             let _ = db.delete_images(&stale_paths);
         }
 
-        // D. Filter images that need indexing using the HashMap
         let mut needs_indexing: Vec<_> = disk_entries.into_iter().filter(|img| {
             if is_forced { return true; }
             match indexed_stats.get(&img.path) {
@@ -208,20 +292,18 @@ pub fn scan_directory(app_handle: tauri::AppHandle, path: String, sort_method: O
 
         if needs_indexing.is_empty() { return; }
 
-        // E. Prioritize Indexing Outwards from Current Index (Spread Algorithm)
-        // Map each needed image to its position in the sorted `current_images`
-        let path_to_index: std::collections::HashMap<_, _> = current_images.iter().enumerate().map(|(i, img)| (img.path.clone(), i)).collect();
-        
+        // B. Prioritize Indexing Outwards from Current Index
+        let path_to_index: std::collections::HashMap<_, _> = images_for_bg.iter().enumerate().map(|(i, img)| (img.path.clone(), i)).collect();
         needs_indexing.sort_by_cached_key(|img| {
             let pos = path_to_index.get(&img.path).copied().unwrap_or(0);
-            (pos as isize - bg_initial_index as isize).abs()
+            (pos as isize - initial_index as isize).abs()
         });
 
-        // F. Parallel Metadata Extraction in CHUNKS
+        // C. Parallel Metadata Extraction
         let total = needs_indexing.len();
         let _ = app_handle.emit("index-progress", IndexProgress { total, current: 0, is_indexing: true });
 
-        let chunk_size = 50; // Process and save 50 images at a time
+        let chunk_size = 50;
         let mut processed_count = 0;
 
         for chunk in needs_indexing.chunks(chunk_size) {
@@ -240,15 +322,17 @@ pub fn scan_directory(app_handle: tauri::AppHandle, path: String, sort_method: O
 
             processed_count += chunk.len();
             let _ = app_handle.emit("index-progress", IndexProgress { total, current: processed_count, is_indexing: true });
-            
-            // Emit partial update so UI knows metadata is available for the current center
             let _ = app_handle.emit("metadata-chunk-updated", ());
         }
 
         let _ = app_handle.emit("index-progress", IndexProgress { total, current: total, is_indexing: false });
     });
 
-    Ok(ScanResult { images, initial_index, folder: root_str })
+    Ok(ScanResult {
+        images,
+        initial_index,
+        folder: root_str,
+    })
 }
 
 #[tauri::command]

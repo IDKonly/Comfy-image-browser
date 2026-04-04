@@ -277,8 +277,8 @@ function App() {
     const unlistenProgress = listen('index-progress', (event: any) => setIndexProgress(event.payload));
     const unlistenUpdate = listen('folder-updated', (event: any) => {
       const payload = event.payload as any;
-      if (payload.folder === folderPath || recursive) {
-        const state = useAppStore.getState();
+      const state = useAppStore.getState();
+      if (payload.folder === state.folderPath || recursive) {
         const currentImages = state.images;
         const currentIdx = state.currentIndex;
         
@@ -315,7 +315,7 @@ function App() {
         unlistenUpdate.then(f => f()); 
         unlistenChunk.then(f => f());
     };
-  }, [setIndexProgress, folderPath, recursive, setImages, setCurrentMetadata]);
+  }, [setIndexProgress, setImages, setCurrentMetadata]);
 
   // Scans & Updates
   const initialScanDone = useRef(false);

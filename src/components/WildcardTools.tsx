@@ -64,6 +64,9 @@ export const WildcardTools = ({ onClose, images, currentIndex, batchRange }: Wil
   const [results, setResults] = useState<string[]>([]);
   const [loading, setLoading] = useState(false);
   const [progress, setProgress] = useState(0);
+  const [inputMode, setInputMode] = useState<'images' | 'text'>('images');
+  const [textInput, setTextInput] = useState("");
+  const [comparisonText, setComparisonText] = useState("");
   
   const targetPaths = useAppStore(state => state.workshopTargetPaths);
   const setTargetPaths = useAppStore(state => state.setWorkshopTargetPaths);
@@ -264,21 +267,31 @@ export const WildcardTools = ({ onClose, images, currentIndex, batchRange }: Wil
     setLoading(true);
     setProgress(0);
     try {
-      if (targetPaths.length === 0) {
-        showToast("No images selected", "error");
+      const prompts = textInput.split('\n').map(s => s.trim()).filter(s => s);
+      const comparisonPrompts = comparisonText.split(/[\n,]/).map(s => s.trim()).filter(s => s);
+      
+      if (targetPaths.length === 0 && prompts.length === 0) {
+        showToast("No input (images or text) provided", "error");
         return;
       }
 
       let res: string[] = [];
-      if (comparisonPath) {
+      if (comparisonPath || comparisonPrompts.length > 0) {
           res = await invoke("compare_tags", { 
               targetPaths, 
-              comparisonPaths: [comparisonPath],
+              targetPrompts: prompts,
+              comparisonPaths: comparisonPath ? [comparisonPath] : [],
+              comparisonPrompts,
               threshold,
               filter
           }) as string[];
       } else {
-          res = await invoke("generate_wildcards", { paths: targetPaths, threshold, filter }) as string[];
+          res = await invoke("generate_wildcards", { 
+            paths: targetPaths, 
+            prompts,
+            threshold, 
+            filter 
+          }) as string[];
       }
       
       setResults(res);
@@ -291,10 +304,41 @@ export const WildcardTools = ({ onClose, images, currentIndex, batchRange }: Wil
     }
   };
 
+  const handleLoadTextFile = async () => {
+    try {
+        const selected = await open({
+            multiple: false,
+            filters: [{ name: 'Text', extensions: ['txt'] }]
+        });
+        if (selected && typeof selected === 'string') {
+            const { readTextFile } = await import("@tauri-apps/plugin-fs");
+            const text = await readTextFile(selected);
+            setTextInput(prev => prev ? prev + "\n" + text : text);
+            showToast("Loaded prompts from file", "success");
+        }
+    } catch (e: any) {
+        showToast("Check file permissions or try manual copy-paste", "info");
+    }
+  };
+
   const openRefiner = async () => {
     setLoading(true);
     try {
-      const counts = await invoke("get_tag_counts", { paths: targetPaths }) as Record<string, number>;
+      // Fetch counts from images
+      let counts: Record<string, number> = {};
+      if (targetPaths.length > 0) {
+        counts = await invoke("get_tag_counts", { paths: targetPaths }) as Record<string, number>;
+      }
+      
+      // Merge counts from text prompts
+      const prompts = textInput.split('\n').map(s => s.trim()).filter(s => s);
+      prompts.forEach(p => {
+          p.split(',').forEach(t => {
+              const tag = t.trim();
+              if (tag) counts[tag] = (counts[tag] || 0) + 1;
+          });
+      });
+
       setTagCounts(counts);
       setShowRefiner(true);
     } catch (e: any) {
@@ -352,7 +396,7 @@ export const WildcardTools = ({ onClose, images, currentIndex, batchRange }: Wil
             </div>
             <div>
               <h2 className="text-sm font-black uppercase tracking-widest">Wildcard Workshop</h2>
-              <p className="text-[10px] text-neutral-500 font-bold uppercase">Consolidated Tools & Analysis</p>
+              <p className="text-[10px] text-neutral-500 font-bold uppercase">Mixed Input Analysis (Images + Text)</p>
             </div>
           </div>
           <button onClick={onClose} className="p-2 hover:bg-white/5 rounded-full transition-colors">
@@ -361,45 +405,60 @@ export const WildcardTools = ({ onClose, images, currentIndex, batchRange }: Wil
         </div>
 
         <div className="flex flex-1 overflow-hidden">
-          {/* Path List Sidebar (Target Images) */}
-          <div className="w-72 border-r border-white/5 flex flex-col overflow-hidden bg-neutral-950/20">
-            <div className="p-4 border-b border-white/5 flex items-center justify-between shrink-0">
-                <span className="text-[10px] font-black uppercase tracking-widest text-neutral-500">Target Images ({targetPaths.length})</span>
-                <button onClick={clearPaths} className="text-[9px] font-black uppercase text-red-500 hover:text-red-400 transition-colors">Clear</button>
-            </div>
-            
-            <div className="p-3 grid grid-cols-1 gap-2 border-b border-white/5 bg-neutral-950/20">
-                <button onClick={handleImportFromViewer} className="flex items-center justify-center gap-2 py-2 bg-blue-600/20 hover:bg-blue-600/30 border border-blue-500/20 rounded-xl text-[9px] font-black uppercase transition-all text-blue-400">
-                    <LayoutGrid className="w-3.5 h-3.5" /> Import from Viewer
-                </button>
-                <div className="grid grid-cols-2 gap-2">
-                    <button onClick={handleAddFiles} className="flex items-center justify-center gap-2 py-2 bg-neutral-800 hover:bg-neutral-700 rounded-xl text-[9px] font-black uppercase transition-all">
-                        <FilePlus className="w-3.5 h-3.5" /> Files
-                    </button>
-                    <button onClick={handleAddFolder} className="flex items-center justify-center gap-2 py-2 bg-neutral-800 hover:bg-neutral-700 rounded-xl text-[9px] font-black uppercase transition-all">
-                        <FolderPlus className="w-3.5 h-3.5" /> Folder
-                    </button>
+          {/* Combined Sidebar */}
+          <div className="w-80 border-r border-white/5 flex flex-col overflow-hidden bg-neutral-950/20">
+            {/* Top: Image List */}
+            <div className="h-1/2 flex flex-col border-b border-white/5 overflow-hidden">
+                <div className="p-4 border-b border-white/5 flex items-center justify-between shrink-0 bg-neutral-900/50">
+                    <span className="text-[10px] font-black uppercase tracking-widest text-neutral-500">Target Images ({targetPaths.length})</span>
+                    <button onClick={clearPaths} className="text-[9px] font-black uppercase text-red-500 hover:text-red-400 transition-colors">Clear</button>
                 </div>
-                <button 
-                    onClick={() => setRecursive(!recursive)}
-                    className={`flex items-center justify-center gap-2 py-2 rounded-xl text-[9px] font-black uppercase transition-all border ${recursive ? 'bg-blue-600 border-blue-500 text-white shadow-lg shadow-blue-600/20' : 'bg-neutral-800 border-white/5 text-neutral-500 hover:text-neutral-300'}`}
-                >
-                    <Layers className="w-3.5 h-3.5" /> Recursive Scan
-                </button>
+                
+                <div className="p-3 grid grid-cols-1 gap-2 border-b border-white/5 bg-neutral-950/20 shrink-0">
+                    <button onClick={handleImportFromViewer} className="flex items-center justify-center gap-2 py-1.5 bg-blue-600/20 hover:bg-blue-600/30 border border-blue-500/20 rounded-lg text-[9px] font-black uppercase transition-all text-blue-400">
+                        <LayoutGrid className="w-3 h-3" /> Import from Viewer
+                    </button>
+                    <div className="grid grid-cols-2 gap-2">
+                        <button onClick={handleAddFiles} className="flex items-center justify-center gap-2 py-1.5 bg-neutral-800 hover:bg-neutral-700 rounded-lg text-[9px] font-black uppercase transition-all">
+                            <FilePlus className="w-3 h-3" /> Files
+                        </button>
+                        <button onClick={handleAddFolder} className="flex items-center justify-center gap-2 py-1.5 bg-neutral-800 hover:bg-neutral-700 rounded-lg text-[9px] font-black uppercase transition-all">
+                            <FolderPlus className="w-3 h-3" /> Folder
+                        </button>
+                    </div>
+                </div>
+
+                <div className="flex-1 overflow-y-auto p-2 space-y-1 scrollbar-thin">
+                    {targetPaths.length > 0 ? targetPaths.map(p => (
+                        <div key={p} className="group flex items-center justify-between p-1.5 bg-neutral-800/50 hover:bg-neutral-800 rounded border border-transparent hover:border-white/5 transition-all">
+                            <span className="text-[9px] text-neutral-400 truncate flex-1 pr-2">{p.split(/[\\/]/).pop()}</span>
+                            <button onClick={() => removePath(p)} className="opacity-0 group-hover:opacity-100 p-1 hover:bg-red-900/20 rounded text-red-500"><Trash2 className="w-3 h-3" /></button>
+                        </div>
+                    )) : (
+                        <div className="flex flex-col items-center justify-center h-full opacity-20 p-4 text-center">
+                            <p className="text-[8px] font-bold uppercase tracking-wider leading-relaxed">No images</p>
+                        </div>
+                    )}
+                </div>
             </div>
 
-            <div className="flex-1 overflow-y-auto p-2 space-y-1 scrollbar-thin">
-                {targetPaths.length > 0 ? targetPaths.map(p => (
-                    <div key={p} className="group flex items-center justify-between p-2 bg-neutral-800/50 hover:bg-neutral-800 rounded-lg border border-transparent hover:border-white/5 transition-all">
-                        <span className="text-[9px] text-neutral-400 truncate flex-1 pr-2">{p.split(/[\\/]/).pop()}</span>
-                        <button onClick={() => removePath(p)} className="opacity-0 group-hover:opacity-100 p-1 hover:bg-red-900/20 rounded text-red-500"><Trash2 className="w-3 h-3" /></button>
+            {/* Bottom: Text Input */}
+            <div className="h-1/2 flex flex-col overflow-hidden bg-neutral-950/40">
+                <div className="p-4 border-b border-white/5 flex items-center justify-between shrink-0 bg-neutral-900/50">
+                    <span className="text-[10px] font-black uppercase tracking-widest text-neutral-500">Text Prompts</span>
+                    <div className="flex gap-2">
+                        <button onClick={handleLoadTextFile} className="text-[9px] font-black uppercase text-blue-500 hover:text-blue-400 transition-colors">Import</button>
+                        <button onClick={() => setTextInput("")} className="text-[9px] font-black uppercase text-red-500 hover:text-red-400 transition-colors">Clear</button>
                     </div>
-                )) : (
-                    <div className="flex flex-col items-center justify-center h-full opacity-20 p-4 text-center">
-                        <FolderPlus className="w-8 h-8 mb-2" />
-                        <p className="text-[9px] font-bold uppercase tracking-wider leading-relaxed">Drag & Drop Images Here<br/>or use buttons above</p>
-                    </div>
-                )}
+                </div>
+                <div className="flex-1 p-3">
+                    <textarea 
+                        value={textInput}
+                        onChange={e => setTextInput(e.target.value)}
+                        className="w-full h-full bg-neutral-950/50 border border-white/5 rounded-xl p-3 text-[10px] font-mono focus:outline-none focus:border-blue-500/50 resize-none scrollbar-thin"
+                        placeholder="1girl, solo, baelz...&#10;1girl, solo, marine..."
+                    />
+                </div>
             </div>
           </div>
 
@@ -411,7 +470,7 @@ export const WildcardTools = ({ onClose, images, currentIndex, batchRange }: Wil
               {loading && (
                 <div className="space-y-2 animate-in fade-in duration-300">
                     <div className="flex justify-between text-[10px] font-black uppercase text-blue-400">
-                        <span>Processing Images...</span>
+                        <span>Unified Processing...</span>
                         <span>{progress.toFixed(0)}%</span>
                     </div>
                     <div className="w-full h-1.5 bg-neutral-950 rounded-full overflow-hidden border border-white/5">
@@ -420,32 +479,29 @@ export const WildcardTools = ({ onClose, images, currentIndex, batchRange }: Wil
                 </div>
               )}
 
-              {/* Header Info */}
-              <div className="bg-blue-600/5 border border-blue-500/10 p-4 rounded-2xl flex gap-4">
-                <Info className="w-5 h-5 text-blue-500 shrink-0" />
-                <p className="text-[11px] text-neutral-400 leading-relaxed">
-                  Extracts and compresses tags from multiple images into compact 
-                  <span className="text-blue-400 font-mono"> {"{base|diff}"} </span> wildcard patterns. 
-                  Similar prompts are merged automatically based on the similarity threshold.
-                </p>
-              </div>
-
-              {/* Cleaning Base Section */}
-              <div className="space-y-3 p-4 bg-amber-600/5 border border-amber-500/10 rounded-2xl">
-                <div className="flex items-center justify-between">
-                    <div className="flex items-center gap-2">
-                        <span className="text-[10px] font-black uppercase text-amber-500/70">Cleaning Base (Optional)</span>
-                        <div className="group relative">
-                            <Info className="w-3.5 h-3.5 text-amber-600 cursor-help" />
-                            <div className="absolute left-0 bottom-full mb-2 w-64 p-3 bg-neutral-900 border border-white/10 rounded-xl text-[9px] text-neutral-400 opacity-0 group-hover:opacity-100 transition-opacity pointer-events-none z-10 shadow-2xl leading-relaxed">
-                                Tags in this image (e.g., character base, quality tags) will be **subtracted** from target images to make the final wildcards cleaner.
-                            </div>
-                        </div>
+              {/* Cleaning Base Section (Integrated) */}
+              <div className="grid grid-cols-2 gap-4 bg-amber-600/5 border border-amber-500/10 p-4 rounded-2xl">
+                <div className="col-span-2 flex items-center gap-2 mb-1">
+                    <span className="text-[10px] font-black uppercase text-amber-500/70 tracking-widest">Cleaning Base (Subtract Common Tags)</span>
+                    <Info className="w-3 h-3 text-amber-600" />
+                </div>
+                {/* Base Image */}
+                <div className="space-y-2">
+                    <span className="text-[8px] font-black uppercase text-neutral-600 tracking-widest">Base Image</span>
+                    <div className={`p-3 rounded-xl border min-h-[50px] flex items-center justify-between transition-all ${comparisonPath ? 'bg-neutral-950 border-amber-500/30 shadow-[inner_0_2px_4px_rgba(0,0,0,0.3)]' : 'bg-neutral-950 border-white/5'}`}>
+                        <span className="text-[10px] text-neutral-400 truncate">{comparisonPath ? comparisonPath.split(/[\\/]/).pop() : "Drag image here"}</span>
+                        {comparisonPath && <button onClick={() => setComparisonPath(null)} className="p-1 hover:bg-red-900/20 rounded text-red-500"><X className="w-3 h-3" /></button>}
                     </div>
                 </div>
-                <div className={`p-3 rounded-xl border flex items-center justify-between transition-all ${comparisonPath ? 'bg-neutral-950 border-amber-500/30 shadow-[inner_0_2px_4px_rgba(0,0,0,0.3)]' : 'bg-neutral-950 border-white/5'}`}>
-                    <span className="text-[10px] text-neutral-400 truncate">{comparisonPath ? comparisonPath.split(/[\\/]/).pop() : "Drag a base image here to clean common tags"}</span>
-                    {comparisonPath && <button onClick={() => setComparisonPath(null)} className="p-1 hover:bg-red-900/20 rounded text-red-500"><X className="w-3.5 h-3.5" /></button>}
+                {/* Subtractive Text */}
+                <div className="space-y-2">
+                    <span className="text-[8px] font-black uppercase text-neutral-600 tracking-widest">Subtractive Tags</span>
+                    <textarea 
+                        value={comparisonText}
+                        onChange={e => setComparisonText(e.target.value)}
+                        className="w-full h-[50px] bg-neutral-950 border border-white/5 rounded-xl p-3 text-[10px] font-mono text-neutral-300 focus:outline-none focus:border-amber-500/30 resize-none scrollbar-thin"
+                        placeholder="masterpiece, best quality, solo..."
+                    />
                 </div>
               </div>
 
@@ -560,12 +616,12 @@ export const WildcardTools = ({ onClose, images, currentIndex, batchRange }: Wil
               {/* Action Button & Refiner */}
               <div className="flex gap-3">
                 <button 
-                    onClick={runWorkshop} disabled={loading || targetPaths.length === 0}
+                    onClick={runWorkshop} disabled={loading || (targetPaths.length === 0 && textInput.trim() === "")}
                     className="flex-1 py-4 bg-blue-600 hover:bg-blue-500 disabled:opacity-50 disabled:cursor-not-allowed rounded-2xl text-[11px] font-black uppercase tracking-widest transition-all shadow-xl active:scale-95 text-white"
                 >
-                    {loading ? "Processing..." : `Generate Compressed Wildcards (${targetPaths.length} Images)`}
+                    {loading ? "Processing..." : `Generate Wildcards (${targetPaths.length} Images + ${textInput.split('\n').filter(s => s.trim()).length} Text)`}
                 </button>
-                <button onClick={openRefiner} disabled={targetPaths.length === 0} className="px-6 py-4 bg-neutral-800 hover:bg-neutral-700 disabled:opacity-50 rounded-2xl text-[11px] font-black uppercase tracking-widest transition-all text-neutral-300" title="Manage Exclusions">
+                <button onClick={openRefiner} disabled={targetPaths.length === 0 && textInput.trim() === ""} className="px-6 py-4 bg-neutral-800 hover:bg-neutral-700 disabled:opacity-50 rounded-2xl text-[11px] font-black uppercase tracking-widest transition-all text-neutral-300" title="Manage Exclusions">
                     <ListFilter className="w-4 h-4" />
                 </button>
               </div>

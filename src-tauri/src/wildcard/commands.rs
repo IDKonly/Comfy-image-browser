@@ -63,26 +63,32 @@ pub fn get_tag_counts(app_handle: tauri::AppHandle, paths: Vec<String>) -> Resul
 }
 
 #[tauri::command]
-pub fn generate_wildcards(app_handle: tauri::AppHandle, window: Window, paths: Vec<String>, threshold: f32, filter: WildcardFilter) -> Result<Vec<String>, String> {
-    let total = paths.len();
+pub fn generate_wildcards(app_handle: tauri::AppHandle, window: Window, paths: Vec<String>, prompts: Vec<String>, threshold: f32, filter: WildcardFilter) -> Result<Vec<String>, String> {
+    let total = paths.len() + prompts.len();
+    if total == 0 { return Ok(Vec::new()); }
+    
     let current = Arc::new(AtomicUsize::new(0));
     let last_emitted_percent = Arc::new(AtomicUsize::new(0));
     let max_depth = if filter.max_depth == 0 { 3 } else { filter.max_depth };
     
+    // 1. Fetch prompts from DB/Metadata
     let mut db_prompts = HashMap::new();
-    if let Ok(db_path) = get_db_path_local(&app_handle) {
-        if let Ok(db) = DB::open(&db_path) {
-            if let Ok(images) = db.get_images_by_paths(&paths) {
-                for img in images {
-                    if let Some(p) = img.prompt {
-                        db_prompts.insert(img.path, p);
+    if !paths.is_empty() {
+        if let Ok(db_path) = get_db_path_local(&app_handle) {
+            if let Ok(db) = DB::open(&db_path) {
+                if let Ok(images) = db.get_images_by_paths(&paths) {
+                    for img in images {
+                        if let Some(p) = img.prompt {
+                            db_prompts.insert(img.path, p);
+                        }
                     }
                 }
             }
         }
     }
 
-    let tag_sets: Vec<HashSet<String>> = paths.par_iter()
+    // 2. Process Image Paths
+    let mut tag_sets: Vec<HashSet<String>> = paths.par_iter()
         .map(|path| {
             let prompt_opt = if let Some(p) = db_prompts.get(path) {
                 Some(p.clone())
@@ -108,17 +114,44 @@ pub fn generate_wildcards(app_handle: tauri::AppHandle, window: Window, paths: V
             
             let c = current.fetch_add(1, Ordering::SeqCst) + 1;
             let percent = (c * 100 / total) as usize;
-            
             let last = last_emitted_percent.load(Ordering::SeqCst);
             if percent > last || c == total {
                 last_emitted_percent.store(percent, Ordering::SeqCst);
                 let _ = window.emit("workshop-progress", percent as f32);
             }
-            
             res
         })
         .filter(|s| !s.is_empty())
         .collect();
+
+    // 3. Process Direct Text Prompts
+    let text_tag_sets: Vec<HashSet<String>> = prompts.par_iter()
+        .map(|prompt| {
+            let tags: HashSet<String> = prompt.split(',')
+                .map(|s| remove_unbalanced_braces(s))
+                .filter(|s| !s.trim().is_empty())
+                .collect();
+            
+            let filtered = apply_filters(tags, &filter);
+            
+            let c = current.fetch_add(1, Ordering::SeqCst) + 1;
+            let percent = (c * 100 / total) as usize;
+            let last = last_emitted_percent.load(Ordering::SeqCst);
+            if percent > last || c == total {
+                last_emitted_percent.store(percent, Ordering::SeqCst);
+                let _ = window.emit("workshop-progress", percent as f32);
+            }
+
+            if filter.min_tags > 0 && filtered.len() < filter.min_tags as usize {
+                HashSet::new()
+            } else {
+                filtered
+            }
+        })
+        .filter(|s| !s.is_empty())
+        .collect();
+
+    tag_sets.extend(text_tag_sets);
 
     if filter.simple_mode {
         let mut unique_prompts: HashSet<String> = tag_sets.into_iter()
@@ -143,27 +176,33 @@ pub fn generate_wildcards(app_handle: tauri::AppHandle, window: Window, paths: V
 }
 
 #[tauri::command]
-pub fn compare_tags(app_handle: tauri::AppHandle, window: Window, target_paths: Vec<String>, comparison_paths: Vec<String>, threshold: f32, filter: WildcardFilter) -> Result<Vec<String>, String> {
-    let total = target_paths.len() + comparison_paths.len();
+pub fn compare_tags(app_handle: tauri::AppHandle, window: Window, target_paths: Vec<String>, target_prompts: Vec<String>, comparison_paths: Vec<String>, comparison_prompts: Vec<String>, threshold: f32, filter: WildcardFilter) -> Result<Vec<String>, String> {
+    let total = target_paths.len() + target_prompts.len() + comparison_paths.len() + comparison_prompts.len();
+    if target_paths.is_empty() && target_prompts.is_empty() { return Ok(Vec::new()); }
+    
     let current = Arc::new(AtomicUsize::new(0));
     let last_emitted_percent = Arc::new(AtomicUsize::new(0));
     let max_depth = if filter.max_depth == 0 { 3 } else { filter.max_depth };
 
+    // 1. Fetch prompts for all paths
     let mut db_prompts = HashMap::new();
-    if let Ok(db_path) = get_db_path_local(&app_handle) {
-        if let Ok(db) = DB::open(&db_path) {
-            let all_paths: Vec<_> = target_paths.iter().chain(comparison_paths.iter()).cloned().collect();
-            if let Ok(images) = db.get_images_by_paths(&all_paths) {
-                for img in images {
-                    if let Some(p) = img.prompt {
-                        db_prompts.insert(img.path, p);
+    if !target_paths.is_empty() || !comparison_paths.is_empty() {
+        if let Ok(db_path) = get_db_path_local(&app_handle) {
+            if let Ok(db) = DB::open(&db_path) {
+                let all_paths: Vec<_> = target_paths.iter().chain(comparison_paths.iter()).cloned().collect();
+                if let Ok(images) = db.get_images_by_paths(&all_paths) {
+                    for img in images {
+                        if let Some(p) = img.prompt {
+                            db_prompts.insert(img.path, p);
+                        }
                     }
                 }
             }
         }
     }
 
-    let target_tags_sets: Vec<HashSet<String>> = target_paths.par_iter()
+    // 2. Build Target Tag Sets (Images + Text)
+    let mut target_tags_sets: Vec<HashSet<String>> = target_paths.par_iter()
         .map(|path| {
             let prompt_opt = if let Some(p) = db_prompts.get(path) {
                 Some(p.clone())
@@ -186,7 +225,24 @@ pub fn compare_tags(app_handle: tauri::AppHandle, window: Window, target_paths: 
         })
         .collect();
 
-    let comparison_tags: HashSet<String> = comparison_paths.par_iter()
+    let text_target_sets: Vec<HashSet<String>> = target_prompts.par_iter()
+        .map(|prompt| {
+            let tags = prompt.split(',').map(|s| remove_unbalanced_braces(s)).filter(|s| !s.trim().is_empty()).collect::<HashSet<_>>();
+            let c = current.fetch_add(1, Ordering::SeqCst) + 1;
+            let percent = (c * 100 / total) as usize;
+            let last = last_emitted_percent.load(Ordering::SeqCst);
+            if percent > last {
+                last_emitted_percent.store(percent, Ordering::SeqCst);
+                let _ = window.emit("workshop-progress", percent as f32);
+            }
+            tags
+        })
+        .collect();
+    
+    target_tags_sets.extend(text_target_sets);
+
+    // 3. Build Comparison/Subtractive Tags (Images + Text)
+    let mut comparison_tags: HashSet<String> = comparison_paths.par_iter()
         .flat_map(|path| {
             let prompt_opt = if let Some(p) = db_prompts.get(path) {
                 Some(p.clone())
@@ -201,6 +257,20 @@ pub fn compare_tags(app_handle: tauri::AppHandle, window: Window, target_paths: 
             let c = current.fetch_add(1, Ordering::SeqCst) + 1;
             let percent = (c * 100 / total) as usize;
             let last = last_emitted_percent.load(Ordering::SeqCst);
+            if percent > last {
+                last_emitted_percent.store(percent, Ordering::SeqCst);
+                let _ = window.emit("workshop-progress", percent as f32);
+            }
+            res
+        })
+        .collect();
+
+    let text_comparison_tags: HashSet<String> = comparison_prompts.par_iter()
+        .flat_map(|prompt| {
+            let res = prompt.split(',').map(|s| remove_unbalanced_braces(s)).filter(|s| !s.trim().is_empty()).collect::<Vec<_>>();
+            let c = current.fetch_add(1, Ordering::SeqCst) + 1;
+            let percent = (c * 100 / total) as usize;
+            let last = last_emitted_percent.load(Ordering::SeqCst);
             if percent > last || c == total {
                 last_emitted_percent.store(percent, Ordering::SeqCst);
                 let _ = window.emit("workshop-progress", percent as f32);
@@ -209,6 +279,9 @@ pub fn compare_tags(app_handle: tauri::AppHandle, window: Window, target_paths: 
         })
         .collect();
 
+    comparison_tags.extend(text_comparison_tags);
+
+    // 4. Filter and Merge
     let filtered_sets: Vec<HashSet<String>> = target_tags_sets.into_iter()
         .map(|s| {
             let diff: HashSet<_> = s.difference(&comparison_tags).cloned().collect();
@@ -239,6 +312,7 @@ pub fn compare_tags(app_handle: tauri::AppHandle, window: Window, target_paths: 
     Ok(results)
 }
 
+// Remove old _from_text commands as they are merged into the main ones
 #[tauri::command]
 pub fn expand_wildcards(wildcards: Vec<String>) -> Result<Vec<String>, String> {
     let mut all_expanded = HashSet::new();

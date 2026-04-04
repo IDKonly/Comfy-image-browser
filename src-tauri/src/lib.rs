@@ -50,6 +50,10 @@ pub fn run() {
     log::info!("Starting ComfyView application...");
 
     tauri::Builder::default()
+        .manage(scanner::WatcherState(std::sync::Mutex::new(scanner::FolderWatcher {
+            watcher: None,
+            current_path: None,
+        })))
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_fs::init())
