@@ -90,7 +90,7 @@ jobs:
           - platform: "ubuntu-22.04"
             args: ""
           - platform: "windows-latest"
-            args: ""
+            args: "--bundles nsis,msi"
 
     runs-on: ${{ matrix.platform }}
     steps:
