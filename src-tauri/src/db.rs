@@ -367,6 +367,7 @@ impl DB {
         Ok(counts)
     }
 
+    #[allow(dead_code)]
     pub fn get_images_in_folder_fast(&self, folder: &str, recursive: bool) -> Result<Vec<ImageInfo>> {
         let normalized_folder = folder.replace("\\", "/").trim_end_matches('/').to_string();
         let sql = if recursive {

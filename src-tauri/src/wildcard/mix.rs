@@ -109,7 +109,7 @@ fn serialize_node(node: &WildcardNode) -> String {
 fn clean_commas(s: &str) -> String {
     let mut result = s.replace(", ,", ",");
     // Remove leading/trailing commas and extra spaces around commas
-    let mut parts: Vec<_> = result.split(',')
+    let parts: Vec<_> = result.split(',')
         .map(|p| p.trim())
         .filter(|p| !p.is_empty())
         .collect();

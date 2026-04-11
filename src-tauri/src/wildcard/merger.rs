@@ -3,6 +3,7 @@ use rayon::prelude::*;
 use super::utils::{calculate_jaccard_similarity_optimized, find_connected_components};
 
 /// Merges a list of tag sets into a single wildcard string using a recursive factorization approach.
+#[allow(dead_code)]
 pub fn recursive_merge(tag_sets: &[HashSet<String>], threshold: f32, current_depth: u32, max_depth: u32) -> String {
     if tag_sets.is_empty() { return String::new(); }
     
@@ -45,7 +46,7 @@ fn recursive_merge_id(tag_sets: &[HashSet<u32>], threshold: f32, current_depth: 
     let base_str = sorted_base.iter().map(|id| id_to_tag.get(id).unwrap().as_str()).collect::<Vec<_>>().join(", ");
 
     // Calculate remainders after removing universal base
-    let mut pool: Vec<HashSet<u32>> = tag_sets.iter()
+    let pool: Vec<HashSet<u32>> = tag_sets.iter()
         .map(|s| s.difference(&universal_base).cloned().collect())
         .collect();
 
