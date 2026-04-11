@@ -1,97 +1,77 @@
-name: "Release and Publish"
+name: "Release Build"
 
 on:
-  workflow_dispatch: # 수동으로 버튼을 눌러서 실행
-    inputs:
-      version_type:
-        description: '버전업 종류 (patch, minor, major)'
-        required: true
-        default: 'patch'
-        type: choice
-        options:
-          - patch
-          - minor
-          - major
+  push:
+    # v1.0.0과 같은 태그가 푸시될 때 실행됩니다.
+    tags:
+      - 'v*'
+  workflow_dispatch: # 수동으로도 실행 가능하게 설정
 
 jobs:
-  bump-version:
-    runs-on: ubuntu-latest
-    outputs:
-      new_version: ${{ steps.get_version.outputs.version }}
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          token: ${{ secrets.GITHUB_TOKEN }}
-
-      - name: setup node
-        uses: actions/setup-node@v4
-        with:
-          node-version: lts/*
-
-      - name: Update Version Strings
-        id: get_version
-        run: |
-          # 1. package.json 버전 업데이트
-          npm version ${{ github.event.inputs.version_type }} --no-git-tag-version
-          NEW_VERSION=$(node -p "require('./package.json').version")
-          
-          # 2. tauri.conf.json 버전 업데이트 (jq 도구 사용)
-          jq ".version = \"$NEW_VERSION\"" src-tauri/tauri.conf.json > temp.json && mv temp.json src-tauri/tauri.conf.json
-          
-          echo "version=$NEW_VERSION" >> $GITHUB_OUTPUT
-
-      - name: Commit & Push changes
-        uses: stefanzweifel/git-auto-commit-action@v5
-        with:
-          commit_message: "chore: bump version to ${{ steps.get_version.outputs.version }}"
-          tagging_message: "v${{ steps.get_version.outputs.version }}"
-
   publish-tauri:
-    needs: bump-version # 버전 업데이트 작업이 끝난 후 실행
     permissions:
-      contents: write
+      contents: write # 이 설정이 403 에러를 해결하는 핵심입니다.
+    
     strategy:
       fail-fast: false
       matrix:
         include:
-          - platform: "macos-latest"
+          - platform: "macos-latest" # Apple Silicon & Intel Mac (Tauri handles cross-compile or separate runs)
             args: "--target aarch64-apple-darwin"
-          - platform: "windows-latest"
-            args: ""
+          - platform: "macos-latest"
+            args: "--target x86_64-apple-darwin"
           - platform: "ubuntu-22.04"
+            args: ""
+          - platform: "windows-latest"
             args: ""
 
     runs-on: ${{ matrix.platform }}
     steps:
-      - uses: actions/checkout@v4
+      - name: Checkout repository
+        uses: actions/checkout@v4
         with:
-          ref: "v${{ needs.bump-version.outputs.new_version }}" # 방금 생성된 태그를 체크아웃
+          # 커밋 기록을 가져와서 버전을 계산하거나 커밋을 푸시할 때 필요합니다.
+          fetch-depth: 0
 
-      - name: install node
+      - name: Install Node.js
         uses: actions/setup-node@v4
         with:
           node-version: lts/*
+          cache: 'npm' # 또는 'pnpm', 'yarn'
 
-      - name: install Rust
+      - name: Install Rust stable
         uses: dtolnay/rust-toolchain@stable
         with:
-          targets: ${{ matrix.platform == 'macos-latest' && 'aarch64-apple-darwin' || '' }}
+          # macOS 빌드를 위한 타겟 추가
+          targets: ${{ matrix.platform == 'macos-latest' && 'aarch64-apple-darwin,x86_64-apple-darwin' || '' }}
 
-      - name: install dependencies (ubuntu only)
+      - name: Install dependencies (Ubuntu only)
         if: matrix.platform == 'ubuntu-22.04'
         run: |
           sudo apt-get update
           sudo apt-get install -y libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf
 
-      - name: install frontend dependencies
+      - name: Install frontend dependencies
         run: npm install
 
-      - uses: tauri-apps/tauri-action@v0
+      # 버전 자동 커밋이 필요한 경우 (사용자 로그의 에러 해결 부분)
+      - name: Git Auto Commit
+        uses: stefanzweifel/git-auto-commit-action@v5
+        with:
+          commit_message: "chore: bump version to ${{ github.ref_name }}"
+          # 필요에 따라 파일 패턴 지정
+          file_pattern: 'package*.json src-tauri/tauri.conf.json'
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build and Release
+        uses: tauri-apps/tauri-action@v0
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
-          tagName: v${{ needs.bump-version.outputs.new_version }}
-          releaseName: "App v${{ needs.bump-version.outputs.new_version }}"
-          releaseBody: "Automated release for version ${{ needs.bump-version.outputs.new_version }}"
+          tagName: ${{ github.ref_name }} # 푸시된 태그 이름을 그대로 사용
+          releaseName: "App ${{ github.ref_name }}"
+          releaseBody: "Automated release from GitHub Actions."
           releaseDraft: true
+          prerelease: false
           args: ${{ matrix.args }}
