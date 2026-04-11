@@ -20,10 +20,65 @@ on:
           - major
 
 jobs:
-  publish-tauri:
+  # 1. 버전을 올리고 태그를 생성하는 사전 준비 작업 (단 1번만 실행)
+  prepare-release:
+    runs-on: ubuntu-latest
     permissions:
-      contents: write # 403 에러 해결 및 릴리즈 생성을 위한 권한
-    
+      contents: write
+    outputs:
+      release_tag: ${{ steps.set_tag.outputs.RELEASE_TAG }}
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Install Node.js (for bumping version)
+        if: github.event_name == 'workflow_dispatch' && github.event.inputs.version_update != 'none'
+        uses: actions/setup-node@v4
+        with:
+          node-version: lts/*
+
+      - name: Bump version
+        if: github.event_name == 'workflow_dispatch' && github.event.inputs.version_update != 'none'
+        run: |
+          npm version ${{ github.event.inputs.version_update }} --no-git-tag-version
+          
+          NEW_VERSION=$(node -p "require('./package.json').version")
+          echo "NEW_VERSION=$NEW_VERSION" >> $GITHUB_ENV
+          
+          node -e "
+            const fs = require('fs');
+            const path = './src-tauri/tauri.conf.json';
+            const config = JSON.parse(fs.readFileSync(path, 'utf8'));
+            config.version = '$NEW_VERSION';
+            fs.writeFileSync(path, JSON.stringify(config, null, 2));
+          "
+
+      - name: Git Auto Commit
+        if: github.event_name == 'workflow_dispatch' && github.event.inputs.version_update != 'none'
+        uses: stefanzweifel/git-auto-commit-action@v5
+        with:
+          commit_message: "chore: bump version to ${{ env.NEW_VERSION }}"
+          file_pattern: 'package*.json src-tauri/tauri.conf.json'
+          tagging_message: "v${{ env.NEW_VERSION }}"
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Set Release Tag
+        id: set_tag
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ] && [ "${{ github.event.inputs.version_update }}" != "none" ]; then
+            echo "RELEASE_TAG=v${{ env.NEW_VERSION }}" >> $GITHUB_OUTPUT
+          else
+            echo "RELEASE_TAG=${{ github.ref_name }}" >> $GITHUB_OUTPUT
+          fi
+
+  # 2. 실제 각 운영체제별 빌드 및 릴리즈 업로드 작업
+  publish-tauri:
+    needs: prepare-release # prepare-release가 끝난 후 실행되도록 대기
+    permissions:
+      contents: write
     strategy:
       fail-fast: false
       matrix:
@@ -42,6 +97,8 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
         with:
+          # 변경/생성된 새 버전의 태그 코드를 불러옵니다.
+          ref: ${{ needs.prepare-release.outputs.release_tag }}
           fetch-depth: 0
 
       - name: Install Node.js
@@ -64,53 +121,13 @@ jobs:
       - name: Install frontend dependencies
         run: npm install
 
-      # 수동 실행 시 버전 업데이트 처리 (Node.js 스크립트로 package.json과 tauri.conf.json 동시 업데이트)
-      - name: Bump version
-        if: github.event_name == 'workflow_dispatch' && github.event.inputs.version_update != 'none'
-        run: |
-          # package.json 버전 업데이트
-          npm version ${{ github.event.inputs.version_update }} --no-git-tag-version
-          
-          # 업데이트된 버전 추출
-          NEW_VERSION=$(node -p "require('./package.json').version")
-          echo "NEW_VERSION=$NEW_VERSION" >> $GITHUB_ENV
-          
-          # tauri.conf.json 버전 동기화
-          node -e "
-            const fs = require('fs');
-            const path = './src-tauri/tauri.conf.json';
-            const config = JSON.parse(fs.readFileSync(path, 'utf8'));
-            config.version = '$NEW_VERSION';
-            fs.writeFileSync(path, JSON.stringify(config, null, 2));
-          "
-
-      # 변경된 버전 파일을 저장소에 커밋 및 태그 생성
-      - name: Git Auto Commit
-        if: github.event_name == 'workflow_dispatch' && github.event.inputs.version_update != 'none'
-        uses: stefanzweifel/git-auto-commit-action@v5
-        with:
-          commit_message: "chore: bump version to ${{ env.NEW_VERSION }}"
-          file_pattern: 'package*.json src-tauri/tauri.conf.json'
-          tagging_message: "v${{ env.NEW_VERSION }}"
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-
-      # 릴리즈에 사용할 태그 결정 (태그 푸시인 경우 ref_name, 수동 업데이트인 경우 생성된 새 버전)
-      - name: Set Release Tag
-        run: |
-          if [ "${{ github.event_name }}" = "workflow_dispatch" ] && [ "${{ github.event.inputs.version_update }}" != "none" ]; then
-            echo "RELEASE_TAG=v${{ env.NEW_VERSION }}" >> $GITHUB_ENV
-          else
-            echo "RELEASE_TAG=${{ github.ref_name }}" >> $GITHUB_ENV
-          fi
-
       - name: Build and Release
         uses: tauri-apps/tauri-action@v0
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
-          tagName: ${{ env.RELEASE_TAG }}
-          releaseName: "App ${{ env.RELEASE_TAG }}"
+          tagName: ${{ needs.prepare-release.outputs.release_tag }}
+          releaseName: "App ${{ needs.prepare-release.outputs.release_tag }}"
           releaseBody: "Automated release from GitHub Actions. Version update: ${{ github.event.inputs.version_update || 'manual tag' }}"
           releaseDraft: true
           prerelease: false
