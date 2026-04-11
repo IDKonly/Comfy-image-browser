@@ -1,0 +1,97 @@
+name: "Release and Publish"
+
+on:
+  workflow_dispatch: # 수동으로 버튼을 눌러서 실행
+    inputs:
+      version_type:
+        description: '버전업 종류 (patch, minor, major)'
+        required: true
+        default: 'patch'
+        type: choice
+        options:
+          - patch
+          - minor
+          - major
+
+jobs:
+  bump-version:
+    runs-on: ubuntu-latest
+    outputs:
+      new_version: ${{ steps.get_version.outputs.version }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          token: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: setup node
+        uses: actions/setup-node@v4
+        with:
+          node-version: lts/*
+
+      - name: Update Version Strings
+        id: get_version
+        run: |
+          # 1. package.json 버전 업데이트
+          npm version ${{ github.event.inputs.version_type }} --no-git-tag-version
+          NEW_VERSION=$(node -p "require('./package.json').version")
+          
+          # 2. tauri.conf.json 버전 업데이트 (jq 도구 사용)
+          jq ".version = \"$NEW_VERSION\"" src-tauri/tauri.conf.json > temp.json && mv temp.json src-tauri/tauri.conf.json
+          
+          echo "version=$NEW_VERSION" >> $GITHUB_OUTPUT
+
+      - name: Commit & Push changes
+        uses: stefanzweifel/git-auto-commit-action@v5
+        with:
+          commit_message: "chore: bump version to ${{ steps.get_version.outputs.version }}"
+          tagging_message: "v${{ steps.get_version.outputs.version }}"
+
+  publish-tauri:
+    needs: bump-version # 버전 업데이트 작업이 끝난 후 실행
+    permissions:
+      contents: write
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - platform: "macos-latest"
+            args: "--target aarch64-apple-darwin"
+          - platform: "windows-latest"
+            args: ""
+          - platform: "ubuntu-22.04"
+            args: ""
+
+    runs-on: ${{ matrix.platform }}
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: "v${{ needs.bump-version.outputs.new_version }}" # 방금 생성된 태그를 체크아웃
+
+      - name: install node
+        uses: actions/setup-node@v4
+        with:
+          node-version: lts/*
+
+      - name: install Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.platform == 'macos-latest' && 'aarch64-apple-darwin' || '' }}
+
+      - name: install dependencies (ubuntu only)
+        if: matrix.platform == 'ubuntu-22.04'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y libwebkit2gtk-4.1-dev libappindicator3-dev librsvg2-dev patchelf
+
+      - name: install frontend dependencies
+        run: npm install
+
+      - uses: tauri-apps/tauri-action@v0
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          tagName: v${{ needs.bump-version.outputs.new_version }}
+          releaseName: "App v${{ needs.bump-version.outputs.new_version }}"
+          releaseBody: "Automated release for version ${{ needs.bump-version.outputs.new_version }}"
+          releaseDraft: true
+          args: ${{ matrix.args }}
