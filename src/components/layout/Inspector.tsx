@@ -1,3 +1,4 @@
+import React from "react";
 import { Twitter } from "lucide-react";
 import { ImageMetadata } from "../../store/useAppStore";
 
@@ -8,7 +9,7 @@ interface InspectorProps {
   showToast: (msg: string, type: "success" | "error" | "info") => void;
 }
 
-export const Inspector = ({
+export const Inspector = React.memo(({
   currentMetadata,
   handleTwitterUpload,
   shortcuts,
@@ -80,4 +81,4 @@ export const Inspector = ({
       </div>
     </aside>
   );
-};
+});

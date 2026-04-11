@@ -138,19 +138,49 @@ export const ZoomPanViewer = ({
     setPosition({ x: e.clientX - dragStart.x, y: e.clientY - dragStart.y });
   };
 
+  const [displayBatch, setDisplayBatch] = useState<{current: any[], range: [number, number] | null}>({current: [], range: null});
+  const [isTransitioning, setIsTransitioning] = useState(false);
+
+  useEffect(() => {
+    if (!batchMode) {
+        setDisplayBatch({current: [], range: null});
+        return;
+    }
+    
+    if (batchRange) {
+        // 이미 표시 중인 범위와 같다면 업데이트 스킵
+        if (displayBatch.range && displayBatch.range[0] === batchRange[0] && displayBatch.range[1] === batchRange[1]) {
+            return;
+        }
+
+        setIsTransitioning(true);
+        // 짧은 지연 후 새로운 배치로 교체 (이미지 로딩 시간을 벌어줌)
+        const timer = setTimeout(() => {
+            const currentIdxs = [];
+            for (let i = batchRange[0]; i <= batchRange[1]; i++) currentIdxs.push(i);
+            setDisplayBatch({
+                current: currentIdxs.map(idx => images[idx]).filter(Boolean),
+                range: batchRange
+            });
+            setIsTransitioning(false);
+        }, 50); 
+        return () => clearTimeout(timer);
+    }
+  }, [batchMode, batchRange, images, displayBatch.range]);
+
   const batchSets = useMemo(() => {
     if (!batchMode || !batchRange || !batchMap) return { current: [], next: [] };
-    const currentIdxs = [];
-    for (let i = batchRange[0]; i <= batchRange[1]; i++) currentIdxs.push(i);
+    
     let nextIdx = batchRange[1] + 1;
     const nextRange = nextIdx < images.length ? batchMap[nextIdx] : null;
     const nextIdxs = [];
     if (nextRange) for (let i = nextRange[0]; i <= nextRange[1]; i++) nextIdxs.push(i);
+    
     return { 
-        current: currentIdxs.map(idx => images[idx]).filter(Boolean), 
+        current: displayBatch.current, 
         next: nextIdxs.map(idx => images[idx]).filter(Boolean) 
     };
-  }, [batchMode, batchRange, batchMap, images]);
+  }, [batchMode, batchRange, batchMap, images, displayBatch.current]);
 
   return (
     <div 
@@ -175,9 +205,9 @@ export const ZoomPanViewer = ({
       {batchMode ? (
         <div className="w-full h-full relative">
             <div 
-                key={`batch-${batchRange?.[0]}`}
-                className="absolute inset-0 p-8 grid gap-4 content-center justify-items-center animate-in fade-in duration-200"
-                style={{ gridTemplateColumns: `repeat(${Math.ceil(Math.sqrt(batchSets.current.length))}, minmax(0, 1fr))` }}
+                key={`batch-${displayBatch.range?.[0]}`}
+                className={`absolute inset-0 p-8 grid gap-4 content-center justify-items-center transition-all duration-300 ${isTransitioning ? 'opacity-50 scale-98 blur-[2px]' : 'opacity-100 scale-100 blur-0'} animate-in fade-in`}
+                style={{ gridTemplateColumns: `repeat(${Math.ceil(Math.sqrt(Math.max(1, batchSets.current.length)))}, minmax(0, 1fr))` }}
             >
                 {batchSets.current.map((img) => (
                     <Thumbnail 

@@ -123,9 +123,12 @@ interface ThumbnailProps {
 
 export const Thumbnail = ({ path, mtime, reloadTimestamp, className, onClick, fit = "cover", delay = 100 }: ThumbnailProps) => {
   const [src, setSrc] = useState<string | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [loadedPath, setLoadedPath] = useState<string | null>(null);
   const pathRef = useRef(path);
 
   useEffect(() => {
+    setLoading(true);
     pathRef.current = path;
     let active = true;
     
@@ -135,14 +138,20 @@ export const Thumbnail = ({ path, mtime, reloadTimestamp, className, onClick, fi
           if (active && pathRef.current === path) {
             const normalizedRes = (res as string).replace(/\//g, '\\');
             const url = convertFileSrc(normalizedRes);
-            setSrc(reloadTimestamp ? `${url}?t=${reloadTimestamp}` : url);
+            const finalUrl = reloadTimestamp ? `${url}?t=${reloadTimestamp}` : url;
+            setSrc(finalUrl);
+            setLoadedPath(path);
+            setLoading(false);
           }
         })
         .catch((err) => {
           console.error("Thumbnail failed", path, err);
           if (active && pathRef.current === path) {
              const url = convertFileSrc(path.replace(/\//g, '\\'));
-             setSrc(reloadTimestamp ? `${url}?t=${reloadTimestamp}` : url);
+             const finalUrl = reloadTimestamp ? `${url}?t=${reloadTimestamp}` : url;
+             setSrc(finalUrl);
+             setLoadedPath(path);
+             setLoading(false);
           }
         });
     };
@@ -161,27 +170,29 @@ export const Thumbnail = ({ path, mtime, reloadTimestamp, className, onClick, fi
     };
   }, [path, mtime, reloadTimestamp, delay]);
 
+  const isCorrectPath = loadedPath === path;
+
   return (
     <div 
-      className={`overflow-hidden bg-neutral-900 flex items-center justify-center ${className || ""}`} 
+      className={`overflow-hidden bg-neutral-900 flex items-center justify-center relative ${className || ""}`} 
       onClick={onClick}
-      style={{ minHeight: '100px' }} // Ensure visibility even if parent is collapsing
+      style={{ minHeight: '100px' }}
     >
-      {src ? (
+      {src && (
         <img 
           src={src} 
           key={src}
-          className={`w-full h-full ${fit === "cover" ? 'object-cover' : 'object-contain'} animate-in fade-in duration-300`} 
+          className={`w-full h-full ${fit === "cover" ? 'object-cover' : 'object-contain'} transition-all duration-300 ${!isCorrectPath || loading ? 'opacity-40 scale-95 blur-sm' : 'opacity-100 scale-100 blur-0'} animate-in fade-in`} 
           onError={() => {
-             // Fallback to original image if thumbnail URL fails
              if (src !== convertFileSrc(path)) {
                 setSrc(convertFileSrc(path));
              }
           }}
         />
-      ) : (
-        <div className="w-full h-full flex items-center justify-center min-h-[inherit]">
-          <div className="w-4 h-4 border-2 border-white/5 border-t-blue-500 rounded-full animate-spin" />
+      )}
+      {(!src || loading) && (
+        <div className="absolute inset-0 flex items-center justify-center z-10">
+          <div className="w-5 h-5 border-2 border-white/10 border-t-blue-500 rounded-full animate-spin" />
         </div>
       )}
     </div>

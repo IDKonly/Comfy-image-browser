@@ -358,10 +358,15 @@ function App() {
       const payload = event.payload as any;
       const state = useAppStore.getState();
       if (payload.folder === state.folderPath || recursive) {
-        // 검색 중인지 확인 (상태 참조를 위해 state 활용 가능성 확인)
-        // 여기서는 컴포넌트 스코프의 isSearching을 직접 참조하거나 handleSearch를 호출해야 함.
+        // [Differential Update] 이미지 목록이 실제로 변경되었는지 확인
+        const isSameCount = payload.images.length === state.images.length;
+        const isSameContent = isSameCount && payload.images.every((img: any, idx: number) => 
+            img.path === state.images[idx].path && img.mtime === state.images[idx].mtime
+        );
+        
+        if (isSameContent) return;
+
         if (isSearching) {
-            // 검색 중이라면 현재 검색 조건으로 다시 검색 수행
             await handleSearch();
         } else {
             const currentImages = state.images;
@@ -373,9 +378,19 @@ function App() {
                 const newIndex = payload.images.findIndex((img: any) => img.path === currentPath);
                 if (newIndex !== -1) {
                     targetIndex = newIndex;
+                    
+                    // 현재 이미지가 유지된다면 metadata를 초기화하지 않고 목록만 업데이트
+                    setImages(payload.images);
+                    // store의 setCurrentIndex 호출 시 currentMetadata가 null로 초기화되는 것을 방지하기 위해 
+                    // 직접 currentIndex 상태만 업데이트하거나, 혹은 path가 같으면 인덱스만 조용히 갱신
+                    if (targetIndex !== currentIdx) {
+                        setCurrentIndex(targetIndex);
+                    }
+                    return;
                 }
             }
             
+            // 이미지가 바뀌었거나 찾을 수 없는 경우에만 전체 갱신
             setImages(payload.images);
             setCurrentIndex(targetIndex);
         }
