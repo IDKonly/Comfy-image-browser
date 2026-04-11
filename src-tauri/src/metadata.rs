@@ -270,5 +270,39 @@ fn parse_params_into(params_line: &str, meta: &mut ImageMetadata) {
     if let Some(v) = map.get("Model") { meta.model = Some(v.clone()); }
 }
 
+use tauri::Manager;
+use crate::db::DB;
+
 #[tauri::command]
-pub fn get_metadata(path: String) -> Result<ImageMetadata, String> { read_metadata(path) }
+pub fn get_metadata(app_handle: tauri::AppHandle, path: String) -> Result<ImageMetadata, String> {
+    let mut db_path = app_handle.path().app_data_dir().map_err(|e| e.to_string())?;
+    db_path.push(".image_manager_v2.db");
+    
+    // 1. DB 캐시 확인 (최우선)
+    if let Ok(db) = DB::open(&db_path) {
+        if let Ok(Some(meta)) = db.get_metadata(&path) {
+            return Ok(meta);
+        }
+    }
+    
+    // 2. 캐시 없으면 디스크에서 직접 읽기
+    let meta = read_metadata(&path)?;
+    
+    // 3. 읽은 데이터를 DB에 즉시 캐싱 (백그라운드 인덱싱 대기 방지)
+    let path_buf = std::path::PathBuf::from(&path);
+    if let Ok(file_meta) = std::fs::metadata(&path_buf) {
+        if let Ok(mut db) = DB::open(&db_path) {
+            let info = crate::scanner::ImageInfo {
+                path: path.clone(),
+                name: path_buf.file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_default(),
+                mtime: file_meta.modified().ok()
+                    .and_then(|t| t.duration_since(std::time::UNIX_EPOCH).ok())
+                    .map(|d| d.as_secs()).unwrap_or(0),
+                size: file_meta.len(),
+            };
+            let _ = db.insert_images_batch(vec![(&info, meta.clone())]);
+        }
+    }
+    
+    Ok(meta)
+}

@@ -3,7 +3,10 @@ import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { open, save } from "@tauri-apps/plugin-dialog";
 import { LazyStore } from "@tauri-apps/plugin-store";
-import { X, Wand2, Copy, Info, Trash2, FolderPlus, ListFilter, FilePlus, Save, LayoutGrid, ChevronDown, ChevronUp, Download, Layers, FileUp } from "lucide-react";
+import { X, Wand2, Copy, Info, Trash2, FolderPlus, ListFilter, FilePlus, Save, LayoutGrid, ChevronDown, ChevronUp, Download, FileUp } from "lucide-react";
+// @ts-ignore
+import { FixedSizeList as List } from "react-window";
+import AutoSizer from "react-virtualized-auto-sizer";
 import { useToast } from "./Toast";
 import { TagRefiner } from "./TagRefiner";
 
@@ -64,7 +67,6 @@ export const WildcardTools = ({ onClose, images, currentIndex, batchRange }: Wil
   const [results, setResults] = useState<string[]>([]);
   const [loading, setLoading] = useState(false);
   const [progress, setProgress] = useState(0);
-  const [inputMode, setInputMode] = useState<'images' | 'text'>('images');
   const [textInput, setTextInput] = useState("");
   const [comparisonText, setComparisonText] = useState("");
   
@@ -173,12 +175,16 @@ export const WildcardTools = ({ onClose, images, currentIndex, batchRange }: Wil
     });
 
     const unlistenDrop = listen('tauri://drag-drop', async (event: any) => {
-      if (!document.querySelector('[data-wildcard-modal]')) return;
-      const paths = (event.payload as any).paths as string[];
-      if (paths) {
+      // Check if the wildcard modal is currently in the DOM
+      const modal = document.querySelector('[data-wildcard-modal]');
+      if (!modal) return;
+      
+      const payload = event.payload as any;
+      const paths = payload.paths as string[];
+      if (paths && paths.length > 0) {
         const addedCount = await addPathsRecursive(paths);
         if (addedCount > 0) {
-          showToast(`Added ${addedCount} files`, 'success');
+          showToast(`Added ${addedCount} files to Workshop`, 'success');
         }
       }
     });
@@ -428,13 +434,32 @@ export const WildcardTools = ({ onClose, images, currentIndex, batchRange }: Wil
                     </div>
                 </div>
 
-                <div className="flex-1 overflow-y-auto p-2 space-y-1 scrollbar-thin">
-                    {targetPaths.length > 0 ? targetPaths.map(p => (
-                        <div key={p} className="group flex items-center justify-between p-1.5 bg-neutral-800/50 hover:bg-neutral-800 rounded border border-transparent hover:border-white/5 transition-all">
-                            <span className="text-[9px] text-neutral-400 truncate flex-1 pr-2">{p.split(/[\\/]/).pop()}</span>
-                            <button onClick={() => removePath(p)} className="opacity-0 group-hover:opacity-100 p-1 hover:bg-red-900/20 rounded text-red-500"><Trash2 className="w-3 h-3" /></button>
-                        </div>
-                    )) : (
+                <div className="flex-1 p-2">
+                    {targetPaths.length > 0 ? (
+                        <AutoSizer>
+                            {({ height, width }) => (
+                                <List
+                                    className="scrollbar-thin"
+                                    height={height}
+                                    itemCount={targetPaths.length}
+                                    itemSize={36}
+                                    width={width}
+                                >
+                                    {({ index, style }: any) => {
+                                        const p = targetPaths[index];
+                                        return (
+                                            <div style={style} className="pr-2 pb-1">
+                                                <div className="group flex items-center justify-between p-1.5 bg-neutral-800/50 hover:bg-neutral-800 rounded border border-transparent hover:border-white/5 transition-all h-full">
+                                                    <span className="text-[9px] text-neutral-400 truncate flex-1 pr-2">{p.split(/[\\/]/).pop()}</span>
+                                                    <button onClick={() => removePath(p)} className="opacity-0 group-hover:opacity-100 p-1 hover:bg-red-900/20 rounded text-red-500"><Trash2 className="w-3 h-3" /></button>
+                                                </div>
+                                            </div>
+                                        );
+                                    }}
+                                </List>
+                            )}
+                        </AutoSizer>
+                    ) : (
                         <div className="flex flex-col items-center justify-center h-full opacity-20 p-4 text-center">
                             <p className="text-[8px] font-bold uppercase tracking-wider leading-relaxed">No images</p>
                         </div>

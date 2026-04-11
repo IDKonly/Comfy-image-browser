@@ -1,10 +1,9 @@
-import React, { useState, useMemo, useEffect, useRef } from 'react';
+import { useState, useMemo, useEffect, useRef } from 'react';
 import { 
-  Plus, Trash2, Play, ChevronRight, ChevronLeft, Tag, FileText, 
-  Layers, Database, Search, CheckCircle, XCircle, X, Settings2, 
-  Download, Upload, ArrowUp, ArrowDown, Info, Copy, Check, ArrowRight,
-  Terminal, Filter, Box, RefreshCw, Save, ExternalLink, Sparkles, MousePointer2,
-  ListFilter
+  Plus, Trash2, Play, ChevronRight, ChevronLeft, 
+  Database, Search, CheckCircle, XCircle, X, Settings2, 
+  Download, Upload, ArrowUp, ArrowDown, RefreshCw, Save, ExternalLink, Sparkles, MousePointer2,
+  ListFilter, Terminal, ArrowRight, Box, Filter
 } from 'lucide-react';
 import { invoke } from "@tauri-apps/api/core";
 import { open, save, confirm } from "@tauri-apps/plugin-dialog";
@@ -15,6 +14,7 @@ import {
 } from "@tauri-apps/plugin-fs";
 import { useToast } from "./Toast";
 import { useAppStore } from "../store/useAppStore";
+import { apiClient } from "../api/apiClient";
 
 const classifierStore = new LazyStore(".tag_classifier.json");
 
@@ -45,6 +45,7 @@ const TagInput = ({ tags, onChange, placeholder, colorClass = "indigo", suggesti
 }) => {
     const [inputValue, setInputValue] = useState("");
     const [showSuggestions, setShowSuggestions] = useState(false);
+    const [isExpanded, setIsExpanded] = useState(true);
     
     const filteredSuggestions = useMemo(() => {
         if (!inputValue.trim()) return [];
@@ -58,6 +59,7 @@ const TagInput = ({ tags, onChange, placeholder, colorClass = "indigo", suggesti
         if (newTags.length > 0) onChange([...tags, ...newTags]);
         setInputValue("");
         setShowSuggestions(false);
+        setIsExpanded(true);
     };
 
     const removeTag = (tag: string) => onChange(tags.filter(t => t !== tag));
@@ -70,14 +72,31 @@ const TagInput = ({ tags, onChange, placeholder, colorClass = "indigo", suggesti
 
     return (
         <div className="space-y-2">
-            <div className="flex flex-wrap gap-1.5 mb-2 min-h-[1.5rem]">
-                {tags.map(tag => (
-                    <span key={tag} className={`flex items-center gap-1.5 px-2.5 py-1 rounded-xl border text-[10px] font-black uppercase transition-all ${colorMap[colorClass]}`}>
-                        {tag}
-                        <button onClick={() => removeTag(tag)} className="hover:text-white"><X className="w-3 h-3" /></button>
-                    </span>
-                ))}
+            <div className="flex items-center justify-between px-1">
+                <span className={`text-[9px] font-black uppercase tracking-widest ${colorClass === 'red' ? 'text-red-500/60' : 'text-indigo-500/60'}`}>
+                    {colorClass === 'red' ? 'Excludes (-)' : 'Includes (+)'}
+                </span>
+                {tags.length > 0 && (
+                    <button 
+                        onClick={() => setIsExpanded(!isExpanded)}
+                        className="text-[9px] font-black text-neutral-600 hover:text-neutral-400 uppercase tracking-tighter transition-colors"
+                    >
+                        {isExpanded ? 'Hide Tags' : `Show ${tags.length} Tags`}
+                    </button>
+                )}
             </div>
+
+            {isExpanded && tags.length > 0 && (
+                <div className="flex flex-wrap gap-1.5 mb-2 animate-in fade-in slide-in-from-top-1 duration-200">
+                    {tags.map(tag => (
+                        <span key={tag} className={`flex items-center gap-1.5 px-2.5 py-1 rounded-xl border text-[10px] font-black uppercase transition-all ${colorMap[colorClass]}`}>
+                            {tag}
+                            <button onClick={() => removeTag(tag)} className="hover:text-white"><X className="w-3 h-3" /></button>
+                        </span>
+                    ))}
+                </div>
+            )}
+            
             <div className="relative">
                 <input 
                     className="w-full bg-black/40 border border-white/5 rounded-2xl px-4 py-2.5 text-xs font-mono text-neutral-300 focus:outline-none focus:border-white/20 shadow-inner"
@@ -101,9 +120,9 @@ const TagInput = ({ tags, onChange, placeholder, colorClass = "indigo", suggesti
                     placeholder={placeholder}
                 />
                 {showSuggestions && filteredSuggestions.length > 0 && (
-                    <div className="absolute z-[110] left-0 right-0 mt-2 bg-neutral-900 border border-white/10 rounded-2xl shadow-2xl overflow-hidden animate-in fade-in zoom-in-95 duration-200">
+                    <div className="absolute z-[110] left-0 right-0 mt-2 bg-[#1a1a1a] border border-white/20 rounded-2xl shadow-[0_20px_50px_rgba(0,0,0,0.5)] overflow-hidden animate-in fade-in zoom-in-95 duration-200">
                         {filteredSuggestions.map(s => (
-                            <button key={s} onMouseDown={(e) => { e.preventDefault(); addTags(s); }} className="w-full text-left px-4 py-2.5 text-[10px] font-black uppercase text-neutral-400 hover:text-white hover:bg-white/5 transition-all border-b border-white/5 last:border-0">{s}</button>
+                            <button key={s} onMouseDown={(e) => { e.preventDefault(); addTags(s); }} className="w-full text-left px-4 py-3 text-[10px] font-black uppercase text-neutral-300 hover:text-white hover:bg-indigo-600/50 transition-all border-b border-white/5 last:border-0">{s}</button>
                         ))}
                     </div>
                 )}
@@ -127,9 +146,13 @@ export const TagClassifier = ({ onClose, initialData = "" }: TagClassifierProps)
   const [tagSearchQuery, setTagSearchQuery] = useState('');
   const [isLoading, setIsLoading] = useState(true);
   const [isRunning, setIsRunning] = useState(false);
-  const [progress, setProgress] = useState(0);
   const [presets, setPresets] = useState<string[]>([]);
   const [activePreset, setActivePreset] = useState<string>("default");
+  
+  // UI States
+  const [isRightSidebarOpen, setIsRightSidebarOpen] = useState(true);
+  const [collapsedSubsets, setCollapsedSubsets] = useState<Set<number>>(new Set());
+  
   const workerRef = useRef<Worker | null>(null);
 
   const { showToast } = useToast();
@@ -254,53 +277,6 @@ export const TagClassifier = ({ onClose, initialData = "" }: TagClassifierProps)
     return parsedSubsets;
   };
 
-  // --- Web Worker ---
-  const createWorker = () => {
-    const workerCode = `
-      self.onmessage = function(e) {
-        const { lines, subsets, wordGroups } = e.data;
-        function getMergedTag(tag, groups) {
-          let merged = tag;
-          groups.forEach(wg => {
-            if (!wg.name || !wg.words.length) return;
-            const sortedWords = [...wg.words].sort((a, b) => b.length - a.length);
-            sortedWords.forEach(word => {
-              const regex = new RegExp("(^|\\\\s)" + word.replace(/[.*+?^$\${}()|[\\]\\\\\\/]/g, '\\\\$&') + "(?=\\\\s|$)", 'gi');
-              merged = merged.replace(regex, "$1{" + wg.name + "}");
-            });
-          });
-          return merged;
-        }
-        const results = [];
-        const total = lines.length;
-        for (let i = 0; i < total; i++) {
-          const lineStr = lines[i];
-          let remainingTags = lineStr.split(',').map(t => t.trim()).filter(t => t);
-          const parsedData = subsets.map(sub => {
-            const matched = [];
-            const nextRemaining = [];
-            remainingTags.forEach(tag => {
-              const lower = tag.toLowerCase();
-              const merged = getMergedTag(lower, wordGroups).toLowerCase();
-              const isInc = sub.keywords.some(k => lower.includes(k.toLowerCase()) || merged.includes(k.toLowerCase()));
-              const isExactInc = sub.keywords.some(k => lower === k.toLowerCase() || merged === k.toLowerCase());
-              const isExc = !isExactInc && sub.excludeKeywords.some(k => lower.includes(k.toLowerCase()) || merged.includes(k.toLowerCase()));
-              if (isInc && !isExc) matched.push(tag); else nextRemaining.push(tag);
-            });
-            remainingTags = nextRemaining;
-            return { id: sub.id, name: sub.name, matches: matched };
-          });
-          parsedData.push({ id: 0, name: 'Unclassified', matches: remainingTags });
-          results.push({ lineIndex: i + 1, data: parsedData });
-          if (i % 100 === 0 || i === total - 1) self.postMessage({ type: 'progress', value: Math.round((i / total) * 100) });
-        }
-        self.postMessage({ type: 'result', value: results });
-      };
-    `;
-    const blob = new Blob([workerCode], { type: 'application/javascript' });
-    return new Worker(URL.createObjectURL(blob));
-  };
-
   // --- Initialization ---
   useEffect(() => {
     const init = async () => {
@@ -314,7 +290,7 @@ export const TagClassifier = ({ onClose, initialData = "" }: TagClassifierProps)
       setIsLoading(false);
     };
     init();
-    return () => { if (workerRef.current) workerRef.current.terminate(); };
+    return () => { if (workerRef.current) (workerRef.current as any).terminate(); };
   }, []);
 
   useEffect(() => {
@@ -338,7 +314,7 @@ export const TagClassifier = ({ onClose, initialData = "" }: TagClassifierProps)
   // 파이프라인 1: 직접 임포트 (폴더 전체)
   const importDirect = async () => {
     if (!folderPath) { showToast("Select a folder first", "error"); return; }
-    setIsRunning(true); setProgress(0);
+    setIsRunning(true);
     try {
         const results: string[] = await invoke("get_all_prompts", { folder: folderPath, recursive });
         if (!results || results.length === 0) { showToast("No prompts found in folder", "info"); }
@@ -348,23 +324,22 @@ export const TagClassifier = ({ onClose, initialData = "" }: TagClassifierProps)
         }
     } catch (e: any) { 
         showToast(`Import failed: ${e.message || e}`, "error"); 
-    } finally { setIsRunning(false); setProgress(0); }
+    } finally { setIsRunning(false); }
   };
 
   // 파이프라인 2: 필터링 임포트 (와일드카드 워크숍 엔진 활용)
   const importFiltered = async () => {
     if (!rawImages || rawImages.length === 0) { showToast("No images to filter", "error"); return; }
-    setIsRunning(true); setProgress(0);
+    setIsRunning(true);
     try {
         const targetPaths = rawImages.map(img => img.path);
         
         showToast(`Processing ${targetPaths.length} images through Workshop engine...`, "info");
         
-        // 와일드카드 워크숍의 설정을 그대로 적용하여 필터링된 프롬프트 묶음을 가져옴
         const results: string[] = await invoke("generate_wildcards", { 
             paths: targetPaths, 
-            prompts: [], // 텍스트 입력은 제외하고 이미지만 처리
-            threshold: 0.95, // 분류기에 넣을 때는 가급적 원본 유지를 위해 높은 유사도 권장 (또는 사용자 설정 유지)
+            prompts: [],
+            threshold: 0.95,
             filter: workshopFilter 
         });
         
@@ -378,23 +353,28 @@ export const TagClassifier = ({ onClose, initialData = "" }: TagClassifierProps)
     } catch (e: any) { 
         console.error("Filtered Import Error:", e);
         showToast(`Import failed: ${e.message || e}`, "error"); 
-    } finally { setIsRunning(false); setProgress(0); }
+    } finally { setIsRunning(false); }
   };
 
-  const runAnalysis = () => {
+  const runAnalysis = async () => {
     if (lines.length === 0) return;
-    setIsRunning(true); setProgress(0);
-    if (workerRef.current) workerRef.current.terminate();
-    workerRef.current = createWorker();
-    workerRef.current.onmessage = (e) => {
-      const { type, value } = e.data;
-      if (type === 'progress') setProgress(value);
-      else if (type === 'result') {
-        setFullResults(value); setHasProcessed(true); setIsRunning(false); setProgress(100);
-        showToast("Compilation complete", "success");
-      }
-    };
-    workerRef.current.postMessage({ lines, subsets, wordGroups });
+    setIsRunning(true);
+    
+    try {
+      const results = await apiClient.invoke<any[]>("classify_prompts_command", {
+        lines,
+        subsets,
+        wordGroups
+      });
+      
+      setFullResults(results);
+      setHasProcessed(true);
+      showToast("Compilation complete", "success");
+    } catch (e: any) {
+      showToast(`Analysis failed: ${e.message || e}`, "error");
+    } finally {
+      setIsRunning(false);
+    }
   };
 
   if (isLoading) return null;
@@ -464,35 +444,54 @@ export const TagClassifier = ({ onClose, initialData = "" }: TagClassifierProps)
           </div>
           
           <div className="flex-1 overflow-y-auto p-6 space-y-6 scrollbar-thin">
-            {subsets.map((sub, idx) => (
-              <div key={sub.id} className="relative group animate-in slide-in-from-left-2 duration-300">
-                {idx < subsets.length && <div className="absolute left-5 -bottom-6 w-0.5 h-6 bg-indigo-500/20 z-0 hidden md:block" />}
-                <div className={`bg-neutral-800/40 border rounded-3xl p-5 relative z-10 transition-all shadow-xl ${dictActiveSubsetId === sub.id && viewMode === 'library' ? 'border-indigo-500 bg-indigo-500/5 ring-1 ring-indigo-500/20' : 'border-white/5 hover:border-indigo-500/30'}`}>
-                  <div className="flex items-center justify-between mb-4">
-                    <button onClick={() => setDictActiveSubsetId(sub.id)} className="flex items-center gap-3 flex-1 text-left group/name">
-                      <div className={`w-6 h-6 rounded-lg flex items-center justify-center text-[10px] font-black transition-all ${dictActiveSubsetId === sub.id ? 'bg-indigo-600 text-white' : 'bg-indigo-600/20 text-indigo-400'}`}>{idx + 1}</div>
-                      <input className={`bg-transparent text-xs font-black uppercase focus:outline-none w-40 transition-all ${dictActiveSubsetId === sub.id ? 'text-indigo-400' : 'text-neutral-300 focus:text-white'}`} value={sub.name} onChange={e => setSubsets(subsets.map(s => s.id === sub.id ? {...s, name: e.target.value} : s))} />
-                      {viewMode === 'library' && dictActiveSubsetId === sub.id && <MousePointer2 className="w-3 h-3 text-indigo-500 animate-pulse" />}
-                    </button>
-                    <div className="flex gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
-                      <button onClick={() => { const ns = [...subsets]; if (idx > 0) [ns[idx], ns[idx-1]] = [ns[idx-1], ns[idx]]; setSubsets(ns); }} className="p-1 text-neutral-500 hover:text-white"><ArrowUp className="w-4 h-4" /></button>
-                      <button onClick={() => { const ns = [...subsets]; if (idx < subsets.length - 1) [ns[idx], ns[idx+1]] = [ns[idx+1], ns[idx]]; setSubsets(ns); }} className="p-1 text-neutral-500 hover:text-white"><ArrowDown className="w-4 h-4" /></button>
-                      <button onClick={() => setSubsets(subsets.filter(s => s.id !== sub.id))} className="p-1 text-neutral-500 hover:text-red-500"><Trash2 className="w-4 h-4" /></button>
+            {subsets.map((sub, idx) => {
+              const isCollapsed = collapsedSubsets.has(sub.id);
+              return (
+                <div key={sub.id} className="relative group animate-in slide-in-from-left-2 duration-300">
+                  {idx < subsets.length && <div className="absolute left-5 -bottom-6 w-0.5 h-6 bg-indigo-500/20 z-0 hidden md:block" />}
+                  <div className={`bg-neutral-800/40 border rounded-3xl p-5 relative z-10 transition-all shadow-xl ${dictActiveSubsetId === sub.id && viewMode === 'library' ? 'border-indigo-500 bg-indigo-500/5 ring-1 ring-indigo-500/20' : 'border-white/5 hover:border-indigo-500/30'}`}>
+                    <div className="flex items-center justify-between mb-4">
+                      <div className="flex items-center gap-3 flex-1">
+                        <button 
+                          onClick={() => {
+                            const next = new Set(collapsedSubsets);
+                            if (next.has(sub.id)) next.delete(sub.id);
+                            else next.add(sub.id);
+                            setCollapsedSubsets(next);
+                          }}
+                          className="p-1 hover:bg-white/5 rounded-lg text-neutral-500 transition-transform"
+                        >
+                          <ChevronRight className={`w-4 h-4 transition-transform ${!isCollapsed ? 'rotate-90' : ''}`} />
+                        </button>
+                        <button onClick={() => setDictActiveSubsetId(sub.id)} className="flex items-center gap-3 flex-1 text-left group/name">
+                          <div className={`w-6 h-6 rounded-lg flex items-center justify-center text-[10px] font-black transition-all ${dictActiveSubsetId === sub.id ? 'bg-indigo-600 text-white' : 'bg-indigo-600/20 text-indigo-400'}`}>{idx + 1}</div>
+                          <input className={`bg-transparent text-xs font-black uppercase focus:outline-none w-32 transition-all ${dictActiveSubsetId === sub.id ? 'text-indigo-400' : 'text-neutral-300 focus:text-white'}`} value={sub.name} onChange={e => setSubsets(subsets.map(s => s.id === sub.id ? {...s, name: e.target.value} : s))} />
+                          {viewMode === 'library' && dictActiveSubsetId === sub.id && <MousePointer2 className="w-3 h-3 text-indigo-500 animate-pulse" />}
+                        </button>
+                      </div>
+                      <div className="flex gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
+                        <button onClick={() => { const ns = [...subsets]; if (idx > 0) [ns[idx], ns[idx-1]] = [ns[idx-1], ns[idx]]; setSubsets(ns); }} className="p-1 text-neutral-500 hover:text-white"><ArrowUp className="w-4 h-4" /></button>
+                        <button onClick={() => { const ns = [...subsets]; if (idx < subsets.length - 1) [ns[idx], ns[idx+1]] = [ns[idx+1], ns[idx]]; setSubsets(ns); }} className="p-1 text-neutral-500 hover:text-white"><ArrowDown className="w-4 h-4" /></button>
+                        <button onClick={() => setSubsets(subsets.filter(s => s.id !== sub.id))} className="p-1 text-neutral-500 hover:text-red-500"><Trash2 className="w-4 h-4" /></button>
+                      </div>
                     </div>
-                  </div>
-                  <div className="space-y-4">
-                    <div className="space-y-1.5">
-                      <span className="text-[9px] font-black text-indigo-500/60 uppercase tracking-widest px-1">Includes (+)</span>
-                      <TagInput tags={sub.keywords} onChange={tags => setSubsets(subsets.map(s => s.id === sub.id ? {...s, keywords: tags} : s))} placeholder="Add include tag..." colorClass="indigo" suggestions={uniqueTags} />
-                    </div>
-                    <div className="space-y-1.5">
-                      <span className="text-[9px] font-black text-red-500/60 uppercase tracking-widest px-1">Excludes (-)</span>
-                      <TagInput tags={sub.excludeKeywords} onChange={tags => setSubsets(subsets.map(s => s.id === sub.id ? {...s, excludeKeywords: tags} : s))} placeholder="Add exclude tag..." colorClass="red" suggestions={uniqueTags} />
-                    </div>
+                    
+                    {!isCollapsed && (
+                      <div className="space-y-4 animate-in fade-in slide-in-from-top-2 duration-200">
+                        <div className="space-y-1.5">
+                          <span className="text-[9px] font-black text-indigo-500/60 uppercase tracking-widest px-1">Includes (+)</span>
+                          <TagInput tags={sub.keywords} onChange={tags => setSubsets(subsets.map(s => s.id === sub.id ? {...s, keywords: tags} : s))} placeholder="Add include tag..." colorClass="indigo" suggestions={uniqueTags} />
+                        </div>
+                        <div className="space-y-1.5">
+                          <span className="text-[9px] font-black text-red-500/60 uppercase tracking-widest px-1">Excludes (-)</span>
+                          <TagInput tags={sub.excludeKeywords} onChange={tags => setSubsets(subsets.map(s => s.id === sub.id ? {...s, excludeKeywords: tags} : s))} placeholder="Add exclude tag..." colorClass="red" suggestions={uniqueTags} />
+                        </div>
+                      </div>
+                    )}
                   </div>
                 </div>
-              </div>
-            ))}
+              );
+            })}
             <div className="bg-neutral-900/40 border border-dashed border-white/10 rounded-3xl p-6 text-center shrink-0"><span className="text-xs font-black text-neutral-600 uppercase tracking-widest opacity-50">Waterfall End</span></div>
           </div>
 
@@ -517,7 +516,14 @@ export const TagClassifier = ({ onClose, initialData = "" }: TagClassifierProps)
           </div>
         </aside>
 
-        <section className="flex-1 flex flex-col bg-black/40 relative overflow-hidden min-w-0">
+        <section className="flex-1 flex flex-col bg-black/40 relative overflow-hidden min-w-0 transition-all duration-300">
+          <button 
+            onClick={() => setIsRightSidebarOpen(!isRightSidebarOpen)}
+            className="absolute right-0 top-1/2 -translate-y-1/2 z-50 p-1.5 bg-neutral-800 border-l border-y border-white/10 rounded-l-xl text-neutral-500 hover:text-white transition-all shadow-2xl"
+          >
+            {isRightSidebarOpen ? <ChevronRight className="w-5 h-5" /> : <ChevronLeft className="w-5 h-5" />}
+          </button>
+
           <div className="flex-1 p-6 lg:p-10 flex flex-col gap-8 overflow-hidden">
             {viewMode === 'single' && (
               <div className="flex-1 flex flex-col gap-8 overflow-hidden animate-in slide-in-from-bottom-2 duration-500">
@@ -538,9 +544,9 @@ export const TagClassifier = ({ onClose, initialData = "" }: TagClassifierProps)
                   </div>
                 </div>
 
-                <div className="flex-1 flex flex-col gap-4 min-h-0">
+                <div className="flex-[3] flex flex-col gap-4 min-h-0">
                   <label className="text-xs font-black uppercase text-neutral-600 tracking-widest px-3">Active Data Stream</label>
-                  <div className="flex-1 relative group">
+                  <div className="flex-1 relative group min-h-0">
                     <textarea 
                       className="w-full h-full bg-neutral-900/80 border border-white/10 rounded-[3rem] p-10 text-xl font-mono text-neutral-200 focus:outline-none focus:border-indigo-500/50 resize-none shadow-[inner_0_4px_32px_rgba(0,0,0,0.6)] leading-relaxed scrollbar-thin transition-all"
                       value={lines[currentIndex] || ""}
@@ -551,8 +557,8 @@ export const TagClassifier = ({ onClose, initialData = "" }: TagClassifierProps)
                   </div>
                 </div>
 
-                <div className="h-72 bg-indigo-600/5 border border-indigo-500/20 rounded-[2.5rem] p-8 flex flex-col gap-6 shadow-2xl shrink-0">
-                  <div className="flex items-center justify-between">
+                <div className="flex-[2] min-h-[180px] bg-indigo-600/5 border border-indigo-500/20 rounded-[2.5rem] p-8 flex flex-col gap-6 shadow-2xl shrink-0 overflow-hidden">
+                  <div className="flex items-center justify-between shrink-0">
                     <div className="flex items-center gap-4 text-indigo-400">
                       <RefreshCw className="w-5 h-5" />
                       <span className="text-xs font-black uppercase tracking-widest">Flow Result</span>
@@ -563,14 +569,14 @@ export const TagClassifier = ({ onClose, initialData = "" }: TagClassifierProps)
                     </div>
                   </div>
                   <div className="flex-1 overflow-y-auto space-y-4 pr-4 scrollbar-thin text-white">
-                    {parseLine(lines[currentIndex] || "").map((sub) => (
+                    {parseLine(lines[currentIndex] || "").map((sub: any) => (
                       <div key={sub.id} className="flex items-start gap-6 group">
                         <div className="w-32 shrink-0 flex items-center gap-3">
                           <span className={`text-[10px] font-black uppercase px-3 py-1.5 rounded-xl w-full text-center border transition-all ${sub.id === 0 ? 'text-neutral-500 border-white/5 bg-black/40' : 'text-indigo-400 border-indigo-500/20 bg-indigo-500/10'}`}>{sub.name}</span>
                           <ArrowRight className="w-4 h-4 text-neutral-700" />
                         </div>
                         <div className="flex-1 flex flex-wrap gap-2 pt-1.5">
-                          {sub.matches.length > 0 ? sub.matches.map((m, i) => <span key={i} className="px-2.5 py-0.5 bg-neutral-800 border border-white/5 rounded-lg text-xs font-mono text-neutral-300 shadow-inner">{m}</span>) : <span className="text-[10px] text-neutral-700 italic pt-1 uppercase font-bold tracking-widest opacity-50">Empty</span>}
+                          {sub.matches.length > 0 ? sub.matches.map((m: string, i: number) => <span key={i} className="px-2.5 py-0.5 bg-neutral-800 border border-white/5 rounded-lg text-xs font-mono text-neutral-300 shadow-inner">{m}</span>) : <span className="text-[10px] text-neutral-700 italic pt-1 uppercase font-bold tracking-widest opacity-50">Empty</span>}
                         </div>
                       </div>
                     ))}
@@ -669,7 +675,7 @@ export const TagClassifier = ({ onClose, initialData = "" }: TagClassifierProps)
           </div>
         </section>
 
-        <aside className="w-full md:w-[24rem] lg:w-[32rem] border-l border-white/5 flex flex-col bg-neutral-900/40 shrink-0 min-h-0">
+        <aside className={`border-l border-white/5 flex flex-col bg-neutral-900/40 shrink-0 min-h-0 transition-all duration-300 overflow-hidden ${isRightSidebarOpen ? 'w-full md:w-[24rem] lg:w-[32rem]' : 'w-0 border-none'}`}>
           {!hasProcessed ? (
             <div className="flex-1 flex flex-col items-center justify-center p-12 text-center opacity-20"><Terminal className="w-16 h-16 mb-6" /><h3 className="text-sm font-black uppercase tracking-[0.3em] mb-3">System Idle</h3><p className="text-xs font-bold text-neutral-500 uppercase leading-relaxed">Compile dataset to<br/>stream results</p></div>
           ) : (

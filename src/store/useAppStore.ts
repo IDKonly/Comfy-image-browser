@@ -65,6 +65,21 @@ export interface TwitterSettings {
 
 export type SortMethod = 'Newest' | 'Oldest' | 'NameAsc' | 'NameDesc';
 
+export interface FilterState {
+  partial_match: string[];
+  exact_match: string[];
+  exceptions: string[];
+  max_words: number;
+  min_tags: number;
+  max_depth: number;
+  simple_mode: boolean;
+  simple_exclusions: string[];
+  mix_mode: boolean;
+  mix_depth: number;
+  mix_tandem_min_branches: number;
+  mix_tandem_ratio: number;
+}
+
 interface AppState {
   folderPath: string | null;
   images: ImageInfo[];
@@ -77,7 +92,12 @@ interface AppState {
   twitterSettings: TwitterSettings;
   recursive: boolean;
   sortMethod: SortMethod;
+  workshopFilter: FilterState;
+  classifierSettings?: any;
   imageCacheSize: number;
+  batchRange: [number, number] | null;
+  batchMap: Record<number, [number, number]>;
+  workshopTargetPaths: string[];
   
   setFolderPath: (path: string | null) => void;
   setImages: (images: ImageInfo[]) => void;
@@ -93,28 +113,11 @@ interface AppState {
   setTwitterSettings: (settings: TwitterSettings) => void;
   setRecursive: (recursive: boolean) => void;
   setSortMethod: (method: SortMethod) => void;
-  setImageCacheSize: (size: number) => void;
-
-  // Workshop State
-  workshopTargetPaths: string[];
-  setWorkshopTargetPaths: (paths: string[]) => void;
-  workshopFilter: FilterState;
   setWorkshopFilter: (filter: FilterState) => void;
-}
-
-export interface FilterState {
-  partial_match: string[];
-  exact_match: string[];
-  exceptions: string[];
-  max_words: number;
-  min_tags: number;
-  max_depth: number;
-  simple_mode: boolean;
-  simple_exclusions: string[];
-  mix_mode: boolean;
-  mix_depth: number;
-  mix_tandem_min_branches: number;
-  mix_tandem_ratio: number;
+  setImageCacheSize: (size: number) => void;
+  setBatchRange: (range: [number, number] | null) => void;
+  setBatchMap: (map: Record<number, [number, number]>) => void;
+  setWorkshopTargetPaths: (paths: string[]) => void;
 }
 
 export const useAppStore = create<AppState>()(
@@ -131,6 +134,9 @@ export const useAppStore = create<AppState>()(
       recursive: false,
       sortMethod: 'NameAsc',
       imageCacheSize: 5,
+      batchRange: null,
+      batchMap: {},
+      workshopTargetPaths: [],
       twitterSettings: {
         template: "{hashtags}\n\n{phrases}\n\n#AIArt #StableDiffusion #ComfyUI",
         phrasesToPick: ["1girl", "masterpiece", "solo", "ultra detailed"],
@@ -140,14 +146,6 @@ export const useAppStore = create<AppState>()(
         accessToken: "",
         accessSecret: "",
       },
-
-      setTwitterSettings: (twitterSettings) => set({ twitterSettings }),
-      setRecursive: (recursive) => set({ recursive }),
-      setSortMethod: (sortMethod) => set({ sortMethod }),
-      setImageCacheSize: (imageCacheSize) => set({ imageCacheSize }),
-
-      // Workshop Initial State
-      workshopTargetPaths: [],
       workshopFilter: {
         partial_match: [],
         exact_match: [],
@@ -162,9 +160,17 @@ export const useAppStore = create<AppState>()(
         mix_tandem_min_branches: 2,
         mix_tandem_ratio: 0.51
       },
+      classifierSettings: {},
 
-      setWorkshopTargetPaths: (paths) => set({ workshopTargetPaths: paths }),
-      setWorkshopFilter: (filter) => set({ workshopFilter: filter }),
+      setTwitterSettings: (twitterSettings) => set({ twitterSettings }),
+      setRecursive: (recursive) => set({ recursive }),
+      setSortMethod: (sortMethod) => set({ sortMethod }),
+      setWorkshopFilter: (workshopFilter) => set({ workshopFilter }),
+      setClassifierSettings: (classifierSettings: any) => set({ classifierSettings }),
+      setImageCacheSize: (imageCacheSize) => set({ imageCacheSize }),
+      setBatchRange: (batchRange) => set({ batchRange }),
+      setBatchMap: (batchMap) => set({ batchMap }),
+      setWorkshopTargetPaths: (workshopTargetPaths) => set({ workshopTargetPaths }),
 
       setFolderPath: (path) => set({ folderPath: path, undoStack: [] }),
       setImages: (images) => set({ images }),
@@ -213,7 +219,8 @@ export const useAppStore = create<AppState>()(
 
         let nextIndex = state.currentIndex;
         if (indices.includes(state.currentIndex)) {
-            nextIndex = Math.min(state.currentIndex, newImages.length - 1);
+            const firstDeletedIndex = Math.min(...indices);
+            nextIndex = Math.min(firstDeletedIndex, newImages.length - 1);
         } else {
             const itemsBefore = indices.filter(i => i < state.currentIndex).length;
             nextIndex = Math.max(0, state.currentIndex - itemsBefore);
@@ -230,11 +237,10 @@ export const useAppStore = create<AppState>()(
     }),
     {
       name: 'comfy-image-browser-storage',
-      version: 1, // Bump version to trigger migration
+      version: 1,
       storage: createJSONStorage(() => localStorage),
       migrate: (persistedState: any, version: number) => {
         if (version === 0) {
-          // Merge existing shortcuts with DEFAULT_SHORTCUTS to ensure new keys (like 'random') exist
           if (persistedState && persistedState.shortcuts) {
             persistedState.shortcuts = {
               ...DEFAULT_SHORTCUTS,
@@ -253,9 +259,9 @@ export const useAppStore = create<AppState>()(
         recursive: state.recursive,
         sortMethod: state.sortMethod,
         workshopFilter: state.workshopFilter,
+        classifierSettings: state.classifierSettings,
         imageCacheSize: state.imageCacheSize,
       }),
     }
   )
 );
-

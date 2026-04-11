@@ -5,29 +5,58 @@ interface Task {
   path: string;
   priority: boolean;
   run: () => Promise<void>;
+  cancel: () => void; // 취소 콜백 추가
 }
 
 const taskQueue: Task[] = [];
-const pendingTasks = new Map<string, Promise<string>>();
+const pendingTasks = new Map<string, { promise: Promise<string>, reject: (reason: any) => void }>();
 let activeTasks = 0;
 const MAX_CONCURRENT = 12;
 
+// 글로벌 로딩 제어 상태
+let isMainImageLoading = false;
+const setMainLoading = (loading: boolean) => {
+    isMainImageLoading = loading;
+    if (!loading) processQueue();
+};
+
+export const notifyMainImageChange = () => {
+    setMainLoading(true);
+    
+    // [핵심 수정] 큐에서 저우선순위 작업을 제거할 때 반드시 cancel()을 호출하여 Promise를 정리
+    let i = 0;
+    while (i < taskQueue.length) {
+        if (!taskQueue[i].priority) {
+            const [task] = taskQueue.splice(i, 1);
+            task.cancel(); // 좀비 Promise 방지
+        } else {
+            i++;
+        }
+    }
+    
+    setTimeout(() => setMainLoading(false), 400);
+};
+
 const processQueue = () => {
-  if (activeTasks >= MAX_CONCURRENT || taskQueue.length === 0) return;
+  if (taskQueue.length === 0 || activeTasks >= MAX_CONCURRENT) return;
+  if (isMainImageLoading && !taskQueue[0].priority) return;
   
   const task = taskQueue.shift();
   if (task) {
     activeTasks++;
     task.run().finally(() => {
       activeTasks--;
-      processQueue();
+      setTimeout(processQueue, 5);
     });
     processQueue();
   }
 };
 
-export const scheduleThumbnailGeneration = (path: string, priority = true): Promise<string> => {
-  if (pendingTasks.has(path)) {
+export const scheduleThumbnailGeneration = (path: string, priority = true, size = 512): Promise<string> => {
+  const cacheKey = `${path}-${size}`;
+  const existing = pendingTasks.get(cacheKey);
+  
+  if (existing) {
     if (priority) {
       const idx = taskQueue.findIndex(t => t.path === path);
       if (idx !== -1 && !taskQueue[idx].priority) {
@@ -36,34 +65,50 @@ export const scheduleThumbnailGeneration = (path: string, priority = true): Prom
         taskQueue.unshift(task);
       }
     }
-    return pendingTasks.get(path)!;
+    return existing.promise;
   }
 
+  let rejectFn: (reason: any) => void = () => {};
   const promise = new Promise<string>((resolve, reject) => {
-    const taskObj = {
+    rejectFn = reject;
+    const taskObj: Task = {
       path,
       priority,
       run: async () => {
         try {
-          const res = await invoke("get_thumbnail", { path });
+          const res = await invoke("get_thumbnail", { path, size });
           resolve(res as string);
         } catch (e) {
           reject(e);
         }
+      },
+      cancel: () => {
+        reject("Task Cancelled");
       }
     };
     
-    if (priority) {
-      taskQueue.unshift(taskObj);
-    } else {
-      taskQueue.push(taskObj);
-    }
+    if (priority) taskQueue.unshift(taskObj);
+    else taskQueue.push(taskObj);
     processQueue();
   });
 
-  pendingTasks.set(path, promise);
-  promise.finally(() => pendingTasks.delete(path));
+  pendingTasks.set(cacheKey, { promise, reject: rejectFn });
+  promise.finally(() => {
+    const current = pendingTasks.get(cacheKey);
+    if (current?.promise === promise) {
+        pendingTasks.delete(cacheKey);
+    }
+  }).catch(() => {});
+  
   return promise;
+};
+
+export const cancelThumbnailTask = (path: string) => {
+    const idx = taskQueue.findIndex(t => t.path === path);
+    if (idx !== -1) {
+        const [task] = taskQueue.splice(idx, 1);
+        task.cancel();
+    }
 };
 
 interface ThumbnailProps {
@@ -112,6 +157,7 @@ export const Thumbnail = ({ path, mtime, reloadTimestamp, className, onClick, fi
     return () => { 
       active = false; 
       if (timer) clearTimeout(timer);
+      cancelThumbnailTask(path);
     };
   }, [path, mtime, reloadTimestamp, delay]);
 

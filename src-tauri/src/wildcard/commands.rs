@@ -9,43 +9,98 @@ use crate::metadata::read_metadata;
 use super::types::WildcardFilter;
 use super::filter::apply_filters;
 use super::merger::merge_tag_groups;
+use std::path::Path;
+use std::time::UNIX_EPOCH;
+use crate::metadata::ImageMetadata;
+use crate::scanner::ImageInfo;
 use super::utils::{get_db_path_local, remove_unbalanced_braces};
 use super::expansion::expand_single_line;
+use super::classifier::{classify_prompts, ClassifierSubset, WordGroup, ClassificationResult};
+
+#[tauri::command]
+pub fn classify_prompts_command(
+    lines: Vec<String>,
+    subsets: Vec<ClassifierSubset>,
+    word_groups: Vec<WordGroup>,
+) -> Result<Vec<ClassificationResult>, String> {
+    Ok(classify_prompts(lines, subsets, word_groups))
+}
+
+fn sync_newly_parsed_metadata(app_handle: &tauri::AppHandle, paths_and_meta: &[(String, Option<ImageMetadata>)]) {
+    let to_sync: Vec<(String, ImageMetadata)> = paths_and_meta.iter()
+        .filter_map(|(path, meta_opt)| {
+            meta_opt.as_ref().map(|m| (path.clone(), m.clone()))
+        })
+        .collect();
+
+    if !to_sync.is_empty() {
+        if let Ok(db_path) = get_db_path_local(app_handle) {
+            if let Ok(mut db) = DB::open(&db_path) {
+                let batch_data: Vec<(ImageInfo, ImageMetadata)> = to_sync.into_iter().map(|(path, meta)| {
+                    let p = Path::new(&path);
+                    let mtime = p.metadata().ok()
+                        .and_then(|m| m.modified().ok())
+                        .and_then(|t| t.duration_since(UNIX_EPOCH).ok())
+                        .map(|d| d.as_secs()).unwrap_or(0);
+                    let size = p.metadata().map(|m| m.len()).unwrap_or(0);
+                    
+                    (ImageInfo {
+                        path: path.clone(),
+                        name: p.file_name().unwrap_or_default().to_string_lossy().to_string(),
+                        mtime,
+                        size,
+                    }, meta)
+                }).collect();
+                
+                let refs: Vec<(&ImageInfo, ImageMetadata)> = batch_data.iter().map(|(info, meta)| (info, meta.clone())).collect();
+                let _ = db.insert_images_batch(refs);
+            }
+        }
+    }
+}
 
 #[tauri::command]
 pub fn get_tag_counts(app_handle: tauri::AppHandle, paths: Vec<String>) -> Result<HashMap<String, u32>, String> {
-    let mut db_prompts = HashMap::new();
+    let mut db_prompts: HashMap<String, Option<String>> = HashMap::new();
     if let Ok(db_path) = get_db_path_local(&app_handle) {
         if let Ok(db) = DB::open(&db_path) {
             if let Ok(images) = db.get_images_by_paths(&paths) {
                 for img in images {
-                    if let Some(p) = img.prompt {
-                        db_prompts.insert(img.path, p);
-                    }
+                    db_prompts.insert(img.path, img.prompt);
                 }
             }
         }
     }
 
-    let counts: HashMap<String, u32> = paths.par_iter()
+    let results: Vec<(String, Option<String>, Option<ImageMetadata>)> = paths.par_iter()
         .map(|path| {
-            if let Some(prompt) = db_prompts.get(path) {
-                return prompt.split(',')
+            if let Some(db_opt) = db_prompts.get(path) {
+                (path.clone(), db_opt.clone(), None)
+            } else {
+                let meta = read_metadata(path).ok();
+                let p = meta.as_ref().and_then(|m| m.prompt.clone());
+                (path.clone(), p, meta)
+            }
+        })
+        .collect();
+
+    // Sync newly parsed ones to DB
+    let newly_parsed: Vec<(String, Option<ImageMetadata>)> = results.iter()
+        .filter(|(path, _, _)| !db_prompts.contains_key(path))
+        .map(|(path, _, meta)| (path.clone(), meta.clone()))
+        .collect();
+    sync_newly_parsed_metadata(&app_handle, &newly_parsed);
+
+    let counts: HashMap<String, u32> = results.par_iter()
+        .map(|(_, prompt_opt, _)| {
+            if let Some(prompt) = prompt_opt {
+                prompt.split(',')
                     .map(|s| remove_unbalanced_braces(s))
                     .filter(|s| !s.trim().is_empty())
-                    .collect::<Vec<_>>();
+                    .collect::<Vec<_>>()
+            } else {
+                Vec::new()
             }
-            
-            // Fallback for non-indexed images
-            if let Ok(meta) = read_metadata(path) {
-                if let Some(prompt) = meta.prompt {
-                    return prompt.split(',')
-                        .map(|s| remove_unbalanced_braces(s))
-                        .filter(|s| !s.trim().is_empty())
-                        .collect::<Vec<_>>();
-                }
-            }
-            Vec::new()
         })
         .flatten()
         .fold(HashMap::new, |mut acc, tag| {
@@ -87,15 +142,28 @@ pub fn generate_wildcards(app_handle: tauri::AppHandle, window: Window, paths: V
         }
     }
 
-    // 2. Process Image Paths
-    let mut tag_sets: Vec<HashSet<String>> = paths.par_iter()
+    // 2. Process Image Paths (with Sync logic)
+    let results: Vec<(String, Option<String>, Option<ImageMetadata>)> = paths.par_iter()
         .map(|path| {
-            let prompt_opt = if let Some(p) = db_prompts.get(path) {
-                Some(p.clone())
+            if let Some(p) = db_prompts.get(path) {
+                (path.clone(), Some(p.clone()), None)
             } else {
-                read_metadata(path).ok().and_then(|m| m.prompt)
-            };
+                let meta = read_metadata(path).ok();
+                let p = meta.as_ref().and_then(|m| m.prompt.clone());
+                (path.clone(), p, meta)
+            }
+        })
+        .collect();
 
+    // Sync newly parsed ones to DB
+    let newly_parsed: Vec<(String, Option<ImageMetadata>)> = results.iter()
+        .filter(|(path, _, _)| !db_prompts.contains_key(path))
+        .map(|(path, _, meta)| (path.clone(), meta.clone()))
+        .collect();
+    sync_newly_parsed_metadata(&app_handle, &newly_parsed);
+
+    let mut tag_sets: Vec<HashSet<String>> = results.into_iter()
+        .map(|(_, prompt_opt, _)| {
             let res = if let Some(prompt) = prompt_opt {
                 let tags: HashSet<String> = prompt.split(',')
                     .map(|s| remove_unbalanced_braces(s))
@@ -202,14 +270,47 @@ pub fn compare_tags(app_handle: tauri::AppHandle, window: Window, target_paths: 
     }
 
     // 2. Build Target Tag Sets (Images + Text)
-    let mut target_tags_sets: Vec<HashSet<String>> = target_paths.par_iter()
+    let target_results: Vec<(String, Option<String>, Option<ImageMetadata>)> = target_paths.par_iter()
         .map(|path| {
-            let prompt_opt = if let Some(p) = db_prompts.get(path) {
-                Some(p.clone())
+            if let Some(p) = db_prompts.get(path) {
+                (path.clone(), Some(p.clone()), None)
             } else {
-                read_metadata(path).ok().and_then(|m| m.prompt)
-            };
+                let meta = read_metadata(path).ok();
+                let p = meta.as_ref().and_then(|m| m.prompt.clone());
+                (path.clone(), p, meta)
+            }
+        })
+        .collect();
 
+    // Build Comparison/Subtractive Results
+    let comparison_results: Vec<(String, Option<String>, Option<ImageMetadata>)> = comparison_paths.par_iter()
+        .map(|path| {
+            if let Some(p) = db_prompts.get(path) {
+                (path.clone(), Some(p.clone()), None)
+            } else {
+                let meta = read_metadata(path).ok();
+                let p = meta.as_ref().and_then(|m| m.prompt.clone());
+                (path.clone(), p, meta)
+            }
+        })
+        .collect();
+
+    // Sync newly parsed ones to DB (Target + Comparison)
+    let mut newly_parsed: Vec<(String, Option<ImageMetadata>)> = target_results.iter()
+        .filter(|(path, _, _)| !db_prompts.contains_key(path))
+        .map(|(path, _, meta)| (path.clone(), meta.clone()))
+        .collect();
+    
+    let comparison_newly_parsed: Vec<(String, Option<ImageMetadata>)> = comparison_results.iter()
+        .filter(|(path, _, _)| !db_prompts.contains_key(path))
+        .map(|(path, _, meta)| (path.clone(), meta.clone()))
+        .collect();
+    
+    newly_parsed.extend(comparison_newly_parsed);
+    sync_newly_parsed_metadata(&app_handle, &newly_parsed);
+
+    let mut target_tags_sets: Vec<HashSet<String>> = target_results.into_iter()
+        .map(|(_, prompt_opt, _)| {
             let tags = if let Some(prompt) = prompt_opt {
                 prompt.split(',').map(|s| remove_unbalanced_braces(s)).filter(|s| !s.trim().is_empty()).collect::<HashSet<_>>()
             } else { HashSet::new() };
@@ -242,14 +343,8 @@ pub fn compare_tags(app_handle: tauri::AppHandle, window: Window, target_paths: 
     target_tags_sets.extend(text_target_sets);
 
     // 3. Build Comparison/Subtractive Tags (Images + Text)
-    let mut comparison_tags: HashSet<String> = comparison_paths.par_iter()
-        .flat_map(|path| {
-            let prompt_opt = if let Some(p) = db_prompts.get(path) {
-                Some(p.clone())
-            } else {
-                read_metadata(path).ok().and_then(|m| m.prompt)
-            };
-
+    let mut comparison_tags: HashSet<String> = comparison_results.into_iter()
+        .flat_map(|(_, prompt_opt, _)| {
             let res = if let Some(prompt) = prompt_opt {
                 prompt.split(',').map(|s| remove_unbalanced_braces(s)).filter(|s| !s.trim().is_empty()).collect::<Vec<_>>()
             } else { Vec::new() };

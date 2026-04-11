@@ -24,31 +24,36 @@ import { AppFooter } from "./components/layout/AppFooter";
 export type SortMethod = 'Newest' | 'Oldest' | 'NameAsc' | 'NameDesc';
 
 // Pre-caching components
-const ImageCache = ({ images, currentIndex, batchMode, batchRange, reloadTimestamp, cacheSize }: { 
+// @ts-ignore
+const _ImageCache = ({ images, currentIndex, batchMode, batchRange, reloadTimestamp, cacheSize }: { 
   images: any[], currentIndex: number, batchMode: boolean, batchRange: [number, number] | null, reloadTimestamp: number, cacheSize: number 
 }) => {
+  const [shouldLoad, setShouldLoad] = useState(false);
   const fullImageIndices = new Set<number>();
   const thumbIndices = new Set<number>();
 
-  if (images.length > 0) {
-    if (batchMode && batchRange) {
-      // In batch mode, cache thumbnails for the adjacent batches
-      for (let i = 1; i <= cacheSize; i++) {
-        const prev = batchRange[0] - i;
-        const next = batchRange[1] + i;
-        if (prev >= 0) thumbIndices.add(prev);
-        if (next < images.length) thumbIndices.add(next);
-      }
-      // Cache full images for the first few in the current batch (for instant zoom view)
-      for (let i = batchRange[0]; i <= Math.min(batchRange[1], batchRange[0] + 3); i++) {
-        fullImageIndices.add(i);
-      }
-    } else {
-      // Single mode logic
-      for (let i = 1; i <= cacheSize; i++) {
-        if (currentIndex + i < images.length) fullImageIndices.add(currentIndex + i);
-        if (currentIndex - i >= 0) fullImageIndices.add(currentIndex - i);
-      }
+  useEffect(() => {
+    setShouldLoad(false);
+    const timer = setTimeout(() => setShouldLoad(true), 150);
+    return () => clearTimeout(timer);
+  }, [currentIndex, batchMode, batchRange]);
+
+  if (!shouldLoad || images.length === 0) return null;
+
+  if (batchMode && batchRange) {
+    for (let i = 1; i <= cacheSize; i++) {
+      const prev = batchRange[0] - i;
+      const next = batchRange[1] + i;
+      if (prev >= 0) thumbIndices.add(prev);
+      if (next < images.length) thumbIndices.add(next);
+    }
+    for (let i = batchRange[0]; i <= Math.min(batchRange[1], batchRange[0] + 3); i++) {
+      fullImageIndices.add(i);
+    }
+  } else {
+    for (let i = 1; i <= cacheSize; i++) {
+      if (currentIndex + i < images.length) fullImageIndices.add(currentIndex + i);
+      if (currentIndex - i >= 0) fullImageIndices.add(currentIndex - i);
     }
   }
 
@@ -57,10 +62,12 @@ const ImageCache = ({ images, currentIndex, batchMode, batchRange, reloadTimesta
       {Array.from(fullImageIndices).map(idx => {
         const img = images[idx];
         if (!img || !img.path) return null;
+        const normalizedPath = img.path.replace(/\//g, '\\');
         return (
           <img 
             key={`full-${img.path}-${reloadTimestamp}`}
-            src={reloadTimestamp ? `${convertFileSrc(img.path.replace(/\//g, '\\'))}?t=${reloadTimestamp}` : convertFileSrc(img.path.replace(/\//g, '\\'))} 
+            src={reloadTimestamp ? `${convertFileSrc(normalizedPath)}?t=${reloadTimestamp}` : convertFileSrc(normalizedPath)} 
+            loading="lazy"
           />
         );
       })}
@@ -84,18 +91,72 @@ const ImageCache = ({ images, currentIndex, batchMode, batchRange, reloadTimesta
 
 function App() {
   const { 
-    folderPath, images, currentIndex, currentMetadata, shortcuts, batchMode, indexProgress, twitterSettings, recursive, sortMethod, imageCacheSize,
-    setFolderPath, setImages, setCurrentIndex, setCurrentMetadata, removeImages, setShortcuts, setBatchMode, setIndexProgress, setTwitterSettings, setRecursive, setSortMethod: setAppSortMethod,
-    setWorkshopTargetPaths, workshopFilter, setWorkshopFilter
+    folderPath, images, currentIndex, currentMetadata, shortcuts, batchMode, indexProgress, twitterSettings, recursive, sortMethod, imageCacheSize: _imageCacheSize,
+    setFolderPath, setImages, setCurrentIndex, setCurrentMetadata, removeImages, setShortcuts, setBatchMode, setIndexProgress, setTwitterSettings, setRecursive,
+    setWorkshopTargetPaths, workshopFilter, setWorkshopFilter, batchRange, setBatchRange, batchMap, setBatchMap
   } = useAppStore();
 
   const { showToast } = useToast();
   
+  // 배치 지도 업데이트 (프롬프트 기반 그룹화)
+  const updateBatchMap = useCallback(async (currentImages: any[]) => {
+    if (currentImages.length === 0) {
+        setBatchMap({});
+        return;
+    }
+    try {
+        // 경로 기반 프롬프트 맵 가져오기 (O(1) 조회를 위해)
+        const paths = currentImages.map((img: any) => img.path);
+        const rawPromptMap = await invoke("get_prompts_map_by_paths", { paths }) as Record<string, string | null>;
+        
+        // Normalize keys to lowercase for robust matching
+        const promptMap: Record<string, string | null> = {};
+        for (const [k, v] of Object.entries(rawPromptMap)) {
+            promptMap[k.replace(/\\/g, '/').toLowerCase()] = v;
+        }
+        
+        const newMap: Record<number, [number, number]> = {};
+        let i = 0;
+        while (i < currentImages.length) {
+            let start = i;
+            let end = i;
+            
+            // 현재 이미지의 프롬프트 (정규화: null/empty 체크 및 슬래시 변환)
+            const currentPath = currentImages[i].path.replace(/\\/g, '/').toLowerCase();
+            const currentPrompt = promptMap[currentPath] || null;
+            
+            // 동일 프롬프트를 가진 '연속된' 이미지를 찾음
+            // (정렬 순서가 바뀌면 배치도 그에 맞춰 재계산되어야 함)
+            while (end + 1 < currentImages.length) {
+                const nextPath = currentImages[end + 1].path.replace(/\\/g, '/').toLowerCase();
+                const nextPrompt = promptMap[nextPath] || null;
+                
+                // 프롬프트가 같고 둘 다 존재할 때만 묶음 (null끼리는 묶지 않음 - 개별로 취급)
+                if (currentPrompt !== null && nextPrompt !== null && currentPrompt === nextPrompt) {
+                    end++;
+                } else {
+                    break;
+                }
+            }
+            
+            for (let k = start; k <= end; k++) {
+                newMap[k] = [start, end];
+            }
+            i = end + 1;
+        }
+        setBatchMap(newMap);
+    } catch (e) { console.error("Batch map failed", e); }
+  }, [setBatchMap]);
+
+  // 이미지 목록 변경 시 자동 배치 지도 갱신
+  useEffect(() => {
+    updateBatchMap(images);
+  }, [images, updateBatchMap]);
+
   // Local UI States
-  const [batchRange, setBatchRange] = useState<[number, number] | null>(null);
   const [searchQuery, setSearchQuery] = useState("");
   const [isSearching, setIsSearching] = useState(false);
-  const [imageSrc, setImageSrc] = useState<string | null>(null);
+  const [_imageSrc, setImageSrc] = useState<string | null>(null);
   const [showSettings, setShowSettings] = useState(false);
   const [showFilters, setShowFilters] = useState(false);
   const [showWildcards, setShowWildcards] = useState(false);
@@ -112,9 +173,9 @@ function App() {
 
   useEffect(() => { showWildcardsRef.current = showWildcards; }, [showWildcards]);
 
-  // Handlers
-  const handleSortChange = (method: SortMethod) => { setAppSortMethod(method); };
+  const isOperating = useRef(false);
 
+  // Handlers
   const handleTwitterUpload = useCallback(async () => {
     if (images.length === 0 || !images[currentIndex]) return;
     try {
@@ -148,7 +209,7 @@ function App() {
     if (!folderPath) return;
     const ts = Date.now();
     setReloadTimestamp(ts);
-    const result = await invoke("scan_directory", { path: folderPath, sortMethod, recursive }) as any;
+    const result = await invoke("scan_directory", { path: folderPath, sortMethod, recursive, force_reindex: true }) as any;
     setFolderPath(result.folder);
     setImages(result.images);
     if (result.images[currentIndex]) {
@@ -156,7 +217,7 @@ function App() {
         invoke("get_metadata", { path: current.path }).then(m => setCurrentMetadata(m as ImageMetadata)).catch(() => {});
         setImageSrc(`${convertFileSrc(current.path)}?t=${ts}`);
     }
-    showToast("Reloaded", 'info');
+    showToast("Reloaded and Re-indexed", 'info');
   };
 
   const handleSearch = async (overrideFilters?: { model: string, sampler: string }, overrideSort?: SortMethod) => {
@@ -205,16 +266,23 @@ function App() {
         targets = [];
         for (let i = batchRange[0]; i <= batchRange[1]; i++) targets.push(i);
     }
-    if (isTrashFolder) {
-        if (await confirm(`Permanently delete ${targets.length} image(s)?`)) {
-            await invoke("delete_to_trash", { paths: targets.map(i => images[i].path) });
-            removeImages(targets);
-            showToast("Permanently Deleted", 'error');
+    const pathsToDelete = targets.map(i => images[i].path);
+    
+    isOperating.current = true;
+    try {
+        if (isTrashFolder) {
+            if (await confirm(`Permanently delete ${targets.length} image(s)?`)) {
+                removeImages(targets);
+                invoke("delete_to_trash", { paths: pathsToDelete }).catch(e => showToast(`Failed: ${e}`, 'error'));
+                showToast("Permanently Deleted", 'error');
+            }
+        } else {
+            removeImages(targets, 'trash');
+            invoke("delete_to_trash", { paths: pathsToDelete }).catch(e => showToast(`Failed: ${e}`, 'error'));
+            showToast("Moved to _Trash", 'info');
         }
-    } else {
-        await invoke("delete_to_trash", { paths: targets.map(i => images[i].path) });
-        removeImages(targets, 'trash');
-        showToast("Moved to _Trash", 'info');
+    } finally {
+        setTimeout(() => { isOperating.current = false; }, 500);
     }
   }, [images, currentIndex, batchMode, batchRange, isTrashFolder, removeImages, showToast]);
 
@@ -225,9 +293,16 @@ function App() {
         targets = [];
         for (let i = batchRange[0]; i <= batchRange[1]; i++) targets.push(i);
     }
-    await invoke("move_to_keep", { paths: targets.map(i => images[i].path) });
-    removeImages(targets, 'keep');
-    showToast("Moved to _Keep", 'success');
+    const pathsToKeep = targets.map(i => images[i].path);
+    
+    isOperating.current = true;
+    try {
+        removeImages(targets, 'keep');
+        invoke("move_to_keep", { paths: pathsToKeep }).catch(e => showToast(`Failed: ${e}`, 'error'));
+        showToast("Moved to _Keep", 'success');
+    } finally {
+        setTimeout(() => { isOperating.current = false; }, 500);
+    }
   }, [images, currentIndex, batchMode, batchRange, removeImages, showToast]);
 
   const handleUndo = useCallback(async () => {
@@ -277,24 +352,33 @@ function App() {
 
   useEffect(() => {
     const unlistenProgress = listen('index-progress', (event: any) => setIndexProgress(event.payload));
-    const unlistenUpdate = listen('folder-updated', (event: any) => {
+    const unlistenUpdate = listen('folder-updated', async (event: any) => {
+      if (isOperating.current) return;
+      
       const payload = event.payload as any;
       const state = useAppStore.getState();
       if (payload.folder === state.folderPath || recursive) {
-        const currentImages = state.images;
-        const currentIdx = state.currentIndex;
-        
-        let targetIndex = payload.initial_index !== undefined ? payload.initial_index : 0;
-        if (currentImages.length > 0 && currentIdx !== undefined && currentImages[currentIdx]) {
-            const currentPath = currentImages[currentIdx].path;
-            const newIndex = payload.images.findIndex((img: any) => img.path === currentPath);
-            if (newIndex !== -1) {
-                targetIndex = newIndex;
+        // 검색 중인지 확인 (상태 참조를 위해 state 활용 가능성 확인)
+        // 여기서는 컴포넌트 스코프의 isSearching을 직접 참조하거나 handleSearch를 호출해야 함.
+        if (isSearching) {
+            // 검색 중이라면 현재 검색 조건으로 다시 검색 수행
+            await handleSearch();
+        } else {
+            const currentImages = state.images;
+            const currentIdx = state.currentIndex;
+            
+            let targetIndex = payload.initial_index !== undefined ? payload.initial_index : 0;
+            if (currentImages.length > 0 && currentIdx !== undefined && currentImages[currentIdx]) {
+                const currentPath = currentImages[currentIdx].path;
+                const newIndex = payload.images.findIndex((img: any) => img.path === currentPath);
+                if (newIndex !== -1) {
+                    targetIndex = newIndex;
+                }
             }
+            
+            setImages(payload.images);
+            setCurrentIndex(targetIndex);
         }
-        
-        setImages(payload.images);
-        setCurrentIndex(targetIndex);
       }
     });
 
@@ -326,11 +410,12 @@ function App() {
       invoke("scan_directory", { path: folderPath, sortMethod, recursive })
         .then((result: any) => {
           setImages(result.images);
+          updateBatchMap(result.images); // 배치 지도 생성
           if (currentIndex !== undefined && result.images.length > currentIndex) setCurrentIndex(currentIndex);
           initialScanDone.current = true;
         }).catch(() => {});
     }
-  }, [folderPath]);
+  }, [folderPath, updateBatchMap]);
 
   useEffect(() => {
     if (folderPath && initialScanDone.current) {
@@ -339,6 +424,7 @@ function App() {
             const currentPath = images[currentIndex]?.path;
             invoke("scan_directory", { path: folderPath, sortMethod, recursive }).then((result: any) => {
                 setImages(result.images);
+                updateBatchMap(result.images); // 이미지 목록 변경 시 지도 갱신
                 if (currentPath) {
                     const newIndex = result.images.findIndex((img: any) => img.path === currentPath);
                     if (newIndex !== -1) setCurrentIndex(newIndex);
@@ -348,19 +434,29 @@ function App() {
     }
   }, [recursive, sortMethod]);
 
+  // [핵심] 배치 범위 즉시 업데이트 (0ms 지연)
   useEffect(() => {
-    if (batchMode && images.length > 0 && images[currentIndex]) {
-      invoke("get_batch_range", { paths: images.map(img => img.path), currentIndex })
-        .then(r => setBatchRange(r as [number, number]))
-        .catch(() => setBatchRange(null));
+    if (batchMode && images.length > 0) {
+      const range = batchMap[currentIndex];
+      if (range) {
+        setBatchRange(range);
+      } else {
+        // 지도가 아직 없다면 (인덱싱 중 등) 싱글 이미지 범위로 폴백
+        setBatchRange([currentIndex, currentIndex]);
+      }
     } else setBatchRange(null);
-  }, [currentIndex, images, batchMode]);
+  }, [currentIndex, images, batchMode, batchMap, setBatchRange]);
 
   useEffect(() => {
     if (images.length > 0 && images[currentIndex]) {
       const current = images[currentIndex];
+      // 1. 최우선 순위: 인덱싱 포커스 업데이트 및 메타데이터 조회
+      invoke("update_scan_focus", { index: currentIndex }).catch(() => {});
       invoke("get_metadata", { path: current.path }).then(m => setCurrentMetadata(m as ImageMetadata)).catch(() => {});
-      setImageSrc(reloadTimestamp ? `${convertFileSrc(current.path.replace(/\//g, '\\'))}?t=${reloadTimestamp}` : convertFileSrc(current.path.replace(/\//g, '\\')));
+      
+      // 2. 메인 이미지 경로 설정 (ImageCache보다 먼저 실행됨)
+      const normalizedPath = current.path.replace(/\//g, '\\');
+      setImageSrc(reloadTimestamp ? `${convertFileSrc(normalizedPath)}?t=${reloadTimestamp}` : convertFileSrc(normalizedPath));
     } else setImageSrc(null);
   }, [currentIndex, images, reloadTimestamp, setCurrentMetadata]);
 
@@ -409,14 +505,13 @@ function App() {
 
   return (
     <div className="flex flex-col h-screen bg-neutral-950 text-neutral-100 font-sans overflow-hidden">
-      <AppHeader 
+      <AppHeader
         batchMode={batchMode} setBatchMode={setBatchMode} setShowWildcards={setShowWildcards}
-        recursive={recursive} setRecursive={setRecursive} sortMethod={sortMethod}
-        handleSortChange={handleSortChange} handleRandom={handleRandom} images={images}
+        recursive={recursive} setRecursive={setRecursive} 
+        handleRandom={handleRandom} images={images}
         handleKeep={handleKeep} handleDelete={handleDelete} isTrashFolder={isTrashFolder}
         setShowSettings={setShowSettings} handleOpenFolder={handleOpenFolder} shortcuts={shortcuts}
-        setWorkshopTargetPaths={setWorkshopTargetPaths}
-        setShowTagClassifier={setShowTagClassifier}
+        setWorkshopTargetPaths={setWorkshopTargetPaths} setShowTagClassifier={setShowTagClassifier}
       />
 
       <main className="flex-1 overflow-hidden flex">
@@ -435,47 +530,47 @@ function App() {
           }}
           images={images} currentIndex={currentIndex} batchRange={batchRange}
           setCurrentIndex={setCurrentIndex} reloadTimestamp={reloadTimestamp}
-          setShowTagClassifier={setShowTagClassifier}
         />
 
         <section className="flex-1 flex flex-col bg-[#050505] overflow-hidden relative group">
           {images.length > 0 && images[currentIndex] ? (
-            batchMode ? (
-              <div 
-                className="w-full h-full p-8 overflow-hidden grid gap-4 animate-in fade-in zoom-in-95 duration-500 content-center justify-items-center"
-                style={{
-                  gridTemplateColumns: `repeat(${Math.ceil(Math.sqrt(images.slice(batchRange?.[0] || currentIndex, (batchRange?.[1] || currentIndex) + 1).length))}, minmax(0, 1fr))`,
-                }}
-              >
-                {images.slice(batchRange?.[0] || currentIndex, (batchRange?.[1] || currentIndex) + 1).map((img) => (
-                  <Thumbnail 
-                    key={`${img.path}-${reloadTimestamp}`} 
-                    path={img.path} mtime={img.mtime} reloadTimestamp={reloadTimestamp} fit="contain" delay={0}
-                    onClick={() => setCurrentIndex(images.indexOf(img))}
-                    className={`w-full h-full min-h-0 cursor-pointer rounded-2xl border-4 transition-all duration-300 hover:scale-[1.02] shadow-2xl ${images.indexOf(img) === currentIndex ? 'border-blue-500 ring-[4px] ring-blue-500/30' : 'border-white/5 hover:border-white/10'}`}
-                  />
-                ))}
-              </div>
-            ) : (
-              <div className="relative w-full h-full flex items-center justify-center p-0 overflow-hidden group">
-                {imageSrc && <ZoomPanViewer key={`${images[currentIndex].path}-${reloadTimestamp}`} src={imageSrc} onBatchCrop={() => setShowBatchCrop(true)} className="animate-image-change" />}
-                
-                <div className="absolute top-6 right-6 flex flex-col gap-2 z-50 opacity-0 group-hover:opacity-100 transition-opacity duration-300">
-                    <button onClick={() => {
-                        if (!currentMetadata?.prompt) return;
-                        const tags = currentMetadata.prompt.split(',').map((s: string) => s.trim()).filter(Boolean);
-                        const counts: Record<string, number> = {};
-                        tags.forEach((t: string) => counts[t] = 1);
-                        setViewerTagCounts(counts); setShowViewerRefiner(true);
-                    }} className="p-3 bg-neutral-900/80 backdrop-blur-md border border-white/10 rounded-2xl hover:bg-blue-600/20 hover:border-blue-500/50 hover:text-blue-400 transition-all shadow-2xl"><Filter className="w-5 h-5" /></button>
-                </div>
+            <div className="relative w-full h-full flex items-center justify-center p-0 overflow-hidden group">
+              <ZoomPanViewer 
+                images={images} 
+                currentIndex={currentIndex} 
+                reloadTimestamp={reloadTimestamp}
+                batchMode={batchMode}
+                batchRange={batchRange}
+                batchMap={batchMap}
+                setCurrentIndex={setCurrentIndex}
+                onBatchCrop={() => setShowBatchCrop(true)} 
+                className="animate-image-change" 
+              />
+              
+              {!batchMode && (
+                <>
+                    <div className="absolute top-6 right-6 flex flex-col gap-2 z-50 opacity-0 group-hover:opacity-100 transition-opacity duration-300">
+                        <button onClick={() => {
+                            if (!currentMetadata?.prompt) return;
+                            const tags = currentMetadata.prompt.split(',').map((s: string) => s.trim()).filter(Boolean);
+                            const counts: Record<string, number> = {};
+                            tags.forEach((t: string) => counts[t] = 1);
+                            setViewerTagCounts(counts); setShowViewerRefiner(true);
+                        }} className="p-3 bg-neutral-900/80 backdrop-blur-md border border-white/10 rounded-2xl hover:bg-blue-600/20 hover:border-blue-500/50 hover:text-blue-400 transition-all shadow-2xl"><Filter className="w-5 h-5" /></button>
+                    </div>
 
-                <button onClick={prevImage} className="absolute left-6 z-10 p-4 rounded-2xl bg-neutral-900/80 text-white opacity-0 group-hover:opacity-100 transition-all hover:bg-blue-600 shadow-2xl backdrop-blur-xl"><ChevronLeft className="w-8 h-8" /></button>
-                <button onClick={nextImage} className="absolute right-6 z-10 p-4 rounded-2xl bg-neutral-900/80 text-white opacity-0 group-hover:opacity-100 transition-all hover:bg-blue-600 shadow-2xl backdrop-blur-xl"><ChevronRight className="w-8 h-8" /></button>
-                <div className="absolute bottom-8 left-1/2 -translate-x-1/2 z-10 bg-neutral-900/90 px-6 py-2 rounded-full text-[11px] font-bold border border-white/10 backdrop-blur-2xl shadow-2xl flex items-center gap-4"><span className="opacity-50">{images[currentIndex].name}</span><div className="w-px h-3 bg-white/10" /><span className="text-blue-400">{(images[currentIndex].size / 1024 / 1024).toFixed(2)} MB</span></div>
+                    <button onClick={prevImage} className="absolute left-6 z-10 p-4 rounded-2xl bg-neutral-900/80 text-white opacity-0 group-hover:opacity-100 transition-all hover:bg-blue-600 shadow-2xl backdrop-blur-xl"><ChevronLeft className="w-8 h-8" /></button>
+                    <button onClick={nextImage} className="absolute right-6 z-10 p-4 rounded-2xl bg-neutral-900/80 text-white opacity-0 group-hover:opacity-100 transition-all hover:bg-blue-600 shadow-2xl backdrop-blur-xl"><ChevronRight className="w-8 h-8" /></button>
+                    <div className="absolute bottom-8 left-1/2 -translate-x-1/2 z-10 bg-neutral-900/90 px-6 py-2 rounded-full text-[11px] font-bold border border-white/10 backdrop-blur-2xl shadow-2xl flex items-center gap-4"><span className="opacity-50">{images[currentIndex].name}</span><div className="w-px h-3 bg-white/10" /><span className="text-blue-400">{(images[currentIndex].size / 1024 / 1024).toFixed(2)} MB</span></div>
+                  </>
+                )}
               </div>
-            )
-          ) : <div className="flex-1 flex flex-col items-center justify-center opacity-10"><ImageIcon className="w-48 h-48 animate-pulse" /><p className="text-sm font-black uppercase tracking-[0.5em]">System Ready</p></div>}
+          ) : (
+            <div className="flex-1 flex flex-col items-center justify-center opacity-10">
+              <ImageIcon className="w-48 h-48 animate-pulse" />
+              <p className="text-sm font-black uppercase tracking-[0.5em]">System Ready</p>
+            </div>
+          )}
         </section>
 
         <Inspector 
@@ -532,15 +627,6 @@ function App() {
           }}
         />
       )}
-
-      <ImageCache 
-        images={images} 
-        currentIndex={currentIndex} 
-        batchMode={batchMode}
-        batchRange={batchRange}
-        reloadTimestamp={reloadTimestamp} 
-        cacheSize={imageCacheSize} 
-      />
     </div>
   );
 }

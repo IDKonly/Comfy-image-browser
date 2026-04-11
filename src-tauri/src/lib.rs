@@ -6,6 +6,8 @@ mod thumbnails;
 mod wildcard;
 mod twitter;
 mod crop;
+#[cfg(test)]
+mod benchmarks;
 
 fn setup_logging() -> Result<(), fern::InitError> {
     fern::Dispatch::new()
@@ -63,6 +65,7 @@ pub fn run() {
             get_logs,
             scanner::scan_directory,
             scanner::scan_paths,
+            scanner::update_scan_focus,
             scanner::get_batch_range,
             scanner::search_images,
             scanner::search_advanced_images,
@@ -72,6 +75,8 @@ pub fn run() {
             db::clear_database,
             db::get_all_prompts,
             db::get_prompts_by_paths,
+            db::get_folder_prompts_map,
+            db::get_prompts_map_by_paths,
             metadata::get_metadata,
             file_ops::delete_to_trash,
             file_ops::move_to_keep,
@@ -86,6 +91,7 @@ pub fn run() {
             wildcard::read_filter_file,
             wildcard::write_filter_file,
             wildcard::save_to_file,
+            wildcard::classify_prompts_command,
             twitter::twitter_upload,
             crop::process_batch_crop
         ])

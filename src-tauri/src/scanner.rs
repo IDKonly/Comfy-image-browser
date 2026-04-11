@@ -1,4 +1,5 @@
 use std::path::{Path, PathBuf};
+use std::collections::HashMap;
 use walkdir::WalkDir;
 use serde::{Serialize, Deserialize};
 use std::time::UNIX_EPOCH;
@@ -13,6 +14,12 @@ use notify::{Watcher, RecursiveMode, Config};
 
 lazy_static! {
     static ref CURRENT_SCAN_ID: Arc<AtomicU64> = Arc::new(AtomicU64::new(0));
+    static ref CURRENT_FOCUS_INDEX: Arc<AtomicU64> = Arc::new(AtomicU64::new(0));
+}
+
+#[tauri::command]
+pub fn update_scan_focus(index: usize) {
+    CURRENT_FOCUS_INDEX.store(index as u64, Ordering::SeqCst);
 }
 
 pub struct FolderWatcher {
@@ -169,7 +176,7 @@ fn setup_watcher(app_handle: tauri::AppHandle, path: &Path, is_recursive: bool, 
 }
 
 #[tauri::command]
-pub fn scan_directory(
+pub async fn scan_directory(
     app_handle: tauri::AppHandle, 
     watcher_state: tauri::State<'_, WatcherState>,
     path: String, 
@@ -177,9 +184,9 @@ pub fn scan_directory(
     recursive: Option<bool>, 
     force_reindex: Option<bool>
 ) -> Result<ScanResult, String> {
-    let input_path = Path::new(&path);
+    let input_path = PathBuf::from(&path);
     let (root, target_file) = if input_path.is_file() {
-        (input_path.parent().ok_or("No parent directory")?, Some(input_path))
+        (input_path.parent().ok_or("No parent directory")?.to_path_buf(), Some(input_path))
     } else if input_path.is_dir() {
         (input_path, None)
     } else {
@@ -194,13 +201,11 @@ pub fn scan_directory(
     {
         let mut ws = watcher_state.0.lock().unwrap();
         if ws.current_path.as_ref() != Some(&root_str) {
-            // Stop old watcher (happens automatically when dropped, but let's be explicit)
             ws.watcher = None; 
-            match setup_watcher(app_handle.clone(), root, is_recursive, method) {
+            match setup_watcher(app_handle.clone(), &root, is_recursive, method) {
                 Ok(w) => {
                     ws.watcher = Some(w);
                     ws.current_path = Some(root_str.clone());
-                    log::info!("Started watching: {}", root_str);
                 },
                 Err(e) => log::error!("Failed to start watcher: {}", e),
             }
@@ -209,11 +214,11 @@ pub fn scan_directory(
 
     let is_forced = force_reindex.unwrap_or(false);
 
-    // 1. Synchronous Disk Scan (FAST)
+    // 1. FAST Disk Scan (Now in async task)
     let depth = if is_recursive { 99 } else { 1 };
     let extensions = ["png", "jpg", "jpeg", "webp"];
     
-    let disk_entries: Vec<ImageInfo> = WalkDir::new(root)
+    let disk_entries: Vec<ImageInfo> = WalkDir::new(&root)
         .max_depth(depth)
         .into_iter()
         .filter_map(|e| e.ok())
@@ -248,13 +253,10 @@ pub fn scan_directory(
         }
     }
 
-    // 2. Cancellation
     let scan_id = CURRENT_SCAN_ID.fetch_add(1, Ordering::SeqCst) + 1;
-
-    // 3. Background Indexing
     let app_handle_clone = app_handle.clone();
     let root_str_clone = root_str.clone();
-    let images_for_bg = images.clone(); // Clone for the background thread
+    let images_for_bg = images.clone();
 
     std::thread::spawn(move || {
         let app_handle = app_handle_clone;
@@ -269,20 +271,18 @@ pub fn scan_directory(
 
         if CURRENT_SCAN_ID.load(Ordering::SeqCst) != scan_id { return; }
 
-        // A. Identify what needs indexing
         let indexed_stats = match db.get_folder_stats(&root_str_clone, is_recursive) {
             Ok(s) => s,
             Err(_) => std::collections::HashMap::new()
         };
 
-        // Cleanup stale DB entries
         let disk_paths: std::collections::HashSet<_> = disk_entries.iter().map(|img| img.path.clone()).collect();
         let stale_paths: Vec<_> = indexed_stats.keys().filter(|p| !disk_paths.contains(*p)).cloned().collect();
         if !stale_paths.is_empty() {
             let _ = db.delete_images(&stale_paths);
         }
 
-        let mut needs_indexing: Vec<_> = disk_entries.into_iter().filter(|img| {
+        let mut remaining_needs: Vec<_> = disk_entries.into_iter().filter(|img| {
             if is_forced { return true; }
             match indexed_stats.get(&img.path) {
                 Some(&(m, s)) => m != img.mtime || s != img.size,
@@ -290,29 +290,53 @@ pub fn scan_directory(
             }
         }).collect();
 
-        if needs_indexing.is_empty() { return; }
+        if remaining_needs.is_empty() { return; }
 
-        // B. Prioritize Indexing Outwards from Current Index
-        let path_to_index: std::collections::HashMap<_, _> = images_for_bg.iter().enumerate().map(|(i, img)| (img.path.clone(), i)).collect();
-        needs_indexing.sort_by_cached_key(|img| {
-            let pos = path_to_index.get(&img.path).copied().unwrap_or(0);
-            (pos as isize - initial_index as isize).abs()
-        });
+        let path_to_index: std::collections::HashMap<String, usize> = images_for_bg.iter().enumerate().map(|(i, img)| (img.path.clone(), i)).collect();
+        CURRENT_FOCUS_INDEX.store(initial_index as u64, Ordering::SeqCst);
 
-        // C. Parallel Metadata Extraction
-        let total = needs_indexing.len();
+        let total = remaining_needs.len();
         let _ = app_handle.emit("index-progress", IndexProgress { total, current: 0, is_indexing: true });
 
-        let chunk_size = 50;
         let mut processed_count = 0;
+        let mut last_sort_focus: isize = -1000;
 
-        for chunk in needs_indexing.chunks(chunk_size) {
+        while !remaining_needs.is_empty() {
             if CURRENT_SCAN_ID.load(Ordering::SeqCst) != scan_id {
                 let _ = app_handle.emit("index-progress", IndexProgress { total, current: processed_count, is_indexing: false });
                 return;
             }
 
-            let results: Vec<_> = chunk.par_iter().map(|img| {
+            // [성능 핵심] 사용자의 포커스가 변경될 때만 재정렬 수행
+            let current_focus = CURRENT_FOCUS_INDEX.load(Ordering::SeqCst) as isize;
+            if current_focus != last_sort_focus {
+                // 거리를 기준으로 내림차순(Reverse) 정렬.
+                // 가장 가까운 이미지가 배열의 '가장 끝'으로 이동하여 pop() 연산 시 O(1)의 비용으로 즉시 추출됨.
+                remaining_needs.sort_unstable_by_key(|img| {
+                    let pos = path_to_index.get(&img.path).copied().unwrap_or(0);
+                    std::cmp::Reverse((pos as isize - current_focus).abs())
+                });
+                last_sort_focus = current_focus;
+            }
+
+            // CPU 및 I/O 점유율을 최소화하기 위해 극소 단위(5개)의 청크만 처리
+            let chunk_size = 5;
+            let mut batch = Vec::with_capacity(chunk_size);
+            for _ in 0..chunk_size {
+                if let Some(img) = remaining_needs.pop() {
+                    batch.push(img);
+                } else {
+                    break;
+                }
+            }
+
+            if batch.is_empty() {
+                break;
+            }
+
+            // [성능 핵심] Rayon 병렬 처리(par_iter) 제거.
+            // 백그라운드 인덱싱이 메인 코어와 디스크 대역폭을 독점하는 현상(Starvation)을 방지.
+            let results: Vec<_> = batch.iter().map(|img| {
                 (img, read_metadata(&img.path).unwrap_or_default())
             }).collect();
 
@@ -320,9 +344,13 @@ pub fn scan_directory(
                 log::error!("Batch insert failed: {}", e);
             }
 
-            processed_count += chunk.len();
+            processed_count += batch.len();
             let _ = app_handle.emit("index-progress", IndexProgress { total, current: processed_count, is_indexing: true });
             let _ = app_handle.emit("metadata-chunk-updated", ());
+            
+            // 포그라운드 사용자 작업(이미지 로딩, 단일 메타데이터 조회)이 DB와 I/O에 접근할 수 있도록 
+            // 청크 처리 사이에 의도적인 50ms 휴식(Yield) 부여
+            std::thread::sleep(std::time::Duration::from_millis(50));
         }
 
         let _ = app_handle.emit("index-progress", IndexProgress { total, current: total, is_indexing: false });
@@ -336,33 +364,24 @@ pub fn scan_directory(
 }
 
 #[tauri::command]
-pub fn scan_paths(app_handle: tauri::AppHandle, paths: Vec<String>, recursive: bool) -> Result<Vec<ImageInfo>, String> {
+pub async fn scan_paths(app_handle: tauri::AppHandle, paths: Vec<String>, recursive: bool) -> Result<Vec<ImageInfo>, String> {
     let extensions = ["png", "jpg", "jpeg", "webp"];
 
-    let all_images: Vec<ImageInfo> = paths.par_iter().flat_map(|path| {
+    // 1. Collect all potential image paths first (Minimal I/O)
+    let discovered_paths: Vec<String> = paths.par_iter().flat_map(|path| {
         let input_path = Path::new(path);
         if !input_path.exists() { return Vec::new(); }
 
         if input_path.is_file() {
             if let Some(ext) = input_path.extension().and_then(|s| s.to_str()) {
                 if extensions.contains(&ext.to_lowercase().as_str()) {
-                    if let Ok(metadata) = input_path.metadata() {
-                        if let Ok(mtime_res) = metadata.modified() {
-                            let mtime = mtime_res.duration_since(UNIX_EPOCH).unwrap_or_default().as_secs();
-                            return vec![ImageInfo {
-                                path: input_path.to_string_lossy().to_string(),
-                                name: input_path.file_name().unwrap().to_string_lossy().to_string(),      
-                                mtime,
-                                size: metadata.len(),
-                            }];
-                        }
-                    }
+                    return vec![input_path.to_string_lossy().to_string()];
                 }
             }
             return Vec::new();
         }
 
-        // Directory scanning
+        // Directory scanning - only collect paths
         let depth = if recursive { 99 } else { 1 };
         WalkDir::new(input_path)
             .max_depth(depth)
@@ -372,17 +391,7 @@ pub fn scan_paths(app_handle: tauri::AppHandle, paths: Vec<String>, recursive: b
             .filter_map(|entry| {
                 if let Some(ext) = entry.path().extension().and_then(|s| s.to_str()) {
                     if extensions.contains(&ext.to_lowercase().as_str()) {
-                        let metadata = entry.metadata().ok()?;
-                        let mtime = metadata.modified().ok()?
-                            .duration_since(UNIX_EPOCH).ok()?
-                            .as_secs();
-
-                        return Some(ImageInfo {
-                            path: entry.path().to_string_lossy().to_string(),
-                            name: entry.file_name().to_string_lossy().to_string(),
-                            mtime,
-                            size: metadata.len(),
-                        });
+                        return Some(entry.path().to_string_lossy().to_string());
                     }
                 }
                 None
@@ -390,21 +399,68 @@ pub fn scan_paths(app_handle: tauri::AppHandle, paths: Vec<String>, recursive: b
             .collect::<Vec<_>>()
     }).collect();
 
-    // Synchronous Foreground Indexing
+    if discovered_paths.is_empty() { return Ok(Vec::new()); }
+
+    // 2. Batch query DB for existing info
     let db_path = get_db_path(&app_handle)?;
+    let mut all_images = Vec::with_capacity(discovered_paths.len());
+    let mut paths_to_stat = Vec::new();
+
+    if let Ok(db) = DB::open(&db_path) {
+        let indexed_data = db.get_images_by_paths(&discovered_paths).unwrap_or_default();
+        let indexed_map: HashMap<String, crate::db::ImageInfoWithTags> = indexed_data.into_iter().map(|img| (img.path.clone(), img)).collect();
+
+        for path in discovered_paths {
+            if let Some(indexed) = indexed_map.get(&path) {
+                // [성능 핵심] DB에 이미 있는 이미지는 디스크 stat() 없이 즉시 정보 활용
+                all_images.push(ImageInfo {
+                    path: indexed.path.clone(),
+                    name: indexed.name.clone(),
+                    mtime: indexed.mtime,
+                    size: indexed.size,
+                });
+            } else {
+                paths_to_stat.push(path);
+            }
+        }
+    } else {
+        paths_to_stat = discovered_paths;
+    }
+
+    // Optimization: Only parallel stat() for UNKNOWN files
+    if !paths_to_stat.is_empty() {
+        let new_images: Vec<ImageInfo> = paths_to_stat.par_iter().filter_map(|path| {
+            let p = Path::new(path);
+            if let Ok(meta) = p.metadata() {
+                if let Ok(mtime_res) = meta.modified() {
+                    let mtime = mtime_res.duration_since(UNIX_EPOCH).unwrap_or_default().as_secs();
+                    return Some(ImageInfo {
+                        path: path.clone(),
+                        name: p.file_name()?.to_string_lossy().to_string(),
+                        mtime,
+                        size: meta.len(),
+                    });
+                }
+            }
+            None
+        }).collect();
+        all_images.extend(new_images);
+    }
+
+    // 3. Update DB for new/changed files (if any were new or changed)
     if let Ok(mut db) = DB::open(&db_path) {
         let path_strings: Vec<String> = all_images.iter().map(|img| img.path.clone()).collect();
         let indexed_stats = db.get_indexed_stats_batch(&path_strings).unwrap_or_default();
 
-        let needs_update: Vec<_> = all_images.iter().filter(|img| {
+        let needs_parsing: Vec<_> = all_images.iter().filter(|img| {
             match indexed_stats.get(&img.path) {
                 Some(&(m, s)) => m != img.mtime || s != img.size,
                 None => true,
             }
         }).cloned().collect();
 
-        if !needs_update.is_empty() {
-            let results: Vec<_> = needs_update.par_iter().map(|img| {
+        if !needs_parsing.is_empty() {
+            let results: Vec<_> = needs_parsing.par_iter().map(|img| {
                 (img, read_metadata(&img.path).unwrap_or_default())
             }).collect();
 

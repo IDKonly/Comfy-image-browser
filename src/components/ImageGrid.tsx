@@ -1,7 +1,6 @@
 import React, { useRef, useEffect } from "react";
 // @ts-ignore
-import * as ReactWindow from "react-window";
-const List = ReactWindow.FixedSizeList || (ReactWindow as any).default?.FixedSizeList || ReactWindow;
+import { FixedSizeList as List } from "react-window";
 // @ts-ignore
 import * as AutoSizerPkg from "react-virtualized-auto-sizer";
 // @ts-ignore

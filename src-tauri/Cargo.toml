@@ -42,8 +42,10 @@ reqwest = { version = "0.12", features = ["json", "multipart", "blocking"] }
 percent-encoding = "2.3.2"
 hmac = "0.12.1"
 sha1 = "0.10.6"
+regex = "1.11.1"
 notify = "8.2.0"
 
 [dev-dependencies]
 tempfile = "3.25.0"
+rand = "0.8.5"
 

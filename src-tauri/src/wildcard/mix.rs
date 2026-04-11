@@ -61,28 +61,46 @@ fn serialize_node(node: &WildcardNode) -> String {
         WildcardNode::Text(t) => t.clone(),
         WildcardNode::Sequence(nodes) => {
             let s = nodes.iter().map(serialize_node).collect::<Vec<_>>().join("");
-            let s = s.replace(", {", "{").replace(",{", "{");
             clean_commas(&s)
         }
         WildcardNode::Choice(options) => {
-            let mut opts: Vec<_> = options.iter()
+            let opts: Vec<_> = options.iter()
                 .map(serialize_node)
-                .map(|s| s.trim().trim_start_matches(',').trim().to_string())
+                .map(|s| s.trim().to_string())
                 .collect();
             
-            opts.sort();
-            opts.dedup();
+            // Deduplicate based on stripped content, but preserve the string
+            let mut unique_opts = Vec::new();
+            let mut seen = std::collections::HashSet::new();
+            for o in opts {
+                let cleaned = o.trim_start_matches(',').trim().to_string();
+                if !seen.contains(&cleaned) {
+                    seen.insert(cleaned);
+                    unique_opts.push(o);
+                }
+            }
             
-            if opts.is_empty() { return String::new(); }
+            unique_opts.sort();
             
-            let comma_opts: Vec<_> = opts.into_iter().map(|o| {
-                if o.is_empty() { String::new() } else { format!(", {}", o) }
-            }).collect();
+            let has_empty = unique_opts.iter().any(|o| o.is_empty() || o == ",");
+            let mut final_parts = Vec::new();
+            if has_empty {
+                final_parts.push(" ".to_string());
+            }
             
-            if comma_opts.len() == 1 {
-                if comma_opts[0].is_empty() { String::new() } else { format!("{{{}}}", comma_opts[0]) }
+            for o in unique_opts {
+                let cleaned = o.trim_start_matches(',').trim();
+                if !cleaned.is_empty() {
+                    final_parts.push(o);
+                }
+            }
+            
+            if final_parts.is_empty() { return String::new(); }
+            
+            if final_parts.len() == 1 {
+                if final_parts[0].trim().is_empty() { String::new() } else { format!("{{{}}}", final_parts[0]) }
             } else {
-                format!("{{{}}}", comma_opts.join("|"))
+                format!("{{{}}}", final_parts.join("|"))
             }
         }
     }
@@ -91,11 +109,12 @@ fn serialize_node(node: &WildcardNode) -> String {
 fn clean_commas(s: &str) -> String {
     let mut result = s.replace(", ,", ",");
     // Remove leading/trailing commas and extra spaces around commas
-    result = result.split(',')
+    let mut parts: Vec<_> = result.split(',')
         .map(|p| p.trim())
         .filter(|p| !p.is_empty())
-        .collect::<Vec<_>>()
-        .join(", ");
+        .collect();
+        
+    result = parts.join(", ");
     result
 }
 
@@ -136,6 +155,7 @@ pub fn mix_mode_transform(wildcard: &str, mix_depth: u32, tandem_min_branches: u
     let (transformed_ast, _) = transform_recursive(ast, 0, mix_depth, &mut extracted_features, &mut total_branches);
 
     let mut result = serialize_node(&transformed_ast);
+    result = clean_commas(&result); // clean before appending blocks
     
     if !extracted_features.is_empty() {
         let mut feature_counts = std::collections::HashMap::new();
@@ -179,17 +199,27 @@ pub fn mix_mode_transform(wildcard: &str, mix_depth: u32, tandem_min_branches: u
             tandem_features.sort();
             regular_features.sort();
             
-            // Build tandem block: "Base{, A|}{, B|}"
+            // Build tandem block: "Base{ |A}{ |, B}"
             let mut tandem_block = String::new();
             for t in tandem_features {
-                tandem_block.push_str(&format!("{{, {}|}}", t));
+                if result.is_empty() && tandem_block.is_empty() {
+                    tandem_block.push_str(&format!("{{ |{}}}", t));
+                } else {
+                    tandem_block.push_str(&format!("{{ |, {}}}", t));
+                }
             }
             
             let regular_block = if !regular_features.is_empty() {
-                let comma_opts: Vec<_> = regular_features.into_iter().map(|f| {
-                    if f.is_empty() { String::new() } else { format!(", {}", f) }
-                }).collect();
-                format!("{{{}}}", comma_opts.join("|"))
+                let mut final_parts = Vec::new();
+                final_parts.push(" ".to_string()); // Has empty option since it's optional
+                for f in regular_features {
+                    if result.is_empty() && tandem_block.is_empty() && final_parts.len() == 1 {
+                        final_parts.push(f); // No comma for first item if everything is empty
+                    } else {
+                        final_parts.push(format!(", {}", f));
+                    }
+                }
+                format!("{{{}}}", final_parts.join("|"))
             } else {
                 String::new()
             };
@@ -204,7 +234,8 @@ pub fn mix_mode_transform(wildcard: &str, mix_depth: u32, tandem_min_branches: u
         }
     }
     
-    clean_commas(&result)
+    // We already cleaned commas, just trim any leftovers
+    result.trim_start_matches(',').trim().to_string()
 }
 
 fn transform_recursive(node: WildcardNode, current_depth: u32, mix_depth: u32, extracted: &mut Vec<WildcardNode>, total_branches: &mut u32) -> (WildcardNode, bool) {
@@ -267,17 +298,17 @@ mod tests {
     fn test_mix_mode_transform() {
         assert_eq!(mix_mode_transform("a, b, c", 1, 0, 0.51), "a, b, c");
 
-        assert_eq!(mix_mode_transform("a, {b|c}, d", 0, 0, 0.51), "a{, b|, c}, d");
-        assert_eq!(mix_mode_transform("a, {b|c}, d", 1, 0, 0.51), "a{, b|, c}, d");
+        assert_eq!(mix_mode_transform("a, {b|c}, d", 0, 0, 0.51), "a, {b|c}, d");
+        assert_eq!(mix_mode_transform("a, {b|c}, d", 1, 0, 0.51), "a, {b|c}, d");
         
         // Nested:
         let res_nested = mix_mode_transform("a, {{b|c}|d}, e", 0, 0, 0.51);
         println!("Nested test: {}", res_nested);
-        assert_eq!(res_nested, "a{|, d}, e{, b|, c}");
+        assert_eq!(res_nested, "a, { |d}, e{ |, b|, c}");
 
         let res_tandem = mix_mode_transform("{{a|b}|{a|c}}", 0, 0, 0.51);
         println!("Tandem test: {}", res_tandem);
-        assert_eq!(res_tandem, "{, a|}{, b|, c}");
+        assert_eq!(res_tandem, "{ |a}{ |, b|, c}");
     }
 }
 

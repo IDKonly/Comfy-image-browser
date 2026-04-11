@@ -9,6 +9,8 @@ use serde::{Serialize, Deserialize};
 pub struct ImageInfoWithTags {
     pub path: String,
     pub name: String,
+    pub mtime: u64,
+    pub size: u64,
     pub prompt: Option<String>,
     pub negative_prompt: Option<String>,
 }
@@ -113,6 +115,44 @@ pub fn get_prompts_by_paths(app_handle: tauri::AppHandle, paths: Vec<String>) ->
     Ok(results)
 }
 
+#[tauri::command]
+pub fn get_prompts_map_by_paths(app_handle: tauri::AppHandle, paths: Vec<String>) -> Result<std::collections::HashMap<String, Option<String>>, String> {
+    if paths.is_empty() { return Ok(std::collections::HashMap::new()); }
+    let mut db_path = app_handle.path().app_data_dir().map_err(|e| e.to_string())?;
+    db_path.push(".image_manager_v2.db");
+
+    let db = DB::open(&db_path).map_err(|e| e.to_string())?;
+    let mut results = std::collections::HashMap::new();
+
+    // Normalize input paths to match DB storage (slashes)
+    let clean_paths: Vec<String> = paths.into_iter().map(|p| p.replace("\\", "/")).collect();
+
+    // Process in chunks to avoid SQLite parameter limits
+    for chunk in clean_paths.chunks(500) {
+        let placeholders: String = chunk.iter().map(|_| "?").collect::<Vec<_>>().join(",");
+        let sql = format!("SELECT path, prompt FROM images WHERE path IN ({}) COLLATE NOCASE", placeholders);
+        let mut stmt = db.conn.prepare(&sql).map_err(|e| e.to_string())?;
+        let rows = stmt.query_map(rusqlite::params_from_iter(chunk), |row| {
+            Ok((row.get::<_, String>(0)?, row.get::<_, Option<String>>(1)?))
+        }).map_err(|e| e.to_string())?;
+
+        for row in rows {
+            if let Ok((path, prompt)) = row {
+                results.insert(path, prompt);
+            }
+        }
+    }
+    Ok(results)
+}
+
+#[tauri::command]
+pub fn get_folder_prompts_map(app_handle: tauri::AppHandle, folder: String) -> Result<std::collections::HashMap<String, Option<String>>, String> {
+    let mut path = app_handle.path().app_data_dir().map_err(|e| e.to_string())?;
+    path.push(".image_manager_v2.db");
+    let db = DB::open(&path).map_err(|e| e.to_string())?;
+    db.get_folder_prompts(&folder).map_err(|e| e.to_string())
+}
+
 pub struct DB {
     conn: Connection,
 }
@@ -120,6 +160,9 @@ pub struct DB {
 impl DB {
     pub fn open(db_path: &Path) -> Result<Self> {
         let conn = Connection::open(db_path)?;
+        
+        // 동시 다발적인 DB 트랜잭션 시 "Database is locked" 방지를 위한 대기 시간 설정
+        conn.busy_timeout(std::time::Duration::from_secs(5))?;
         
         conn.pragma_update(None, "journal_mode", "WAL")?;
         conn.pragma_update(None, "synchronous", "NORMAL")?;
@@ -269,14 +312,16 @@ impl DB {
         let mut results = Vec::new();
         for chunk in paths.chunks(500) {
             let placeholders: String = chunk.iter().map(|_| "?").collect::<Vec<_>>().join(",");
-            let sql = format!("SELECT path, name, prompt, negative_prompt FROM images WHERE path IN ({})", placeholders);
+            let sql = format!("SELECT path, name, mtime, size, prompt, negative_prompt FROM images WHERE path IN ({}) COLLATE NOCASE", placeholders);
             let mut stmt = self.conn.prepare(&sql)?;
             let rows = stmt.query_map(rusqlite::params_from_iter(chunk), |row| {
                 Ok(ImageInfoWithTags {
                     path: row.get(0)?,
                     name: row.get(1)?,
-                    prompt: row.get(2)?,
-                    negative_prompt: row.get(3)?,
+                    mtime: row.get::<_, i64>(2)? as u64,
+                    size: row.get::<_, i64>(3)? as u64,
+                    prompt: row.get(4)?,
+                    negative_prompt: row.get(5)?,
                 })
             })?;
             for img in rows { results.push(img?); }
@@ -287,9 +332,9 @@ impl DB {
     pub fn get_all_images_with_tags(&self, root_folder: &str, recursive: bool) -> Result<Vec<ImageInfoWithTags>> {
         let normalized_folder = root_folder.replace("\\", "/").trim_end_matches('/').to_string();
         let sql = if recursive {
-            "SELECT path, name, prompt, negative_prompt FROM images WHERE (folder = ?1 COLLATE NOCASE OR folder LIKE ?1 || '/%' COLLATE NOCASE)"
+            "SELECT path, name, mtime, size, prompt, negative_prompt FROM images WHERE (folder = ?1 COLLATE NOCASE OR folder LIKE ?1 || '/%' COLLATE NOCASE)"
         } else {
-            "SELECT path, name, prompt, negative_prompt FROM images WHERE folder = ?1 COLLATE NOCASE"
+            "SELECT path, name, mtime, size, prompt, negative_prompt FROM images WHERE folder = ?1 COLLATE NOCASE"
         };
 
         let mut stmt = self.conn.prepare(sql)?;
@@ -297,8 +342,10 @@ impl DB {
             Ok(ImageInfoWithTags {
                 path: row.get(0)?,
                 name: row.get(1)?,
-                prompt: row.get(2)?,
-                negative_prompt: row.get(3)?,
+                mtime: row.get::<_, i64>(2)? as u64,
+                size: row.get::<_, i64>(3)? as u64,
+                prompt: row.get(4)?,
+                negative_prompt: row.get(5)?,
             })
         })?;
 
@@ -558,5 +605,29 @@ impl DB {
         let mut results = Vec::new();
         for img in rows { results.push(img?); }
         Ok(results)
+    }
+
+    pub fn get_metadata(&self, path: &str) -> Result<Option<ImageMetadata>> {
+        let normalized_path = path.replace("\\", "/");
+        let mut stmt = self.conn.prepare(
+            "SELECT prompt, negative_prompt, steps, sampler, cfg, seed, model, raw 
+             FROM images WHERE path = ?1 COLLATE NOCASE"
+        )?;
+        
+        let mut rows = stmt.query(params![normalized_path])?;
+        if let Some(row) = rows.next()? {
+            Ok(Some(ImageMetadata {
+                prompt: row.get(0)?,
+                negative_prompt: row.get(1)?,
+                steps: row.get(2)?,
+                sampler: row.get(3)?,
+                cfg: row.get(4)?,
+                seed: row.get::<_, Option<i64>>(5)?.map(|s| s as u64),
+                model: row.get(6)?,
+                raw: row.get(7).unwrap_or_default(),
+            }))
+        } else {
+            Ok(None)
+        }
     }
 }

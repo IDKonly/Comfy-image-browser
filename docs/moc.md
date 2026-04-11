@@ -16,6 +16,9 @@ Batch Crop, Wildcard Workshop, Undo System 등 크리에이터의 생산성을 �
 ### 4. [개발 및 유지보수 가이드 (Development Guide)](development_guide.md)
 프로젝트의 코드 스타일, 테스트 전략, 그리고 새로운 기능을 추가하거나 버그를 수정할 때 준수해야 할 정밀한 외과적 수정(Surgical Strike) 원칙을 안내합니다.
 
+### 5. [테스트 및 검증 가이드 (Testing Guide)](testing_guide.md)
+Wildcard Workshop의 성능 벤치마크 및 쉼표 무결성 검증을 포함하여, 시스템의 안정성을 보장하기 위한 테스트 실행 방법과 주요 검증 포인트를 다룹니다.
+
 ---
 ## 📦 기술 스택 요약 (Tech Stack)
 *   **Interface**: React 18, TypeScript, Tailwind CSS, Zustand.

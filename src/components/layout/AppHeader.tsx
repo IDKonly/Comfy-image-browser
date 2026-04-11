@@ -1,5 +1,4 @@
-import { FolderOpen, Layers, Wand2, ArrowDownAZ, ArrowUpAZ, History, Clock, Dices, Settings, Database } from "lucide-react";
-import { SortMethod } from "../../App";
+import { FolderOpen, Layers, Wand2, Dices, Settings, Database, LayoutGrid } from "lucide-react";
 
 interface AppHeaderProps {
   batchMode: boolean;
@@ -8,8 +7,6 @@ interface AppHeaderProps {
   setShowTagClassifier: (v: boolean) => void;
   recursive: boolean;
   setRecursive: (v: boolean) => void;
-  sortMethod: SortMethod;
-  handleSortChange: (m: SortMethod) => void;
   handleRandom: () => void;
   images: any[];
   handleKeep: () => void;
@@ -28,8 +25,6 @@ export const AppHeader = ({
   setShowTagClassifier,
   recursive,
   setRecursive,
-  sortMethod,
-  handleSortChange,
   handleRandom,
   images,
   handleKeep,
@@ -41,96 +36,108 @@ export const AppHeader = ({
   setWorkshopTargetPaths
 }: AppHeaderProps) => {
   return (
-    <header className="flex items-center justify-between px-4 h-14 bg-neutral-900 border-b border-white/5 shrink-0 z-10 shadow-2xl">
-      <div className="flex items-center gap-6">
-        <div className="flex items-center gap-2">
-          <div className="w-8 h-8 bg-blue-600 rounded-lg flex items-center justify-center text-white font-black italic">CV</div>
-          <h1 className="text-lg font-black tracking-tighter uppercase italic">ComfyView</h1>
-        </div>
-        
-        <button 
-          onClick={() => setBatchMode(!batchMode)} 
-          className={`flex items-center gap-2 px-4 py-1.5 rounded-full text-[10px] font-bold uppercase transition-all border ${batchMode ? 'bg-blue-600 border-blue-500 text-white shadow-[0_0_15px_rgba(37,99,235,0.3)]' : 'bg-neutral-800 border-neutral-700 text-neutral-400'}`}
-        >
-          <Layers className="w-3.5 h-3.5" />Batch Mode
-        </button>
-        
-        <button 
-          onClick={() => setShowWildcards(true)} 
-          className="flex items-center gap-2 px-4 py-1.5 rounded-full text-[10px] font-bold uppercase transition-all border bg-neutral-800 border-neutral-700 text-neutral-400 hover:text-white hover:border-blue-500/50"
-        >
-          <Wand2 className="w-3.5 h-3.5" />Wildcard
-        </button>
+    <header className="flex flex-col bg-neutral-900 border-b border-white/5 shrink-0 z-10 shadow-2xl">
+      {/* Top Row: Identity & Global Data */}
+      <div className="flex items-center justify-between px-4 h-12 border-b border-black/20">
+        <div className="flex items-center gap-3">
+          <div className="flex items-center gap-2">
+            <div className="w-6 h-6 bg-blue-600 rounded flex items-center justify-center text-white text-[10px] font-black italic shadow-[0_0_10px_rgba(37,99,235,0.4)]">CV</div>
+            <h1 className="text-xs font-black tracking-widest uppercase italic text-neutral-200">ComfyView</h1>
+          </div>
+          
+          <div className="w-px h-4 bg-white/10 mx-2" />
 
-        <button 
-          onClick={() => setShowTagClassifier(true)} 
-          className="flex items-center gap-2 px-4 py-1.5 rounded-full text-[10px] font-bold uppercase transition-all border bg-neutral-800 border-neutral-700 text-neutral-400 hover:text-white hover:border-indigo-500/50"
-        >
-          <Database className="w-3.5 h-3.5" />Classifier
-        </button>
-
-        <div className="flex items-center gap-2 bg-neutral-800/50 p-1 rounded-xl border border-white/5 ml-2">
-          <button 
-            onClick={() => setRecursive(!recursive)}
-            title="Recursive Scan"
-            className={`flex items-center gap-2 px-3 py-1.5 rounded-lg text-[9px] font-black uppercase transition-all ${recursive ? 'bg-blue-600 text-white shadow-lg shadow-blue-600/20' : 'text-neutral-500 hover:text-neutral-300'}`}
-          >
-            <Layers className="w-3.5 h-3.5" /> Recursive
-          </button>
-          <div className="w-px h-4 bg-white/5 mx-1" />
-          {[
-            { id: 'NameAsc', icon: ArrowDownAZ, label: 'A-Z' },
-            { id: 'NameDesc', icon: ArrowUpAZ, label: 'Z-A' },
-            { id: 'Newest', icon: History, label: 'Newest' },
-            { id: 'Oldest', icon: Clock, label: 'Oldest' }
-          ].map(m => (
+          <div className="flex items-center gap-2">
             <button 
-              key={m.id} 
-              onClick={() => handleSortChange(m.id as SortMethod)}
-              title={m.label}
-              className={`p-1.5 rounded-lg transition-all ${sortMethod === m.id ? 'bg-blue-600 text-white shadow-lg shadow-blue-600/20' : 'text-neutral-500 hover:text-neutral-300'}`}
+              onClick={handleOpenFolder} 
+              className="flex items-center gap-2 px-3 py-1.5 bg-blue-600/10 hover:bg-blue-600/20 border border-blue-500/20 rounded-lg text-[9px] font-black uppercase transition-all text-blue-400"
             >
-              <m.icon className="w-3.5 h-3.5" />
+              <FolderOpen className="w-3 h-3" /> Open Folder
             </button>
-          ))}
-          <div className="w-px h-4 bg-white/5 mx-1" />
+            <button 
+              onClick={() => setRecursive(!recursive)}
+              title="Recursive Scan"
+              className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg border text-[9px] font-black uppercase transition-all ${recursive ? 'bg-blue-600/20 border-blue-500/50 text-blue-400 shadow-[0_0_10px_rgba(37,99,235,0.1)]' : 'bg-neutral-950/50 border-white/5 text-neutral-500 hover:text-neutral-300'}`}
+            >
+              <Layers className="w-3 h-3" /> Recursive
+            </button>
+          </div>
+        </div>
+
+        <button onClick={() => setShowSettings(true)} className="p-1.5 hover:bg-white/5 rounded-lg transition-colors text-neutral-500 hover:text-white" title="Settings">
+          <Settings className="w-4 h-4" />
+        </button>
+      </div>
+
+      {/* Bottom Row: App Navigation & Actions */}
+      <div className="flex items-center justify-between px-4 h-12 bg-neutral-950/30">
+        {/* App Segmented Control */}
+        <div className="flex p-1 bg-neutral-950 border border-white/5 rounded-xl shadow-inner">
+          <button 
+            onClick={() => setBatchMode(false)}
+            className={`flex items-center gap-1.5 px-4 py-1.5 rounded-lg text-[9px] font-bold uppercase transition-all ${!batchMode ? 'bg-neutral-800 text-white shadow-sm border border-white/5' : 'text-neutral-500 hover:text-neutral-300 border border-transparent'}`}
+          >
+            <LayoutGrid className="w-3.5 h-3.5" /> Single
+          </button>
+          <button 
+            onClick={() => setBatchMode(true)}
+            className={`flex items-center gap-1.5 px-4 py-1.5 rounded-lg text-[9px] font-bold uppercase transition-all ${batchMode ? 'bg-blue-600 text-white shadow-lg shadow-blue-600/20 border border-blue-500/30' : 'text-neutral-500 hover:text-neutral-300 border border-transparent'}`}
+          >
+            <Layers className="w-3.5 h-3.5" /> Batch
+          </button>
+          <div className="w-px h-3 bg-white/10 mx-2 my-auto" />
+          <button 
+            onClick={() => setShowWildcards(true)}
+            className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-transparent text-[9px] font-bold uppercase transition-all text-neutral-500 hover:bg-neutral-800 hover:border-white/5 hover:text-white"
+          >
+            <Wand2 className="w-3.5 h-3.5 text-purple-500/70" /> Workshop
+          </button>
+          <button 
+            onClick={() => setShowTagClassifier(true)}
+            className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-transparent text-[9px] font-bold uppercase transition-all text-neutral-500 hover:bg-neutral-800 hover:border-white/5 hover:text-white"
+          >
+            <Database className="w-3.5 h-3.5 text-indigo-500/70" /> Classifier
+          </button>
+        </div>
+
+        {/* Contextual Actions */}
+        <div className="flex items-center gap-3">
           <button 
             onClick={handleRandom}
             title={`Random Image (${shortcuts.random})`}
-            className="p-1.5 rounded-lg transition-all text-neutral-500 hover:text-white hover:bg-white/5"
+            className="flex items-center gap-1.5 px-3 py-1.5 bg-neutral-900 border border-white/5 hover:bg-neutral-800 rounded-lg text-[9px] font-bold uppercase transition-all text-neutral-400 hover:text-white shadow-sm"
           >
-            <Dices className="w-3.5 h-3.5" />
+            <Dices className="w-3 h-3" /> Random
           </button>
-        </div>
-      </div>
 
-      <div className="flex items-center gap-3">
-        {images.length > 0 && (
-          <div className="flex items-center gap-2 bg-neutral-800/50 p-1.5 rounded-xl border border-white/5">
-            <button onClick={handleKeep} className="px-4 py-1.5 bg-neutral-900 hover:bg-green-600 rounded-lg text-[10px] font-bold uppercase">Keep</button>
-            <button onClick={handleDelete} className={`px-4 py-1.5 rounded-lg text-[10px] font-bold uppercase transition-colors ${isTrashFolder ? 'bg-red-600 hover:bg-red-700 text-white' : 'bg-neutral-900 hover:bg-red-600'}`}>Trash</button>
-            <div className="w-px h-4 bg-white/10 mx-1" />
-            <button 
-              onClick={() => {
-                setWorkshopTargetPaths(images.map(i => i.path));
-                setShowWildcards(true);
-              }} 
-              className="px-3 py-1.5 bg-neutral-900 hover:bg-purple-600/40 border border-transparent hover:border-purple-500/20 rounded-lg text-[10px] font-bold text-purple-400 uppercase transition-all"
-              title="Send all current images to Workshop"
-            >
-              <Wand2 className="w-3.5 h-3.5" />
-            </button>
-          </div>
-        )}
-        <button onClick={() => setShowSettings(true)} className="p-2 hover:bg-white/5 rounded-lg transition-colors text-neutral-500 hover:text-white">
-          <Settings className="w-5 h-5" />
-        </button>
-        <button 
-          onClick={handleOpenFolder} 
-          className="flex items-center gap-2 px-5 py-2 bg-blue-600 hover:bg-blue-500 rounded-xl text-[10px] font-black uppercase transition-all shadow-lg active:scale-95"
-        >
-          <FolderOpen className="w-4 h-4" />Open Folder
-        </button>
+          {images.length > 0 && (
+            <div className="flex items-center gap-1 bg-neutral-950 p-1 rounded-xl border border-white/5 shadow-inner">
+              <button 
+                onClick={handleKeep} 
+                className="flex items-center gap-1.5 px-4 py-1 bg-neutral-900 border border-transparent hover:border-green-500/30 hover:bg-green-500/10 rounded-lg text-[9px] font-bold uppercase text-green-500 transition-all shadow-sm"
+              >
+                Keep
+              </button>
+              <button 
+                onClick={handleDelete} 
+                className={`flex items-center gap-1.5 px-4 py-1 rounded-lg text-[9px] border border-transparent font-bold uppercase transition-all shadow-sm ${isTrashFolder ? 'bg-red-600/20 text-red-500 border-red-500/30' : 'bg-neutral-900 text-red-500/70 hover:bg-red-500/10 hover:border-red-500/30'}`}
+              >
+                Trash
+              </button>
+              <div className="w-px h-3 bg-white/10 mx-1 my-auto" />
+              <button 
+                onClick={() => {
+                  setWorkshopTargetPaths(images.map(i => i.path));
+                  setShowWildcards(true);
+                }} 
+                className="flex items-center gap-1.5 px-3 py-1 bg-neutral-900 border border-transparent hover:bg-purple-600/20 hover:border-purple-500/30 rounded-lg text-[9px] font-bold text-purple-400 uppercase transition-all shadow-sm"
+                title="Send all current images to Workshop"
+              >
+                <Wand2 className="w-3 h-3" /> All
+              </button>
+            </div>
+          )}
+        </div>
       </div>
     </header>
   );
