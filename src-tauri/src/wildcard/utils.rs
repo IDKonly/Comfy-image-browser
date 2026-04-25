@@ -1,12 +1,3 @@
-use std::path::PathBuf;
-use tauri::Manager;
-
-pub fn get_db_path_local(app_handle: &tauri::AppHandle) -> Result<PathBuf, String> {
-    let mut path = app_handle.path().app_data_dir().map_err(|e| e.to_string())?;
-    path.push(".image_manager_v2.db");
-    Ok(path)
-}
-
 pub fn calculate_jaccard_similarity_optimized(set1: &[u32], set2: &[u32]) -> f32 {
     if set1.is_empty() && set2.is_empty() { return 1.0; }
     if set1.is_empty() || set2.is_empty() { return 0.0; }

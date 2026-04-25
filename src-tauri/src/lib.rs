@@ -9,6 +9,9 @@ mod crop;
 #[cfg(test)]
 mod benchmarks;
 
+use std::sync::Mutex;
+use tauri::Manager;
+
 fn setup_logging() -> Result<(), fern::InitError> {
     fern::Dispatch::new()
         .format(|out, message, record| {
@@ -27,7 +30,6 @@ fn setup_logging() -> Result<(), fern::InitError> {
     Ok(())
 }
 
-// Learn more about Tauri commands at https://tauri.app/develop/calling-rust/
 #[tauri::command]
 fn greet(name: &str) -> String {
     format!("Hello, {}! You've been greeted from Rust!", name)
@@ -39,7 +41,6 @@ fn get_logs() -> Result<String, String> {
     if !path.exists() {
         return Ok("No log file found.".to_string());
     }
-    // Read last 100 lines
     let content = std::fs::read_to_string(path).map_err(|e| e.to_string())?;
     let lines: Vec<&str> = content.lines().collect();
     let start = if lines.len() > 100 { lines.len() - 100 } else { 0 };
@@ -52,10 +53,25 @@ pub fn run() {
     log::info!("Starting ComfyView application...");
 
     tauri::Builder::default()
-        .manage(scanner::WatcherState(std::sync::Mutex::new(scanner::FolderWatcher {
+        .manage(scanner::WatcherState(Mutex::new(scanner::FolderWatcher {
             watcher: None,
             current_path: None,
         })))
+        .manage(db::DbState(Mutex::new(None)))
+        .setup(|app| {
+            let app_handle = app.handle();
+            let mut db_path = app_handle.path().app_data_dir().map_err(|e| e.to_string())?;
+            if !db_path.exists() {
+                std::fs::create_dir_all(&db_path).map_err(|e| e.to_string())?;
+            }
+            db_path.push(".image_manager_v2.db");
+            
+            let database = db::DB::open(&db_path).map_err(|e| e.to_string())?;
+            let db_state = app.state::<db::DbState>();
+            *db_state.0.lock().unwrap() = Some(database);
+            
+            Ok(())
+        })
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_fs::init())

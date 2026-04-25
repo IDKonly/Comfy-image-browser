@@ -2,8 +2,10 @@ use rusqlite::{params, Connection, Result};
 use std::path::Path;
 use crate::metadata::ImageMetadata;
 use crate::scanner::{ImageInfo, SortMethod};
-use tauri::Manager;
 use serde::{Serialize, Deserialize};
+use std::sync::Mutex;
+
+pub struct DbState(pub Mutex<Option<DB>>);
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct ImageInfoWithTags {
@@ -16,23 +18,20 @@ pub struct ImageInfoWithTags {
 }
 
 #[tauri::command]
-pub fn get_db_status(app_handle: tauri::AppHandle, folder: String) -> Result<serde_json::Value, String> {
-    let mut path = app_handle.path().app_data_dir().map_err(|e| e.to_string())?;
-    path.push(".image_manager_v2.db");
+pub fn get_db_status(db_state: tauri::State<'_, DbState>, folder: String) -> Result<serde_json::Value, String> {
+    let state = db_state.0.lock().unwrap();
+    let db = state.as_ref().ok_or("Database not initialized")?;
     
-    let db = DB::open(&path).map_err(|e| e.to_string())?;
     let normalized_folder = folder.replace("\\", "/").trim_end_matches('/').to_string();
 
     let total_count: i64 = db.conn.query_row("SELECT COUNT(*) FROM images", [], |r| r.get(0)).unwrap_or(0);
     
-    // Use COLLATE NOCASE for case-insensitive matching on Windows
     let folder_count: i64 = db.conn.query_row(
         "SELECT COUNT(*) FROM images WHERE (folder = ?1 COLLATE NOCASE OR folder LIKE ?1 || '/%' COLLATE NOCASE)", 
         [normalized_folder.clone()], 
         |r| r.get(0)
     ).unwrap_or(0);
     
-    // Get sample of 3 paths in folder
     let mut stmt = db.conn.prepare("SELECT path FROM images WHERE (folder = ?1 COLLATE NOCASE OR folder LIKE ?1 || '/%' COLLATE NOCASE) LIMIT 3").map_err(|e| e.to_string())?;
     let samples_iter = stmt.query_map([normalized_folder], |r| r.get::<_, String>(0)).map_err(|e| e.to_string())?;
     
@@ -44,65 +43,38 @@ pub fn get_db_status(app_handle: tauri::AppHandle, folder: String) -> Result<ser
     Ok(serde_json::json!({
         "total_images": total_count,
         "folder_images": folder_count,
-        "samples": samples,
-        "db_path": path.to_string_lossy().to_string()
+        "samples": samples
     }))
 }
 
 #[tauri::command]
-pub fn clear_database(app_handle: tauri::AppHandle) -> Result<(), String> {
-    let mut path = app_handle.path().app_data_dir().map_err(|e| e.to_string())?;
-    path.push(".image_manager_v2.db");
+pub fn clear_database(db_state: tauri::State<'_, DbState>) -> Result<(), String> {
+    let state = db_state.0.lock().unwrap();
+    let db = state.as_ref().ok_or("Database not initialized")?;
     
-    let db = DB::open(&path).map_err(|e| e.to_string())?;
     db.conn.execute("DELETE FROM images", []).map_err(|e| e.to_string())?;
     db.conn.execute("VACUUM", []).map_err(|e| e.to_string())?; 
     Ok(())
 }
 
 #[tauri::command]
-pub fn get_all_prompts(app_handle: tauri::AppHandle, folder: String, recursive: bool) -> Result<Vec<String>, String> {
-    let mut path = app_handle.path().app_data_dir().map_err(|e| e.to_string())?;
-    path.push(".image_manager_v2.db");
-    
-    let db = DB::open(&path).map_err(|e| e.to_string())?;
-    // Ensure folder path is cleaned for DB matching (Windows style to DB style)
+pub fn get_all_prompts(db_state: tauri::State<'_, DbState>, folder: String, recursive: bool) -> Result<Vec<String>, String> {
+    let state = db_state.0.lock().unwrap();
+    let db = state.as_ref().ok_or("Database not initialized")?;
+
     let clean_folder = folder.replace("\\", "/").trim_end_matches('/').to_string();
-    
-    let folder_condition = if recursive {
-        "(folder = ?1 COLLATE NOCASE OR folder LIKE ?1 || '/%' COLLATE NOCASE)"
-    } else {
-        "folder = ?1 COLLATE NOCASE"
-    };
-    
-    let query = format!(
-        "SELECT prompt FROM images WHERE {} AND prompt IS NOT NULL",
-        folder_condition
-    );
-    
-    let mut stmt = db.conn.prepare(&query).map_err(|e| e.to_string())?;
-    let rows = stmt.query_map([clean_folder], |row| row.get::<_, String>(0)).map_err(|e| e.to_string())?;
-    
-    let mut results = Vec::new();
-    for r in rows {
-        if let Ok(prompt) = r { results.push(prompt); }
-    }
-    Ok(results)
+    db.get_all_prompts(&clean_folder, recursive).map_err(|e| e.to_string())
 }
 
 #[tauri::command]
-pub fn get_prompts_by_paths(app_handle: tauri::AppHandle, paths: Vec<String>) -> Result<Vec<String>, String> {
+pub fn get_prompts_by_paths(db_state: tauri::State<'_, DbState>, paths: Vec<String>) -> Result<Vec<String>, String> {
     if paths.is_empty() { return Ok(Vec::new()); }
-    let mut path = app_handle.path().app_data_dir().map_err(|e| e.to_string())?;
-    path.push(".image_manager_v2.db");
+    let state = db_state.0.lock().unwrap();
+    let db = state.as_ref().ok_or("Database not initialized")?;
     
-    let db = DB::open(&path).map_err(|e| e.to_string())?;
+    let clean_paths: Vec<String> = paths.into_iter().map(|p| p.replace("\\", "/")).collect();
     let mut results = Vec::new();
     
-    // Normalize input paths to match DB storage (slashes)
-    let clean_paths: Vec<String> = paths.into_iter().map(|p| p.replace("\\", "/")).collect();
-    
-    // Process in chunks to avoid SQLite parameter limits
     for chunk in clean_paths.chunks(500) {
         let placeholders: String = chunk.iter().map(|_| "?").collect::<Vec<_>>().join(",");
         let sql = format!("SELECT prompt FROM images WHERE path IN ({}) COLLATE NOCASE AND prompt IS NOT NULL", placeholders);
@@ -116,18 +88,14 @@ pub fn get_prompts_by_paths(app_handle: tauri::AppHandle, paths: Vec<String>) ->
 }
 
 #[tauri::command]
-pub fn get_prompts_map_by_paths(app_handle: tauri::AppHandle, paths: Vec<String>) -> Result<std::collections::HashMap<String, Option<String>>, String> {
+pub fn get_prompts_map_by_paths(db_state: tauri::State<'_, DbState>, paths: Vec<String>) -> Result<std::collections::HashMap<String, Option<String>>, String> {
     if paths.is_empty() { return Ok(std::collections::HashMap::new()); }
-    let mut db_path = app_handle.path().app_data_dir().map_err(|e| e.to_string())?;
-    db_path.push(".image_manager_v2.db");
+    let state = db_state.0.lock().unwrap();
+    let db = state.as_ref().ok_or("Database not initialized")?;
 
-    let db = DB::open(&db_path).map_err(|e| e.to_string())?;
+    let clean_paths: Vec<String> = paths.into_iter().map(|p| p.replace("\\", "/")).collect();
     let mut results = std::collections::HashMap::new();
 
-    // Normalize input paths to match DB storage (slashes)
-    let clean_paths: Vec<String> = paths.into_iter().map(|p| p.replace("\\", "/")).collect();
-
-    // Process in chunks to avoid SQLite parameter limits
     for chunk in clean_paths.chunks(500) {
         let placeholders: String = chunk.iter().map(|_| "?").collect::<Vec<_>>().join(",");
         let sql = format!("SELECT path, prompt FROM images WHERE path IN ({}) COLLATE NOCASE", placeholders);
@@ -146,10 +114,9 @@ pub fn get_prompts_map_by_paths(app_handle: tauri::AppHandle, paths: Vec<String>
 }
 
 #[tauri::command]
-pub fn get_folder_prompts_map(app_handle: tauri::AppHandle, folder: String) -> Result<std::collections::HashMap<String, Option<String>>, String> {
-    let mut path = app_handle.path().app_data_dir().map_err(|e| e.to_string())?;
-    path.push(".image_manager_v2.db");
-    let db = DB::open(&path).map_err(|e| e.to_string())?;
+pub fn get_folder_prompts_map(db_state: tauri::State<'_, DbState>, folder: String) -> Result<std::collections::HashMap<String, Option<String>>, String> {
+    let state = db_state.0.lock().unwrap();
+    let db = state.as_ref().ok_or("Database not initialized")?;
     db.get_folder_prompts(&folder).map_err(|e| e.to_string())
 }
 
@@ -161,7 +128,6 @@ impl DB {
     pub fn open(db_path: &Path) -> Result<Self> {
         let conn = Connection::open(db_path)?;
         
-        // 동시 다발적인 DB 트랜잭션 시 "Database is locked" 방지를 위한 대기 시간 설정
         conn.busy_timeout(std::time::Duration::from_secs(5))?;
         
         conn.pragma_update(None, "journal_mode", "WAL")?;

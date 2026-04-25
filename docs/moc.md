@@ -19,6 +19,9 @@ Batch Crop, Wildcard Workshop, Undo System 등 크리에이터의 생산성을 �
 ### 5. [테스트 및 검증 가이드 (Testing Guide)](testing_guide.md)
 Wildcard Workshop의 성능 벤치마크 및 쉼표 무결성 검증을 포함하여, 시스템의 안정성을 보장하기 위한 테스트 실행 방법과 주요 검증 포인트를 다룹니다.
 
+### 6. [코드 리뷰 보고서 (Code Review Report)](code_review_report_20260418.md)
+시스템의 보안, 성능, 유지보수성 측면에서의 개선 사항과 발견된 기술 부채를 기록합니다.
+
 ---
 ## 📦 기술 스택 요약 (Tech Stack)
 *   **Interface**: React 18, TypeScript, Tailwind CSS, Zustand.

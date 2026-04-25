@@ -230,6 +230,8 @@ export const useAppStore = create<AppState>()(
           images: newImages,
           currentIndex: Math.max(0, nextIndex),
           currentMetadata: null,
+          batchRange: null,
+          batchMap: {}, // [Fix] Force re-calculation of batches after removal
         };
       }),
 

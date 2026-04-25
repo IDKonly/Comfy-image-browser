@@ -1,6 +1,5 @@
 use serde::{Deserialize, Serialize};
 use image::{GenericImageView, ImageBuffer, Rgba};
-use std::path::Path;
 use std::fs;
 
 #[derive(Debug, Deserialize, Serialize)]
@@ -13,16 +12,17 @@ pub struct CropRect {
 
 #[tauri::command]
 pub async fn process_batch_crop(
+    watcher_state: tauri::State<'_, crate::scanner::WatcherState>,
     image_path: String,
     rects: Vec<CropRect>,
     fill_color: Option<[u8; 3]>, // [r, g, b]
 ) -> Result<Vec<String>, String> {
-    let path = Path::new(&image_path);
+    let path = crate::scanner::validate_path(&image_path, &watcher_state)?;
     if !path.exists() {
         return Err("Image file not found".to_string());
     }
 
-    let img = image::open(path).map_err(|e| format!("Failed to open image: {}", e))?;
+    let img = image::open(&path).map_err(|e| format!("Failed to open image: {}", e))?;
     let (img_w, img_h) = img.dimensions();
 
     let parent_dir = path.parent().ok_or("Failed to get parent directory")?;

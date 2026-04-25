@@ -166,7 +166,13 @@ fn format_character_hashtags(prompt: &str) -> String {
 }
 
 #[tauri::command]
-pub fn twitter_upload(app_handle: AppHandle, path: String, settings: TwitterSettings) -> Result<(), String> {
+pub fn twitter_upload(
+    app_handle: AppHandle, 
+    watcher_state: tauri::State<'_, crate::scanner::WatcherState>,
+    path: String, 
+    settings: TwitterSettings
+) -> Result<(), String> {
+    crate::scanner::validate_path(&path, &watcher_state)?;
     let metadata = read_metadata(&path).map_err(|e| e.to_string())?;
     
     let mut phrases_found = Vec::new();

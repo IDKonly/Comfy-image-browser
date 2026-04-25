@@ -117,7 +117,7 @@ export const ZoomPanViewer = ({
   const [isDragging, setIsDragging] = useState(false);
   const [dragStart, setDragStart] = useState({ x: 0, y: 0 });
 
-  useEffect(() => { setScale(1); setPosition({ x: 0, y: 0 }); }, [currentIndex, batchMode]);
+  useEffect(() => { setScale(1); setPosition({ x: 0, y: 0 }); }, [currentIndex, batchMode, images[currentIndex]?.path]);
 
   const handleWheel = (e: React.WheelEvent) => {
     if (batchMode) return;
@@ -148,8 +148,17 @@ export const ZoomPanViewer = ({
     }
     
     if (batchRange) {
-        // 이미 표시 중인 범위와 같다면 업데이트 스킵
-        if (displayBatch.range && displayBatch.range[0] === batchRange[0] && displayBatch.range[1] === batchRange[1]) {
+        // 이미 표시 중인 범위와 이미지가 모두 같다면 업데이트 스킵
+        const currentBatchPaths = displayBatch.current.map(img => img.path).join('|');
+        const newBatchIdxs = [];
+        for (let i = batchRange[0]; i <= batchRange[1]; i++) newBatchIdxs.push(i);
+        const newBatchPaths = newBatchIdxs.map(idx => images[idx]?.path).filter(Boolean).join('|');
+
+        if (displayBatch.range && 
+            displayBatch.range[0] === batchRange[0] && 
+            displayBatch.range[1] === batchRange[1] &&
+            currentBatchPaths === newBatchPaths
+        ) {
             return;
         }
 
@@ -166,7 +175,7 @@ export const ZoomPanViewer = ({
         }, 50); 
         return () => clearTimeout(timer);
     }
-  }, [batchMode, batchRange, images, displayBatch.range]);
+  }, [batchMode, batchRange, images, displayBatch.range, displayBatch.current]);
 
   const batchSets = useMemo(() => {
     if (!batchMode || !batchRange || !batchMap) return { current: [], next: [] };

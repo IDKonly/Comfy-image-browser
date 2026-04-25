@@ -4,8 +4,9 @@ use std::sync::Arc;
 use tauri::{Window, Emitter, Manager};
 use rayon::prelude::*;
 
-use crate::db::DB;
+use crate::db::DbState;
 use crate::metadata::read_metadata;
+use crate::scanner::{validate_path, WatcherState};
 use super::types::WildcardFilter;
 use super::filter::apply_filters;
 use super::merger::merge_tag_groups;
@@ -13,7 +14,7 @@ use std::path::Path;
 use std::time::UNIX_EPOCH;
 use crate::metadata::ImageMetadata;
 use crate::scanner::ImageInfo;
-use super::utils::{get_db_path_local, remove_unbalanced_braces};
+use super::utils::remove_unbalanced_braces;
 use super::expansion::expand_single_line;
 use super::classifier::{classify_prompts, ClassifierSubset, WordGroup, ClassificationResult};
 
@@ -26,7 +27,7 @@ pub fn classify_prompts_command(
     Ok(classify_prompts(lines, subsets, word_groups))
 }
 
-fn sync_newly_parsed_metadata(app_handle: &tauri::AppHandle, paths_and_meta: &[(String, Option<ImageMetadata>)]) {
+fn sync_newly_parsed_metadata(db_state: &tauri::State<'_, DbState>, paths_and_meta: &[(String, Option<ImageMetadata>)]) {
     let to_sync: Vec<(String, ImageMetadata)> = paths_and_meta.iter()
         .filter_map(|(path, meta_opt)| {
             meta_opt.as_ref().map(|m| (path.clone(), m.clone()))
@@ -34,36 +35,39 @@ fn sync_newly_parsed_metadata(app_handle: &tauri::AppHandle, paths_and_meta: &[(
         .collect();
 
     if !to_sync.is_empty() {
-        if let Ok(db_path) = get_db_path_local(app_handle) {
-            if let Ok(mut db) = DB::open(&db_path) {
-                let batch_data: Vec<(ImageInfo, ImageMetadata)> = to_sync.into_iter().map(|(path, meta)| {
-                    let p = Path::new(&path);
-                    let mtime = p.metadata().ok()
-                        .and_then(|m| m.modified().ok())
-                        .and_then(|t| t.duration_since(UNIX_EPOCH).ok())
-                        .map(|d| d.as_secs()).unwrap_or(0);
-                    let size = p.metadata().map(|m| m.len()).unwrap_or(0);
-                    
-                    (ImageInfo {
-                        path: path.clone(),
-                        name: p.file_name().unwrap_or_default().to_string_lossy().to_string(),
-                        mtime,
-                        size,
-                    }, meta)
-                }).collect();
+        let mut state = db_state.0.lock().unwrap();
+        if let Some(db) = state.as_mut() {
+            let batch_data: Vec<(ImageInfo, ImageMetadata)> = to_sync.into_iter().map(|(path, meta)| {
+                let p = Path::new(&path);
+                let mtime = p.metadata().ok()
+                    .and_then(|m| m.modified().ok())
+                    .and_then(|t| t.duration_since(UNIX_EPOCH).ok())
+                    .map(|d| d.as_secs()).unwrap_or(0);
+                let size = p.metadata().map(|m| m.len()).unwrap_or(0);
                 
-                let refs: Vec<(&ImageInfo, ImageMetadata)> = batch_data.iter().map(|(info, meta)| (info, meta.clone())).collect();
-                let _ = db.insert_images_batch(refs);
-            }
+                (ImageInfo {
+                    path: path.clone(),
+                    name: p.file_name().unwrap_or_default().to_string_lossy().to_string(),
+                    mtime,
+                    size,
+                }, meta)
+            }).collect();
+            
+            let refs: Vec<(&ImageInfo, ImageMetadata)> = batch_data.iter().map(|(info, meta)| (info, meta.clone())).collect();
+            let _ = db.insert_images_batch(refs);
         }
     }
 }
 
 #[tauri::command]
-pub fn get_tag_counts(app_handle: tauri::AppHandle, paths: Vec<String>) -> Result<HashMap<String, u32>, String> {
+pub fn get_tag_counts(
+    db_state: tauri::State<'_, DbState>, 
+    paths: Vec<String>
+) -> Result<HashMap<String, u32>, String> {
     let mut db_prompts: HashMap<String, Option<String>> = HashMap::new();
-    if let Ok(db_path) = get_db_path_local(&app_handle) {
-        if let Ok(db) = DB::open(&db_path) {
+    {
+        let state = db_state.0.lock().unwrap();
+        if let Some(db) = state.as_ref() {
             if let Ok(images) = db.get_images_by_paths(&paths) {
                 for img in images {
                     db_prompts.insert(img.path, img.prompt);
@@ -89,7 +93,7 @@ pub fn get_tag_counts(app_handle: tauri::AppHandle, paths: Vec<String>) -> Resul
         .filter(|(path, _, _)| !db_prompts.contains_key(path))
         .map(|(path, _, meta)| (path.clone(), meta.clone()))
         .collect();
-    sync_newly_parsed_metadata(&app_handle, &newly_parsed);
+    sync_newly_parsed_metadata(&db_state, &newly_parsed);
 
     let counts: HashMap<String, u32> = results.par_iter()
         .map(|(_, prompt_opt, _)| {
@@ -118,7 +122,14 @@ pub fn get_tag_counts(app_handle: tauri::AppHandle, paths: Vec<String>) -> Resul
 }
 
 #[tauri::command]
-pub fn generate_wildcards(app_handle: tauri::AppHandle, window: Window, paths: Vec<String>, prompts: Vec<String>, threshold: f32, filter: WildcardFilter) -> Result<Vec<String>, String> {
+pub fn generate_wildcards(
+    db_state: tauri::State<'_, DbState>, 
+    window: Window, 
+    paths: Vec<String>, 
+    prompts: Vec<String>, 
+    threshold: f32, 
+    filter: WildcardFilter
+) -> Result<Vec<String>, String> {
     let total = paths.len() + prompts.len();
     if total == 0 { return Ok(Vec::new()); }
     
@@ -129,13 +140,12 @@ pub fn generate_wildcards(app_handle: tauri::AppHandle, window: Window, paths: V
     // 1. Fetch prompts from DB/Metadata
     let mut db_prompts = HashMap::new();
     if !paths.is_empty() {
-        if let Ok(db_path) = get_db_path_local(&app_handle) {
-            if let Ok(db) = DB::open(&db_path) {
-                if let Ok(images) = db.get_images_by_paths(&paths) {
-                    for img in images {
-                        if let Some(p) = img.prompt {
-                            db_prompts.insert(img.path, p);
-                        }
+        let state = db_state.0.lock().unwrap();
+        if let Some(db) = state.as_ref() {
+            if let Ok(images) = db.get_images_by_paths(&paths) {
+                for img in images {
+                    if let Some(p) = img.prompt {
+                        db_prompts.insert(img.path, p);
                     }
                 }
             }
@@ -160,7 +170,7 @@ pub fn generate_wildcards(app_handle: tauri::AppHandle, window: Window, paths: V
         .filter(|(path, _, _)| !db_prompts.contains_key(path))
         .map(|(path, _, meta)| (path.clone(), meta.clone()))
         .collect();
-    sync_newly_parsed_metadata(&app_handle, &newly_parsed);
+    sync_newly_parsed_metadata(&db_state, &newly_parsed);
 
     let mut tag_sets: Vec<HashSet<String>> = results.into_iter()
         .map(|(_, prompt_opt, _)| {
@@ -244,7 +254,16 @@ pub fn generate_wildcards(app_handle: tauri::AppHandle, window: Window, paths: V
 }
 
 #[tauri::command]
-pub fn compare_tags(app_handle: tauri::AppHandle, window: Window, target_paths: Vec<String>, target_prompts: Vec<String>, comparison_paths: Vec<String>, comparison_prompts: Vec<String>, threshold: f32, filter: WildcardFilter) -> Result<Vec<String>, String> {
+pub fn compare_tags(
+    db_state: tauri::State<'_, DbState>, 
+    window: Window, 
+    target_paths: Vec<String>, 
+    target_prompts: Vec<String>, 
+    comparison_paths: Vec<String>, 
+    comparison_prompts: Vec<String>, 
+    threshold: f32, 
+    filter: WildcardFilter
+) -> Result<Vec<String>, String> {
     let total = target_paths.len() + target_prompts.len() + comparison_paths.len() + comparison_prompts.len();
     if target_paths.is_empty() && target_prompts.is_empty() { return Ok(Vec::new()); }
     
@@ -255,14 +274,13 @@ pub fn compare_tags(app_handle: tauri::AppHandle, window: Window, target_paths: 
     // 1. Fetch prompts for all paths
     let mut db_prompts = HashMap::new();
     if !target_paths.is_empty() || !comparison_paths.is_empty() {
-        if let Ok(db_path) = get_db_path_local(&app_handle) {
-            if let Ok(db) = DB::open(&db_path) {
-                let all_paths: Vec<_> = target_paths.iter().chain(comparison_paths.iter()).cloned().collect();
-                if let Ok(images) = db.get_images_by_paths(&all_paths) {
-                    for img in images {
-                        if let Some(p) = img.prompt {
-                            db_prompts.insert(img.path, p);
-                        }
+        let state = db_state.0.lock().unwrap();
+        if let Some(db) = state.as_ref() {
+            let all_paths: Vec<_> = target_paths.iter().chain(comparison_paths.iter()).cloned().collect();
+            if let Ok(images) = db.get_images_by_paths(&all_paths) {
+                for img in images {
+                    if let Some(p) = img.prompt {
+                        db_prompts.insert(img.path, p);
                     }
                 }
             }
@@ -307,7 +325,7 @@ pub fn compare_tags(app_handle: tauri::AppHandle, window: Window, target_paths: 
         .collect();
     
     newly_parsed.extend(comparison_newly_parsed);
-    sync_newly_parsed_metadata(&app_handle, &newly_parsed);
+    sync_newly_parsed_metadata(&db_state, &newly_parsed);
 
     let mut target_tags_sets: Vec<HashSet<String>> = target_results.into_iter()
         .map(|(_, prompt_opt, _)| {
@@ -407,7 +425,6 @@ pub fn compare_tags(app_handle: tauri::AppHandle, window: Window, target_paths: 
     Ok(results)
 }
 
-// Remove old _from_text commands as they are merged into the main ones
 #[tauri::command]
 pub fn expand_wildcards(wildcards: Vec<String>) -> Result<Vec<String>, String> {
     let mut all_expanded = HashSet::new();
@@ -421,7 +438,12 @@ pub fn expand_wildcards(wildcards: Vec<String>) -> Result<Vec<String>, String> {
 }
 
 #[tauri::command]
-pub fn save_to_file(path: String, content: String) -> Result<(), String> {
+pub fn save_to_file(
+    watcher_state: tauri::State<'_, WatcherState>,
+    path: String, 
+    content: String
+) -> Result<(), String> {
+    validate_path(&path, &watcher_state)?;
     std::fs::write(path, content).map_err(|e| e.to_string())
 }
 
@@ -431,14 +453,12 @@ pub fn read_filter_file(app_handle: tauri::AppHandle, name: String) -> Result<St
     path.push(&name);
     
     if !path.exists() {
-        // Fallback to current dir for legacy/dev support
         let mut curr_path = std::env::current_dir().map_err(|e| e.to_string())?;
         curr_path.push(&name);
         if curr_path.exists() {
             return std::fs::read_to_string(curr_path).map_err(|e| e.to_string());
         }
         
-        // Fallback to reference folder
         let mut ref_path = std::env::current_dir().map_err(|e| e.to_string())?;
         ref_path.push("reference");
         ref_path.push(&name);

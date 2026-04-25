@@ -1,7 +1,7 @@
 use std::fs;
 use std::path::{Path, PathBuf};
-use crate::db::DB;
-use tauri::Manager;
+use crate::db::DbState;
+use crate::scanner::WatcherState;
 use serde::{Serialize, Deserialize};
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
@@ -10,10 +10,41 @@ pub struct AutoClassifyResult {
     pub folder_summary: std::collections::HashMap<String, usize>,
 }
 
+/// Helper to validate if paths are within the authorized root directory.
+fn validate_paths(paths: &[String], watcher_state: &tauri::State<'_, WatcherState>) -> Result<PathBuf, String> {
+    let ws = watcher_state.0.lock().unwrap();
+    let current_root = ws.current_path.as_ref()
+        .ok_or("No directory is currently open")?;
+    
+    // Normalize and canonicalize for robust comparison
+    let root_path = PathBuf::from(current_root).canonicalize()
+        .map_err(|e| format!("Invalid root path: {}", e))?;
+
+    for path_str in paths {
+        let path = PathBuf::from(path_str);
+        if !path.exists() { continue; } 
+        
+        let canonical_path = path.canonicalize()
+            .map_err(|e| format!("Invalid path {}: {}", path_str, e))?;
+        
+        if !canonical_path.starts_with(&root_path) {
+            return Err(format!("Access denied: Path {} is outside of the open directory", path_str));
+        }
+    }
+    
+    Ok(root_path)
+}
+
 #[tauri::command]
-pub fn delete_to_trash(app_handle: tauri::AppHandle, paths: Vec<String>) -> Result<(), String> {
-    let db_path = get_db_path(&app_handle)?;
-    let db = DB::open(&db_path).map_err(|e| e.to_string())?;
+pub fn delete_to_trash(
+    db_state: tauri::State<'_, DbState>, 
+    watcher_state: tauri::State<'_, WatcherState>,
+    paths: Vec<String>
+) -> Result<(), String> {
+    validate_paths(&paths, &watcher_state)?;
+    
+    let state = db_state.0.lock().unwrap();
+    let db = state.as_ref().ok_or("Database not initialized")?;
 
     for path in paths {
         let p = Path::new(&path);
@@ -46,9 +77,15 @@ pub fn delete_to_trash(app_handle: tauri::AppHandle, paths: Vec<String>) -> Resu
 }
 
 #[tauri::command]
-pub fn move_to_keep(app_handle: tauri::AppHandle, paths: Vec<String>) -> Result<(), String> {
-    let db_path = get_db_path(&app_handle)?;
-    let db = DB::open(&db_path).map_err(|e| e.to_string())?;
+pub fn move_to_keep(
+    db_state: tauri::State<'_, DbState>, 
+    watcher_state: tauri::State<'_, WatcherState>,
+    paths: Vec<String>
+) -> Result<(), String> {
+    validate_paths(&paths, &watcher_state)?;
+    
+    let state = db_state.0.lock().unwrap();
+    let db = state.as_ref().ok_or("Database not initialized")?;
 
     for path in paths {
         let p = Path::new(&path);
@@ -70,11 +107,17 @@ pub fn move_to_keep(app_handle: tauri::AppHandle, paths: Vec<String>) -> Result<
 }
 
 #[tauri::command]
-pub fn move_files_to_folder(app_handle: tauri::AppHandle, paths: Vec<String>, folder_name: String) -> Result<(), String> {
+pub fn move_files_to_folder(
+    db_state: tauri::State<'_, DbState>, 
+    watcher_state: tauri::State<'_, WatcherState>,
+    paths: Vec<String>, 
+    folder_name: String
+) -> Result<(), String> {
     if paths.is_empty() { return Ok(()); }
+    validate_paths(&paths, &watcher_state)?;
 
-    let db_path = get_db_path(&app_handle)?;
-    let db = DB::open(&db_path).map_err(|e| e.to_string())?;
+    let state = db_state.0.lock().unwrap();
+    let db = state.as_ref().ok_or("Database not initialized")?;
 
     let first_path = Path::new(&paths[0]);
     let parent = first_path.parent().ok_or("No parent directory")?;
@@ -98,44 +141,44 @@ pub fn move_files_to_folder(app_handle: tauri::AppHandle, paths: Vec<String>, fo
 }
 
 #[tauri::command]
-pub fn undo_move(app_handle: tauri::AppHandle, original_path: String, current_path: String) -> Result<(), String> {
+pub fn undo_move(
+    db_state: tauri::State<'_, DbState>, 
+    watcher_state: tauri::State<'_, WatcherState>,
+    original_path: String, 
+    current_path: String
+) -> Result<(), String> {
+    validate_paths(&vec![original_path.clone(), current_path.clone()], &watcher_state)?;
+    
     let src = Path::new(&current_path);
     let dst = Path::new(&original_path);
     
-    if !src.exists() {
-        return Err("Source file for undo does not exist".to_string());
-    }
+    if !src.exists() { return Err("Source file for undo does not exist".to_string()); }
     
     if let Some(parent) = dst.parent() {
-        if !parent.exists() {
-            fs::create_dir_all(parent).map_err(|e| e.to_string())?;
-        }
+        if !parent.exists() { fs::create_dir_all(parent).map_err(|e| e.to_string())?; }
     }
     
     fs::rename(src, dst).map_err(|e| e.to_string())?;
 
-    let db_path = get_db_path(&app_handle)?;
-    let db = DB::open(&db_path).map_err(|e| e.to_string())?;
+    let state = db_state.0.lock().unwrap();
+    let db = state.as_ref().ok_or("Database not initialized")?;
     let _ = db.update_image_path(&current_path, &original_path);
     
     Ok(())
 }
 
-fn get_db_path(app_handle: &tauri::AppHandle) -> Result<PathBuf, String> {
-    let mut path = app_handle.path().app_data_dir().map_err(|e| e.to_string())?;
-    if !path.exists() {
-        std::fs::create_dir_all(&path).map_err(|e| e.to_string())?;
-    }
-    path.push(".image_manager_v2.db");
-    Ok(path)
-}
-
 #[tauri::command]
-pub fn auto_classify(app_handle: tauri::AppHandle, root: String, recursive: bool) -> Result<AutoClassifyResult, String> {
+pub fn auto_classify(
+    db_state: tauri::State<'_, DbState>,
+    watcher_state: tauri::State<'_, WatcherState>,
+    root: String, 
+    recursive: bool
+) -> Result<AutoClassifyResult, String> {
+    validate_paths(&vec![root.clone()], &watcher_state)?;
+    
     let root_path = Path::new(&root);
     if !root_path.exists() { return Err("Root path does not exist".to_string()); }
 
-    // 1. List direct subfolders
     let entries = fs::read_dir(root_path).map_err(|e| e.to_string())?;
     let mut subfolders = Vec::new();
     for entry in entries {
@@ -151,31 +194,26 @@ pub fn auto_classify(app_handle: tauri::AppHandle, root: String, recursive: bool
         return Ok(AutoClassifyResult { total_moved: 0, folder_summary: std::collections::HashMap::new() });
     }
 
-    // 2. Open DB and get priority based on existing image count
-    let db_path = get_db_path(&app_handle)?;
-    let db = DB::open(&db_path).map_err(|e| e.to_string())?;
+    let state = db_state.0.lock().unwrap();
+    let db = state.as_ref().ok_or("Database not initialized")?;
     let counts = db.get_subfolder_counts(subfolders.clone()).map_err(|e| e.to_string())?;
 
-    // Sort subfolders by image count (descending)
     subfolders.sort_by(|a, b| {
         let count_a = counts.get(a).unwrap_or(&0);
         let count_b = counts.get(b).unwrap_or(&0);
         count_b.cmp(count_a)
     });
 
-    // 3. Get images from the entire root (respecting recursive flag)
     let images = db.get_all_images_with_tags(&root, recursive).map_err(|e| e.to_string())?;
     
     let mut move_map: std::collections::HashMap<String, Vec<String>> = std::collections::HashMap::new();
     let mut total_moved = 0;
 
     for img in images {
-        // Skip if already in one of our target subfolders
         let img_path = Path::new(&img.path);
         let img_parent = img_path.parent().map(|p| p.to_string_lossy().to_string()).unwrap_or_default();
         if subfolders.contains(&img_parent) { continue; }
 
-        // Find best matching folder name in name or tags
         for folder_path_str in &subfolders {
             let folder_path = Path::new(folder_path_str);
             let folder_name = folder_path.file_name().unwrap().to_string_lossy().to_string().to_lowercase();
@@ -187,12 +225,11 @@ pub fn auto_classify(app_handle: tauri::AppHandle, root: String, recursive: bool
             if name_match || prompt_match || neg_match {
                 move_map.entry(folder_path_str.clone()).or_default().push(img.path);
                 total_moved += 1;
-                break; // Stop at first match (highest priority folder)
+                break;
             }
         }
     }
 
-    // 4. Execute file moves
     let mut folder_summary = std::collections::HashMap::new();
     for (dest_folder, paths) in move_map {
         let dest_path = Path::new(&dest_folder);

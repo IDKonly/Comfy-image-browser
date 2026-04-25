@@ -123,13 +123,13 @@ function App() {
             
             // 현재 이미지의 프롬프트 (정규화: null/empty 체크 및 슬래시 변환)
             const currentPath = currentImages[i].path.replace(/\\/g, '/').toLowerCase();
-            const currentPrompt = promptMap[currentPath] || null;
+            const currentPrompt = (promptMap[currentPath] || "").trim() || null;
             
             // 동일 프롬프트를 가진 '연속된' 이미지를 찾음
             // (정렬 순서가 바뀌면 배치도 그에 맞춰 재계산되어야 함)
             while (end + 1 < currentImages.length) {
                 const nextPath = currentImages[end + 1].path.replace(/\\/g, '/').toLowerCase();
-                const nextPrompt = promptMap[nextPath] || null;
+                const nextPrompt = (promptMap[nextPath] || "").trim() || null;
                 
                 // 프롬프트가 같고 둘 다 존재할 때만 묶음 (null끼리는 묶지 않음 - 개별로 취급)
                 if (currentPrompt !== null && nextPrompt !== null && currentPrompt === nextPrompt) {
@@ -149,9 +149,34 @@ function App() {
   }, [setBatchMap]);
 
   // 이미지 목록 변경 시 자동 배치 지도 갱신
+  const lastMapUpdate = useRef(0);
+  const mapUpdateTimer = useRef<number | null>(null);
+
+  const triggerBatchMapUpdate = useCallback((currentImages: any[], immediate = false) => {
+    if (immediate) {
+        if (mapUpdateTimer.current) clearTimeout(mapUpdateTimer.current);
+        updateBatchMap(currentImages);
+        lastMapUpdate.current = Date.now();
+        return;
+    }
+
+    const now = Date.now();
+    if (now - lastMapUpdate.current > 1000) {
+        if (mapUpdateTimer.current) clearTimeout(mapUpdateTimer.current);
+        updateBatchMap(currentImages);
+        lastMapUpdate.current = now;
+    } else {
+        if (mapUpdateTimer.current) clearTimeout(mapUpdateTimer.current);
+        mapUpdateTimer.current = window.setTimeout(() => {
+            updateBatchMap(currentImages);
+            lastMapUpdate.current = Date.now();
+        }, 500);
+    }
+  }, [updateBatchMap]);
+
   useEffect(() => {
-    updateBatchMap(images);
-  }, [images, updateBatchMap]);
+    triggerBatchMapUpdate(images, true);
+  }, [images, batchMode, triggerBatchMapUpdate]);
 
   // Local UI States
   const [searchQuery, setSearchQuery] = useState("");
@@ -409,6 +434,11 @@ function App() {
                     .catch(() => {});
             }
         }
+        
+        // [Batch Mode Fix] Re-calculate batch map as more prompts become available in DB
+        if (state.batchMode) {
+            triggerBatchMapUpdate(state.images);
+        }
     });
 
     return () => { 
@@ -416,7 +446,7 @@ function App() {
         unlistenUpdate.then(f => f()); 
         unlistenChunk.then(f => f());
     };
-  }, [setIndexProgress, setImages, setCurrentMetadata]);
+  }, [setIndexProgress, setImages, setCurrentMetadata, triggerBatchMapUpdate]);
 
   // Scans & Updates
   const initialScanDone = useRef(false);
