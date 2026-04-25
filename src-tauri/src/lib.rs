@@ -6,10 +6,11 @@ mod thumbnails;
 mod wildcard;
 mod twitter;
 mod crop;
+mod mobile_server;
 #[cfg(test)]
 mod benchmarks;
 
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
 use tauri::Manager;
 
 fn setup_logging() -> Result<(), fern::InitError> {
@@ -52,12 +53,28 @@ pub fn run() {
     let _ = setup_logging();
     log::info!("Starting ComfyView application...");
 
+    let mobile_shared_state: mobile_server::SharedState = Arc::new(Mutex::new(mobile_server::GlobalMobileState {
+        settings: mobile_server::MobileServerSettings {
+            enabled: false,
+            port: 4882,
+            local_only: true,
+            authorized_folders: Vec::new(),
+        },
+        state: mobile_server::MobileState {
+            recent_folders: Vec::new(),
+            authorized_folders: Vec::new(),
+        },
+        handle: None,
+        app_handle: None,
+    }));
+
     tauri::Builder::default()
         .manage(scanner::WatcherState(Mutex::new(scanner::FolderWatcher {
             watcher: None,
             current_path: None,
         })))
         .manage(db::DbState(Mutex::new(None)))
+        .manage(mobile_shared_state)
         .setup(|app| {
             let app_handle = app.handle();
             let mut db_path = app_handle.path().app_data_dir().map_err(|e| e.to_string())?;
@@ -109,7 +126,9 @@ pub fn run() {
             wildcard::save_to_file,
             wildcard::classify_prompts_command,
             twitter::twitter_upload,
-            crop::process_batch_crop
+            crop::process_batch_crop,
+            mobile_server::update_mobile_server,
+            mobile_server::get_local_ip
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

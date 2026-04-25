@@ -80,8 +80,16 @@ export interface FilterState {
   mix_tandem_ratio: number;
 }
 
+export interface MobileServerSettings {
+  enabled: boolean;
+  port: number;
+  localOnly: boolean;
+  authorizedFolders: string[];
+}
+
 interface AppState {
   folderPath: string | null;
+  recentFolders: string[];
   images: ImageInfo[];
   currentIndex: number;
   currentMetadata: ImageMetadata | null;
@@ -90,6 +98,7 @@ interface AppState {
   undoStack: UndoAction[];
   indexProgress: IndexProgress | null;
   twitterSettings: TwitterSettings;
+  mobileServerSettings: MobileServerSettings;
   recursive: boolean;
   sortMethod: SortMethod;
   workshopFilter: FilterState;
@@ -100,6 +109,7 @@ interface AppState {
   workshopTargetPaths: string[];
   
   setFolderPath: (path: string | null) => void;
+  setRecentFolders: (folders: string[]) => void;
   setImages: (images: ImageInfo[]) => void;
   setCurrentIndex: (index: number) => void;
   setCurrentMetadata: (metadata: ImageMetadata | null) => void;
@@ -111,6 +121,7 @@ interface AppState {
   pushUndo: (action: UndoAction) => void;
   popUndo: () => UndoAction | undefined;
   setTwitterSettings: (settings: TwitterSettings) => void;
+  setMobileServerSettings: (settings: MobileServerSettings) => void;
   setRecursive: (recursive: boolean) => void;
   setSortMethod: (method: SortMethod) => void;
   setWorkshopFilter: (filter: FilterState) => void;
@@ -124,6 +135,7 @@ export const useAppStore = create<AppState>()(
   persist(
     (set, get) => ({
       folderPath: null,
+      recentFolders: [],
       images: [],
       currentIndex: 0,
       currentMetadata: null,
@@ -146,6 +158,12 @@ export const useAppStore = create<AppState>()(
         accessToken: "",
         accessSecret: "",
       },
+      mobileServerSettings: {
+        enabled: false,
+        port: 4882,
+        localOnly: true,
+        authorizedFolders: [],
+      },
       workshopFilter: {
         partial_match: [],
         exact_match: [],
@@ -163,6 +181,12 @@ export const useAppStore = create<AppState>()(
       classifierSettings: {},
 
       setTwitterSettings: (twitterSettings) => set({ twitterSettings }),
+      setMobileServerSettings: (mobileServerSettings) => set({ 
+        mobileServerSettings: {
+            ...mobileServerSettings,
+            authorizedFolders: mobileServerSettings.authorizedFolders || []
+        } 
+      }),
       setRecursive: (recursive) => set({ recursive }),
       setSortMethod: (sortMethod) => set({ sortMethod }),
       setWorkshopFilter: (workshopFilter) => set({ workshopFilter }),
@@ -172,7 +196,12 @@ export const useAppStore = create<AppState>()(
       setBatchMap: (batchMap) => set({ batchMap }),
       setWorkshopTargetPaths: (workshopTargetPaths) => set({ workshopTargetPaths }),
 
-      setFolderPath: (path) => set({ folderPath: path, undoStack: [] }),
+      setFolderPath: (path) => set((state) => {
+        if (!path) return { folderPath: null, undoStack: [] };
+        const recent = [path, ...state.recentFolders.filter(f => f !== path)].slice(0, 5);
+        return { folderPath: path, recentFolders: recent, undoStack: [] };
+      }),
+      setRecentFolders: (recentFolders) => set({ recentFolders }),
       setImages: (images) => set({ images }),
       setCurrentIndex: (index) => set({ currentIndex: index, currentMetadata: null }),
       setCurrentMetadata: (metadata) => set({ currentMetadata: metadata }),
@@ -250,14 +279,29 @@ export const useAppStore = create<AppState>()(
             };
           }
         }
+        // Ensure mobileServerSettings has authorizedFolders
+        if (persistedState && persistedState.mobileServerSettings) {
+            if (!persistedState.mobileServerSettings.authorizedFolders) {
+                persistedState.mobileServerSettings.authorizedFolders = [];
+            }
+        } else if (persistedState) {
+            persistedState.mobileServerSettings = {
+                enabled: false,
+                port: 4882,
+                localOnly: true,
+                authorizedFolders: [],
+            };
+        }
         return persistedState;
       },
       partialize: (state) => ({
         folderPath: state.folderPath,
+        recentFolders: state.recentFolders,
         currentIndex: state.currentIndex,
         shortcuts: state.shortcuts,
         batchMode: state.batchMode,
         twitterSettings: state.twitterSettings,
+        mobileServerSettings: state.mobileServerSettings,
         recursive: state.recursive,
         sortMethod: state.sortMethod,
         workshopFilter: state.workshopFilter,

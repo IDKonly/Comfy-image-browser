@@ -1,0 +1,360 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>ComfyView Mobile</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <style>
+        body { background-color: #0a0a0a; color: #e5e5e5; -webkit-tap-highlight-color: transparent; }
+        .swipe-card { transition: transform 0.15s ease-out, opacity 0.15s ease-out; }
+        .skeleton { background: linear-gradient(90deg, #1a1a1a 25%, #2a2a2a 50%, #1a1a1a 75%); background-size: 200% 100%; animation: loading 1.5s infinite; }
+        @keyframes loading { from { background-position: 200% 0; } to { background-position: -200% 0; } }
+    </style>
+</head>
+<body class="overflow-x-hidden fixed inset-0 flex flex-col">
+    <!-- Header -->
+    <header class="h-14 border-b border-white/5 flex items-center justify-between px-4 bg-neutral-900/50 backdrop-blur-md z-20 relative">
+        <div class="flex items-center gap-2">
+            <div class="w-6 h-6 bg-blue-600 rounded flex items-center justify-center text-white text-[10px] font-black italic">CV</div>
+            <h1 id="title" class="text-xs font-black uppercase tracking-widest italic text-neutral-300">ComfyView</h1>
+        </div>
+
+        <div id="indexDisplay" class="hidden absolute left-1/2 -translate-x-1/2 flex flex-col items-center">
+            <span id="counter" class="text-[10px] font-mono font-black text-blue-500 tracking-tighter">0 / 0</span>
+            <div class="w-12 h-0.5 bg-white/5 rounded-full overflow-hidden mt-0.5">
+                <div id="progressBar" class="h-full bg-blue-600 transition-all duration-150" style="width: 0%"></div>
+            </div>
+        </div>
+
+        <div class="flex items-center gap-3">
+            <button id="swapBtn" class="text-[8px] font-black uppercase text-neutral-500 border border-white/10 px-2 py-1 rounded-lg">Swap</button>
+            <button id="backBtn" class="hidden text-[10px] font-black uppercase text-blue-500">Back</button>
+        </div>
+    </header>
+
+    <!-- Main Content -->
+    <main id="content" class="flex-1 relative overflow-y-auto">
+        <!-- Root List View -->
+        <div id="rootView" class="p-4 space-y-6">
+            <div class="space-y-4">
+                <h2 class="text-[10px] font-black uppercase tracking-[0.2em] text-blue-500">Authorized Folders</h2>
+                <div id="authList" class="space-y-3"></div>
+            </div>
+            <div class="space-y-4">
+                <h2 class="text-[10px] font-black uppercase tracking-[0.2em] text-neutral-500">Recent Folders</h2>
+                <div id="recentList" class="space-y-3"></div>
+            </div>
+        </div>
+
+        <!-- Browse View (Subfolders) -->
+        <div id="browseView" class="hidden p-4 space-y-4">
+            <div class="flex items-center justify-between">
+                <h2 id="browseTitle" class="text-[10px] font-black uppercase tracking-[0.2em] text-neutral-400 truncate flex-1 mr-4">Folder</h2>
+                <button id="upBtn" class="text-[8px] font-black uppercase text-blue-500 bg-blue-500/10 px-3 py-1 rounded-full">Up ⬆️</button>
+            </div>
+            <div id="browseList" class="space-y-3"></div>
+            <div id="browseImageList" class="grid grid-cols-2 gap-3 pt-4 border-t border-white/5">
+                <!-- Images in current browse folder can be shown as a simple list or just a "Start Grading" button -->
+                <button id="startGradingBtn" class="col-span-2 py-4 bg-blue-600 text-white rounded-2xl font-black uppercase tracking-widest text-xs shadow-lg shadow-blue-600/20 active:scale-95 transition-all">Start Grading Images</button>
+            </div>
+        </div>
+
+        <!-- Image Viewer View -->
+        <div id="viewerView" class="hidden absolute inset-0 flex flex-col bg-neutral-950 z-30">
+            <div id="imageContainer" class="flex-1 relative flex items-center justify-center p-4">
+                <div id="card" class="swipe-card relative w-full h-full rounded-2xl overflow-hidden shadow-2xl bg-neutral-900 flex items-center justify-center">
+                    <img id="mainImage" class="max-w-full max-h-full object-contain" src="" alt="">
+                    <div id="swipeOverlay" class="absolute inset-0 flex items-center justify-center text-6xl font-black uppercase opacity-0 pointer-events-none transition-opacity">
+                        <span id="overlayText"></span>
+                    </div>
+                </div>
+            </div>
+            
+            <!-- Controls -->
+            <div id="controls" class="h-24 grid grid-cols-3 gap-4 px-6 pb-6">
+                <button id="leftBtn" class="bg-red-950/20 border border-red-500/30 rounded-2xl flex flex-col items-center justify-center gap-1 active:bg-red-500 transition-colors">
+                    <span id="leftBtnText" class="text-[8px] font-black uppercase text-red-500">Trash</span>
+                    <span id="leftBtnEmoji" class="text-xs">🗑️</span>
+                </button>
+                <button id="skipBtn" class="bg-white/5 border border-white/10 rounded-2xl flex flex-col items-center justify-center gap-1 active:bg-white/10">
+                    <span class="text-[8px] font-black uppercase text-neutral-500">Skip</span>
+                    <span class="text-xs">⬇️</span>
+                </button>
+                <button id="rightBtn" class="bg-blue-950/20 border border-blue-500/30 rounded-2xl flex flex-col items-center justify-center gap-1 active:bg-blue-500 transition-colors">
+                    <span id="rightBtnText" class="text-[8px] font-black uppercase text-blue-500">Keep</span>
+                    <span id="rightBtnEmoji" class="text-xs">⭐</span>
+                </button>
+            </div>
+        </div>
+    </main>
+
+    <script>
+        const state = {
+            view: 'root', // root, browse, viewer
+            pathStack: [],
+            currentFolderPath: null,
+            images: [],
+            index: 0,
+            touch: { x: 0, y: 0, startX: 0, startY: 0 },
+            swapped: localStorage.getItem('cv_swapped') === 'true'
+        };
+
+        const $ = id => document.getElementById(id);
+
+        async function init() {
+            updateSwapUI();
+            try {
+                const resp = await fetch('/api/state');
+                const data = await resp.json();
+                renderRoots(data.authorizedFolders || [], data.recentFolders || []);
+            } catch (e) { console.error("Failed to load state:", e); }
+        }
+
+        function renderRoots(auth, recent) {
+            const formatPath = p => {
+                const parts = p.split(/[\\/]/).filter(Boolean);
+                return parts.length > 2 ? '.../' + parts.slice(-2).join('/') : parts.join('/');
+            };
+
+            $('authList').innerHTML = auth.map(f => `
+                <button onclick="enterFolder('${f.replace(/\\/g, '\\\\')}')" class="w-full p-4 bg-blue-600/5 border border-blue-500/10 rounded-2xl text-left active:scale-[0.98] transition-all">
+                    <p class="text-[10px] font-black uppercase text-blue-500 mb-1">Permanent Root</p>
+                    <p class="text-xs font-medium text-neutral-300 truncate">${formatPath(f)}</p>
+                </button>
+            `).join('');
+            if (auth.length === 0) $('authList').innerHTML = '<p class="text-[8px] text-neutral-600 italic">No authorized folders set in Settings.</p>';
+
+            $('recentList').innerHTML = recent.map(f => `
+                <button onclick="enterFolder('${f.replace(/\\/g, '\\\\')}')" class="w-full p-4 bg-white/5 border border-white/5 rounded-2xl text-left active:scale-[0.98] transition-all">
+                    <p class="text-[10px] font-black uppercase text-neutral-500 mb-1">Recent Entry</p>
+                    <p class="text-xs font-medium text-neutral-300 truncate">${formatPath(f)}</p>
+                </button>
+            `).join('');
+            if (recent.length === 0) $('recentList').innerHTML = '<p class="text-[8px] text-neutral-600 italic">No recent history.</p>';
+        }
+
+        async function enterFolder(path) {
+            state.view = 'browse';
+            state.currentFolderPath = path;
+            state.pathStack.push(path);
+            
+            $('rootView').classList.add('hidden');
+            $('browseView').classList.remove('hidden');
+            $('backBtn').classList.remove('hidden');
+            $('title').classList.add('hidden');
+
+            await refreshBrowse();
+        }
+
+        async function refreshBrowse() {
+            const path = state.currentFolderPath;
+            const parts = path.split(/[\\/]/).filter(Boolean);
+            $('browseTitle').textContent = parts.slice(-2).join(' / ') || path;
+
+            const resp = await fetch('/api/subfolders?path=' + encodeURIComponent(path));
+            const subfolders = await resp.json();
+            
+            const imgResp = await fetch('/api/images?folder=' + encodeURIComponent(path));
+            state.images = await imgResp.json();
+
+            $('browseList').innerHTML = subfolders.map(f => `
+                <button onclick="navigateInto('${f.path.replace(/\\/g, '\\\\')}')" class="w-full p-3 bg-white/5 border border-white/5 rounded-xl text-left flex items-center gap-3">
+                    <span class="text-lg">📁</span>
+                    <span class="text-xs font-medium text-neutral-300 truncate">${f.name}</span>
+                </button>
+            `).join('');
+
+            if (state.images.length > 0) {
+                $('startGradingBtn').classList.remove('hidden');
+                $('startGradingBtn').innerHTML = 'Start Grading (' + state.images.length + ' images)';
+            } else {
+                $('startGradingBtn').classList.add('hidden');
+            }
+        }
+
+        function navigateInto(path) {
+            state.currentFolderPath = path;
+            state.pathStack.push(path);
+            refreshBrowse();
+        }
+
+        $('upBtn').onclick = () => {
+            if (state.pathStack.length > 1) {
+                state.pathStack.pop();
+                state.currentFolderPath = state.pathStack[state.pathStack.length - 1];
+                refreshBrowse();
+            } else {
+                goBack();
+            }
+        };
+
+        $('startGradingBtn').onclick = () => {
+            state.view = 'viewer';
+            $('browseView').classList.add('hidden');
+            $('viewerView').classList.remove('hidden');
+            $('indexDisplay').classList.remove('hidden');
+            state.index = 0;
+            showImage();
+        };
+
+        function showImage() {
+            if (state.index >= state.images.length) {
+                alert('All images processed!');
+                goBackToBrowse();
+                return;
+            }
+            const current = state.index + 1;
+            const total = state.images.length;
+            $('counter').textContent = current + ' / ' + total;
+            $('progressBar').style.width = (current / total * 100) + '%';
+
+            const img = state.images[state.index];
+            $('mainImage').src = '/api/image?path=' + encodeURIComponent(img.path);
+            $('card').style.transform = 'none';
+            $('card').style.opacity = '1';
+        }
+
+        async function handleAction(action) {
+            const path = state.images[state.index].path;
+            const card = $('card');
+            const overlay = $('swipeOverlay');
+            const text = $('overlayText');
+
+            if (action === 'keep') {
+                const direction = state.swapped ? -1 : 1;
+                card.style.transform = 'translateX(' + (200 * direction) + 'px) rotate(' + (20 * direction) + 'deg)';
+                card.style.opacity = '0';
+                text.textContent = 'Keep';
+                text.className = 'text-blue-500 font-black';
+                overlay.style.opacity = '1';
+            } else if (action === 'trash') {
+                const direction = state.swapped ? 1 : -1;
+                card.style.transform = 'translateX(' + (200 * direction) + 'px) rotate(' + (20 * direction) + 'deg)';
+                card.style.opacity = '0';
+                text.textContent = 'Trash';
+                text.className = 'text-red-500 font-black';
+                overlay.style.opacity = '1';
+            } else {
+                card.style.transform = 'translateY(200px)';
+                card.style.opacity = '0';
+            }
+
+            try {
+                await fetch('/api/action', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ path, action })
+                });
+            } catch (e) { console.error("Action failed:", e); }
+
+            setTimeout(() => {
+                overlay.style.opacity = '0';
+                state.index++;
+                showImage();
+            }, 150);
+        }
+
+        $('backBtn').onclick = () => {
+            if (state.view === 'viewer') goBackToBrowse();
+            else goBack();
+        };
+
+        function goBackToBrowse() {
+            state.view = 'browse';
+            $('viewerView').classList.add('hidden');
+            $('browseView').classList.remove('hidden');
+            $('indexDisplay').classList.add('hidden');
+            refreshBrowse();
+        }
+
+        function goBack() {
+            state.view = 'root';
+            state.pathStack = [];
+            $('rootView').classList.remove('hidden');
+            $('browseView').classList.add('hidden');
+            $('viewerView').classList.add('hidden');
+            $('backBtn').classList.add('hidden');
+            $('indexDisplay').classList.add('hidden');
+            $('title').classList.remove('hidden');
+            init();
+        }
+
+        function updateSwapUI() {
+            if (state.swapped) {
+                $('leftBtnText').textContent = 'Keep';
+                $('leftBtnText').className = 'text-[8px] font-black uppercase text-blue-500';
+                $('leftBtnEmoji').textContent = '⭐';
+                $('leftBtn').className = 'bg-blue-950/20 border border-blue-500/30 rounded-2xl flex flex-col items-center justify-center gap-1 active:bg-blue-500 transition-colors';
+
+                $('rightBtnText').textContent = 'Trash';
+                $('rightBtnText').className = 'text-[8px] font-black uppercase text-red-500';
+                $('rightBtnEmoji').textContent = '🗑️';
+                $('rightBtn').className = 'bg-red-950/20 border border-red-500/30 rounded-2xl flex flex-col items-center justify-center gap-1 active:bg-red-500 transition-colors';
+                
+                $('swapBtn').classList.add('text-blue-500', 'border-blue-500/30');
+            } else {
+                $('leftBtnText').textContent = 'Trash';
+                $('leftBtnText').className = 'text-[8px] font-black uppercase text-red-500';
+                $('leftBtnEmoji').textContent = '🗑️';
+                $('leftBtn').className = 'bg-red-950/20 border border-red-500/30 rounded-2xl flex flex-col items-center justify-center gap-1 active:bg-red-500 transition-colors';
+
+                $('rightBtnText').textContent = 'Keep';
+                $('rightBtnText').className = 'text-[8px] font-black uppercase text-blue-500';
+                $('rightBtnEmoji').textContent = '⭐';
+                $('rightBtn').className = 'bg-blue-950/20 border border-blue-500/30 rounded-2xl flex flex-col items-center justify-center gap-1 active:bg-blue-500 transition-colors';
+                
+                $('swapBtn').classList.remove('text-blue-500', 'border-blue-500/30');
+            }
+        }
+
+        $('swapBtn').onclick = () => {
+            state.swapped = !state.swapped;
+            localStorage.setItem('cv_swapped', state.swapped);
+            updateSwapUI();
+        };
+
+        const card = $('card');
+        card.addEventListener('touchstart', e => {
+            state.touch.startX = e.touches[0].clientX;
+            state.touch.startY = e.touches[0].clientY;
+        }, { passive: true });
+
+        card.addEventListener('touchmove', e => {
+            const x = e.touches[0].clientX - state.touch.startX;
+            const y = e.touches[0].clientY - state.touch.startY;
+            card.style.transform = 'translate(' + x + 'px, ' + y + 'px) rotate(' + (x * 0.1) + 'deg)';
+            const overlay = $('swipeOverlay');
+            const text = $('overlayText');
+            let logicalAction = null;
+            if (x > 50) logicalAction = state.swapped ? 'trash' : 'keep';
+            else if (x < -50) logicalAction = state.swapped ? 'keep' : 'trash';
+
+            if (logicalAction === 'keep') {
+                overlay.style.opacity = Math.min(Math.abs(x) / 150, 1);
+                text.textContent = 'Keep';
+                text.className = 'text-blue-500 font-black';
+            } else if (logicalAction === 'trash') {
+                overlay.style.opacity = Math.min(Math.abs(x) / 150, 1);
+                text.textContent = 'Trash';
+                text.className = 'text-red-500 font-black';
+            } else { overlay.style.opacity = 0; }
+        }, { passive: true });
+
+        card.addEventListener('touchend', e => {
+            const x = e.changedTouches[0].clientX - state.touch.startX;
+            const y = e.changedTouches[0].clientY - state.touch.startY;
+            if (x > 100) handleAction(state.swapped ? 'trash' : 'keep');
+            else if (x < -100) handleAction(state.swapped ? 'keep' : 'trash');
+            else if (y > 100) handleAction('skip');
+            else { card.style.transform = 'none'; $('swipeOverlay').style.opacity = '0'; }
+        });
+
+        $('leftBtn').onclick = () => handleAction(state.swapped ? 'keep' : 'trash');
+        $('rightBtn').onclick = () => handleAction(state.swapped ? 'trash' : 'keep');
+        $('skipBtn').onclick = () => handleAction('skip');
+
+        init();
+    </script>
+</body>
+</html>

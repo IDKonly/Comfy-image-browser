@@ -91,12 +91,33 @@ const _ImageCache = ({ images, currentIndex, batchMode, batchRange, reloadTimest
 
 function App() {
   const { 
-    folderPath, images, currentIndex, currentMetadata, shortcuts, batchMode, indexProgress, twitterSettings, recursive, sortMethod, imageCacheSize: _imageCacheSize,
+    folderPath, recentFolders, images, currentIndex, currentMetadata, shortcuts, batchMode, indexProgress, twitterSettings, mobileServerSettings, recursive, sortMethod, imageCacheSize: _imageCacheSize,
     setFolderPath, setImages, setCurrentIndex, setCurrentMetadata, removeImages, setShortcuts, setBatchMode, setIndexProgress, setTwitterSettings, setRecursive,
     setWorkshopTargetPaths, workshopFilter, setWorkshopFilter, batchRange, setBatchRange, batchMap, setBatchMap
   } = useAppStore();
 
   const { showToast } = useToast();
+
+  // Mobile Server Sync
+  useEffect(() => {
+    console.log("Syncing mobile server:", mobileServerSettings.enabled);
+    invoke("update_mobile_server", { 
+      settings: {
+        ...mobileServerSettings,
+        authorizedFolders: mobileServerSettings.authorizedFolders || []
+      }, 
+      recentFolders: recentFolders 
+    })
+    .then(() => {
+      if (mobileServerSettings.enabled) {
+        showToast("Mobile server sync success", "info");
+      }
+    })
+    .catch(e => {
+      console.error("Failed to update mobile server:", e);
+      showToast(`Server Sync Error: ${e}`, "error");
+    });
+  }, [mobileServerSettings, recentFolders]);
   
   // 배치 지도 업데이트 (프롬프트 기반 그룹화)
   const updateBatchMap = useCallback(async (currentImages: any[]) => {

@@ -1,7 +1,8 @@
-import { X, Keyboard, History, Zap } from "lucide-react";
+import { X, Keyboard, History, Zap, Smartphone, Link, Plus, Trash2 } from "lucide-react";
 import { Shortcuts, DEFAULT_SHORTCUTS, useAppStore } from "../store/useAppStore";
 import { invoke } from "@tauri-apps/api/core";
-import { confirm } from "@tauri-apps/plugin-dialog";
+import { open, confirm } from "@tauri-apps/plugin-dialog";
+import { useState, useEffect } from "react";
 
 interface SettingsModalProps {
   show: boolean;
@@ -30,8 +31,39 @@ export const SettingsModal = ({
   setImages,
   showToast,
 }: SettingsModalProps) => {
-  const { imageCacheSize, setImageCacheSize } = useAppStore();
+  const { imageCacheSize, setImageCacheSize, mobileServerSettings, setMobileServerSettings } = useAppStore();
+  const [localIp, setLocalIp] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (show && mobileServerSettings.enabled) {
+      invoke("get_local_ip").then(ip => setLocalIp(ip as string)).catch(() => setLocalIp(null));
+    }
+  }, [show, mobileServerSettings.enabled]);
+
   if (!show) return null;
+
+  const mobileUrl = `http://${localIp || 'loading...'}:${mobileServerSettings.port}`;
+
+  const handleAddAuthorizedFolder = async () => {
+    const selected = await open({ directory: true, multiple: false });
+    if (selected && typeof selected === 'string') {
+        const currentFolders = mobileServerSettings.authorizedFolders || [];
+        if (!currentFolders.includes(selected)) {
+            setMobileServerSettings({
+                ...mobileServerSettings,
+                authorizedFolders: [...currentFolders, selected]
+            });
+        }
+    }
+  };
+
+  const handleRemoveAuthorizedFolder = (path: string) => {
+    const currentFolders = mobileServerSettings.authorizedFolders || [];
+    setMobileServerSettings({
+        ...mobileServerSettings,
+        authorizedFolders: currentFolders.filter(f => f !== path)
+    });
+  };
 
   return (
     <div className="fixed inset-0 z-50 bg-black/80 backdrop-blur-md flex items-center justify-center p-10 animate-in fade-in duration-300">
@@ -63,6 +95,106 @@ export const SettingsModal = ({
                 <span className="text-[11px] font-mono text-blue-400 w-4 text-center">{imageCacheSize}</span>
               </div>
             </div>
+          </div>
+
+          <div className="space-y-4 pt-6 border-t border-white/5">
+            <h4 className="text-[10px] font-black uppercase tracking-[0.2em] text-blue-500 flex items-center gap-2"><Smartphone className="w-3 h-3" /> Mobile Connectivity</h4>
+            <div className="flex items-center justify-between group">
+              <div className="space-y-1">
+                <span className="text-[10px] font-black uppercase tracking-widest text-neutral-300 group-hover:text-white block">Enable Server</span>
+                <p className="text-[8px] text-neutral-500 italic leading-relaxed uppercase">Start mobile web interface server.</p>
+              </div>
+              <input 
+                type="checkbox" 
+                checked={mobileServerSettings.enabled} 
+                onChange={e => setMobileServerSettings({...mobileServerSettings, enabled: e.target.checked})}
+                className="w-4 h-4 accent-blue-600 cursor-pointer"
+              />
+            </div>
+            <div className="flex items-center justify-between group">
+              <span className="text-[10px] font-black uppercase tracking-widest text-neutral-500">Server Port</span>
+              <input 
+                type="number" 
+                value={mobileServerSettings.port} 
+                onChange={e => setMobileServerSettings({...mobileServerSettings, port: parseInt(e.target.value) || 4882})}
+                className="bg-neutral-950 border border-white/5 rounded-xl px-4 py-2 text-center text-[11px] font-mono text-blue-400 w-24 focus:border-blue-500 focus:ring-4 focus:ring-blue-500/10 transition-all" 
+              />
+            </div>
+            <label className="flex items-center justify-between group cursor-pointer">
+              <div className="space-y-1">
+                <span className="text-[10px] font-black uppercase tracking-widest text-neutral-500 group-hover:text-neutral-300">Restrict to this PC</span>
+                <p className="text-[8px] text-neutral-500 italic leading-relaxed uppercase">Only allow access from this computer (Localhost).</p>
+              </div>
+              <input 
+                type="checkbox" 
+                checked={mobileServerSettings.localOnly} 
+                onChange={e => setMobileServerSettings({...mobileServerSettings, localOnly: e.target.checked})}
+                className="w-4 h-4 accent-blue-600"
+              />
+            </label>
+
+            <div className="space-y-3 pt-2">
+                <div className="flex items-center justify-between">
+                    <span className="text-[10px] font-black uppercase tracking-widest text-neutral-500">Authorized Folders</span>
+                    <button 
+                        onClick={handleAddAuthorizedFolder}
+                        className="p-1.5 bg-blue-600/10 hover:bg-blue-600/20 text-blue-500 rounded-lg transition-all"
+                    >
+                        <Plus className="w-3 h-3" />
+                    </button>
+                </div>
+                <div className="space-y-1.5">
+                    {(mobileServerSettings.authorizedFolders || []).map(folder => (
+                        <div key={folder} className="flex items-center justify-between gap-2 p-2 bg-black/20 border border-white/5 rounded-xl group">
+                            <span className="text-[9px] text-neutral-400 truncate flex-1">{folder}</span>
+                            <button 
+                                onClick={() => handleRemoveAuthorizedFolder(folder)}
+                                className="p-1 text-neutral-600 hover:text-red-500 opacity-0 group-hover:opacity-100 transition-all"
+                            >
+                                <Trash2 className="w-3 h-3" />
+                            </button>
+                        </div>
+                    ))}
+                    {(!mobileServerSettings.authorizedFolders || mobileServerSettings.authorizedFolders.length === 0) && (
+                        <p className="text-[8px] text-neutral-600 italic">No permanent folders added.</p>
+                    )}
+                </div>
+            </div>
+
+            {mobileServerSettings.enabled && (
+              <div className="mt-4 p-4 bg-blue-600/10 border border-blue-500/20 rounded-2xl space-y-2 animate-in slide-in-from-top-2 duration-300">
+                <div className="flex items-center justify-between">
+                    <div className="flex items-center gap-2 text-blue-400">
+                        <Link className="w-3 h-3" />
+                        <span className="text-[10px] font-black uppercase tracking-widest">Access URL</span>
+                    </div>
+                    <button 
+                        onClick={() => {
+                            const { recentFolders } = useAppStore.getState();
+                            invoke("update_mobile_server", { 
+                                settings: {
+                                    ...mobileServerSettings,
+                                    authorizedFolders: mobileServerSettings.authorizedFolders || []
+                                }, 
+                                recentFolders: recentFolders 
+                            }).then(() => showToast("Manual sync success", "success"))
+                              .catch(e => showToast(`Sync failed: ${e}`, "error"));
+                        }}
+                        className="text-[8px] font-black uppercase text-blue-500 hover:text-blue-400 underline underline-offset-4"
+                    >
+                        Force Sync
+                    </button>
+                </div>
+                <div className="flex items-center justify-between gap-4">
+                  <code className="text-[11px] font-mono text-white bg-black/40 px-3 py-1.5 rounded-lg flex-1 truncate select-all">
+                    {mobileServerSettings.localOnly ? `http://localhost:${mobileServerSettings.port}` : mobileUrl}
+                  </code>
+                </div>
+                <p className="text-[8px] text-neutral-500 italic uppercase">
+                  {mobileServerSettings.localOnly ? "Accessible only on this PC." : "Open this address on your mobile device browser."}
+                </p>
+              </div>
+            )}
           </div>
 
           <div className="space-y-4 pt-6 border-t border-white/5">
