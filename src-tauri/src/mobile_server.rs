@@ -272,7 +272,7 @@ async fn post_action_handler(
 #[tauri::command]
 pub async fn update_mobile_server(
     settings: MobileServerSettings,
-    recentFolders: Vec<String>,
+    recent_folders: Vec<String>,
     app: tauri::AppHandle,
     state: tauri::State<'_, SharedState>,
 ) -> Result<(), String> {
@@ -290,7 +290,7 @@ pub async fn update_mobile_server(
     let stop_needed = gs.settings.enabled && !settings.enabled;
 
     gs.settings = settings.clone();
-    gs.state.recent_folders = recentFolders;
+    gs.state.recent_folders = recent_folders;
     gs.state.authorized_folders = settings.authorized_folders;
 
     if stop_needed || restart_needed {
