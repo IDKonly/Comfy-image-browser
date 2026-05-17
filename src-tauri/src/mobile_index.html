@@ -343,7 +343,26 @@
             if (action === 'keep') { statusText.textContent = 'KEEP'; statusOverlay.className = 'status-overlay status-keep show'; }
             else { statusText.textContent = 'TRASH'; statusOverlay.className = 'status-overlay status-trash show'; }
 
-            try { fetch('/api/action', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ path, action }) }); } catch (e) {}
+            try { 
+                const response = await fetch('/api/action', { 
+                    method: 'POST', 
+                    headers: { 'Content-Type': 'application/json' }, 
+                    body: JSON.stringify({ path, action }) 
+                });
+                
+                if (!response.ok) {
+                    const errorText = await response.text();
+                    console.error("Action failed:", errorText);
+                    alert("Action failed: " + errorText);
+                    statusOverlay.classList.remove('show');
+                    return;
+                }
+            } catch (e) {
+                console.error("Network error:", e);
+                alert("Network error. Check connection.");
+                statusOverlay.classList.remove('show');
+                return;
+            }
 
             setTimeout(() => {
                 post.style.opacity = '0';

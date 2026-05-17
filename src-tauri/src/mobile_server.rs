@@ -70,6 +70,7 @@ fn is_path_authorized(path: &Path, gs: &GlobalMobileState) -> bool {
     let mut roots: Vec<PathBuf> = gs.settings.authorized_folders.iter().map(PathBuf::from).collect();
     roots.extend(gs.state.recent_folders.iter().map(PathBuf::from));
 
+    // Normalize target path: handle Windows prefix and case
     let target = match path.canonicalize() {
         Ok(p) => p,
         Err(_) => return false,
@@ -77,7 +78,8 @@ fn is_path_authorized(path: &Path, gs: &GlobalMobileState) -> bool {
 
     for root in roots {
         if let Ok(abs_root) = root.canonicalize() {
-            if target.starts_with(abs_root) {
+            // Check if target is equal to or a subpath of root
+            if target.starts_with(&abs_root) {
                 return true;
             }
         }
@@ -154,6 +156,7 @@ async fn get_subfolders_handler(
     {
         let gs = state.lock().unwrap();
         if !is_path_authorized(path, &gs) {
+            log::warn!("Access denied for subfolders: {:?}", path);
             return (StatusCode::FORBIDDEN, "Access denied").into_response();
         }
     }
@@ -185,6 +188,7 @@ async fn get_images_handler(
     {
         let gs = state.lock().unwrap();
         if !is_path_authorized(path, &gs) {
+            log::warn!("Access denied for images: {:?}", path);
             return (StatusCode::FORBIDDEN, "Access denied").into_response();
         }
     }
@@ -244,6 +248,7 @@ async fn post_action_handler(
     let app_handle = {
         let gs = state.lock().unwrap();
         if !is_path_authorized(path, &gs) {
+            log::warn!("Access denied for action: {:?} with path: {:?}", payload.action, path);
             return (StatusCode::FORBIDDEN, "Access denied").into_response();
         }
         gs.app_handle.clone()
@@ -251,18 +256,22 @@ async fn post_action_handler(
 
     if let Some(app) = app_handle {
         let db_state = app.state::<DbState>();
-        let watcher_state = app.state::<WatcherState>();
+
+        log::info!("Executing mobile action: {} on {:?}", payload.action, path);
 
         let result = match payload.action.as_str() {
-            "keep" => file_ops::move_to_keep(db_state, watcher_state, vec![path_str]).map_err(|e| e.to_string()),
-            "trash" => file_ops::delete_to_trash(db_state, watcher_state, vec![path_str]).map_err(|e| e.to_string()),
+            "keep" => file_ops::move_to_keep_impl(db_state.inner(), vec![path_str]),
+            "trash" => file_ops::delete_to_trash_impl(db_state.inner(), vec![path_str]),
             "skip" => Ok(()),
             _ => Err("Invalid action".to_string()),
         };
 
         match result {
             Ok(_) => (StatusCode::OK, "Action processed").into_response(),
-            Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e).into_response(),
+            Err(e) => {
+                log::error!("Action failed: {}", e);
+                (StatusCode::INTERNAL_SERVER_ERROR, e).into_response()
+            }
         }
     } else {
         (StatusCode::INTERNAL_SERVER_ERROR, "App handle not available").into_response()

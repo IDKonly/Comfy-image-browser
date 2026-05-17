@@ -35,14 +35,10 @@ fn validate_paths(paths: &[String], watcher_state: &tauri::State<'_, WatcherStat
     Ok(root_path)
 }
 
-#[tauri::command]
-pub fn delete_to_trash(
-    db_state: tauri::State<'_, DbState>, 
-    watcher_state: tauri::State<'_, WatcherState>,
+pub fn delete_to_trash_impl(
+    db_state: &DbState, 
     paths: Vec<String>
 ) -> Result<(), String> {
-    validate_paths(&paths, &watcher_state)?;
-    
     let state = db_state.0.lock().unwrap();
     let db = state.as_ref().ok_or("Database not initialized")?;
 
@@ -77,13 +73,19 @@ pub fn delete_to_trash(
 }
 
 #[tauri::command]
-pub fn move_to_keep(
+pub fn delete_to_trash(
     db_state: tauri::State<'_, DbState>, 
     watcher_state: tauri::State<'_, WatcherState>,
     paths: Vec<String>
 ) -> Result<(), String> {
     validate_paths(&paths, &watcher_state)?;
-    
+    delete_to_trash_impl(&db_state, paths)
+}
+
+pub fn move_to_keep_impl(
+    db_state: &DbState, 
+    paths: Vec<String>
+) -> Result<(), String> {
     let state = db_state.0.lock().unwrap();
     let db = state.as_ref().ok_or("Database not initialized")?;
 
@@ -104,6 +106,16 @@ pub fn move_to_keep(
         let _ = db.update_image_path(&path, &dest_str);
     }
     Ok(())
+}
+
+#[tauri::command]
+pub fn move_to_keep(
+    db_state: tauri::State<'_, DbState>, 
+    watcher_state: tauri::State<'_, WatcherState>,
+    paths: Vec<String>
+) -> Result<(), String> {
+    validate_paths(&paths, &watcher_state)?;
+    move_to_keep_impl(&db_state, paths)
 }
 
 #[tauri::command]
