@@ -15,7 +15,7 @@ describe('ZoomPanViewer', () => {
     { path: '/img2.png', mtime: 2 },
   ];
 
-  it('renders safely in batchMode when batchRange contains out-of-bounds indices', () => {
+  it('renders safely in batchMode when batchRange contains out-of-bounds indices', async () => {
     // batchRange includes index 2, which does not exist in the images array
     render(
       <ZoomPanViewer
@@ -32,8 +32,8 @@ describe('ZoomPanViewer', () => {
     );
 
     // It should render valid images and gracefully ignore the undefined ones
-    expect(screen.getByText('/img1.png')).toBeInTheDocument();
-    expect(screen.getByText('/img2.png')).toBeInTheDocument();
+    expect(await screen.findByText('/img1.png')).toBeInTheDocument();
+    expect(await screen.findByText('/img2.png')).toBeInTheDocument();
     
     // Exactly 2 thumbnails should be rendered, index 2 is filtered out safely
     expect(screen.getAllByTestId('thumbnail')).toHaveLength(2);

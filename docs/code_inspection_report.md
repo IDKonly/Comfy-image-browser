@@ -17,15 +17,15 @@
 현재 어플리케이션은 데이터를 저장하는 방식이 5가지 이상으로 나뉘어 있어, 데이터 동기화 및 유지보수에 큰 혼선을 초래하고 있습니다.
 
 *   **Zustand (localStorage):** 전역 앱 설정 및 최근 경로 관리.
-*   **Tauri Plugin Store:** `TagClassifier` 및 `WildcardTools`의 도구별 개별 설정 (`.settings.json`, `.tag_classifier.json`).
-*   **LocalStorage (Direct):** `BatchCropModule`의 그리드/비율 기록.
+*   **Tauri Plugin Store:** [TagClassifier.tsx](file:///E:/GEMINI%20workspace/Comfy%20image%20browser/src/components/TagClassifier.tsx) 및 [WildcardTools.tsx](file:///E:/GEMINI%20workspace/Comfy%20image%20browser/src/components/WildcardTools.tsx)의 도구별 개별 설정 (`.settings.json`, `.tag_classifier.json`).
+*   **LocalStorage (Direct):** [BatchCropModule.tsx](file:///E:/GEMINI%20workspace/Comfy%20image%20browser/src/components/BatchCropModule.tsx)의 그리드/비율 기록.
 *   **SQLite (rusqlite):** 이미지 인덱스 및 메타데이터.
-*   **Plain Text Files:** 필터 제외 목록 (`default_exact_exclusion.txt` 등).
+*   **Plain Text Files:** 필터 제외 목록 ([default_exact_exclusion.txt](file:///E:/GEMINI%20workspace/Comfy%20image%20browser/src-tauri/default_exact_exclusion.txt) 등).
 
 > **비판:** 동일한 종류의 설정값들이 서로 다른 레이어에 저장됨에 따라 'Single Source of Truth' 원칙이 위배되고 있습니다.
 
 ### 2.2 아일랜드형 컴포넌트 설계 (Monolithic Island Components)
-`TagClassifier.tsx` (51KB), `WildcardTools.tsx` (40KB), `BatchCropModule.tsx` (20KB)와 같은 대형 컴포넌트들이 독립된 어플리케이션처럼 동작하고 있습니다.
+[TagClassifier.tsx](file:///E:/GEMINI%20workspace/Comfy%20image%20browser/src/components/TagClassifier.tsx) (51KB), [WildcardTools.tsx](file:///E:/GEMINI%20workspace/Comfy%20image%20browser/src/components/WildcardTools.tsx) (40KB), [BatchCropModule.tsx](file:///E:/GEMINI%20workspace/Comfy%20image%20browser/src/components/BatchCropModule.tsx) (20KB)와 같은 대형 컴포넌트들이 독립된 어플리케이션처럼 동작하고 있습니다.
 
 *   **중복 구현:** `TagInput`, `Modal`, `ProgressBar`, `FileListItem`과 같은 기초 UI 요소들이 각 도구 내부에서 매번 새로 구현되었습니다.
 *   **로직 매몰:** 태그 파싱, 정규화, Web Worker 로직이 컴포넌트 내부에 문자열 또는 인라인 함수로 포함되어 있어 단위 테스트가 불가능하고 다른 도구에서 재사용할 수 없습니다.
@@ -49,13 +49,13 @@
 *   **제안:** `tauri-plugin-store` 또는 `SQLite`로 모든 설정을 단일화해야 합니다. 특히 도구별 설정 파일(`json`)을 개별적으로 관리하기보다, 전역 Store의 서브 네임스페이스로 통합하여 관리하는 것이 효율적입니다.
 
 ### 3.2 공통 UI 라이브러리 추출 (Shared UI Kit)
-*   **제안:** `src/components/ui` 폴더를 신설하고 다음 요소들을 추출해야 합니다.
+*   **제안:** [src/components/ui](file:///E:/GEMINI%20workspace/Comfy%20image%20browser/src/components/ui) 폴더를 신설하고 다음 요소들을 추출해야 합니다.
     *   `TagInput`: `TagClassifier`의 로직을 범용적으로 개선.
     *   `ModalLayout`: 헤더/푸터/본문 영역이 정해진 공통 모달 구조.
     *   `CommandButton`: `invoke` 상태(loading, disabled)를 내장한 버튼.
 
 ### 3.3 API 서비스 레이어 도입
-*   **제안:** `src/api/index.ts` 등을 통해 모든 `invoke` 호출을 캡슐화해야 합니다.
+*   **제안:** [src/api](file:///E:/GEMINI%20workspace/Comfy%20image%20browser/src/api) 폴더 내에 `index.ts` 등을 통해 모든 `invoke` 호출을 캡슐화해야 합니다.
     *   이 레이어에서 경로 정규화(`normalizePath`)를 전담 처리합니다.
     *   타입 정의를 중앙화하여 프론트/백엔드 간 인터페이스 불일치를 방지합니다.
 

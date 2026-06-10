@@ -2,7 +2,7 @@ import { useState, useMemo, useEffect, useRef } from 'react';
 import { 
   Plus, Trash2, Play, ChevronRight, ChevronLeft, 
   Database, Search, CheckCircle, XCircle, X, Settings2, 
-  Download, Upload, ArrowUp, ArrowDown, RefreshCw, Save, ExternalLink, Sparkles, MousePointer2,
+  Download, Upload, ArrowUp, ArrowDown, RefreshCw, Save, Sparkles, MousePointer2,
   ListFilter, Terminal, ArrowRight, Box, Filter
 } from 'lucide-react';
 import { invoke } from "@tauri-apps/api/core";
@@ -14,9 +14,167 @@ import {
 } from "@tauri-apps/plugin-fs";
 import { useToast } from "./Toast";
 import { useAppStore } from "../store/useAppStore";
-import { apiClient } from "../api/apiClient";
+import { api } from "../api";
 
-const classifierStore = new LazyStore(".tag_classifier.json");
+// Check if we are running inside the native Tauri container
+const isTauri = typeof window !== 'undefined' && (window as any).__TAURI__ !== undefined;
+
+// Mock Store for standard web browser environment (auditing/testing fallback)
+class BrowserStore {
+  private name: string;
+  constructor(name: string) {
+    this.name = name;
+  }
+  async get(key: string): Promise<any> {
+    try {
+      const data = localStorage.getItem(`${this.name}:${key}`);
+      return data ? JSON.parse(data) : null;
+    } catch {
+      return null;
+    }
+  }
+  async set(key: string, value: any): Promise<void> {
+    try {
+      localStorage.setItem(`${this.name}:${key}`, JSON.stringify(value));
+    } catch (e) {
+      console.error("[BrowserStore] Error setting key:", e);
+    }
+  }
+  async save(): Promise<void> {}
+}
+
+const classifierStore = isTauri 
+  ? new LazyStore(".tag_classifier.json") 
+  : new BrowserStore(".tag_classifier.json") as any;
+
+// Safe wrapper around Tauri dialogs
+const dialogOpen = async (options?: any): Promise<string | string[] | null> => {
+  if (isTauri) return await open(options);
+  
+  // Web fallback: trigger standard file upload
+  return new Promise((resolve) => {
+    const input = document.createElement("input");
+    input.type = "file";
+    input.accept = ".json";
+    input.onchange = (e: any) => {
+      const file = e.target.files?.[0];
+      if (!file) {
+        resolve(null);
+        return;
+      }
+      const reader = new FileReader();
+      reader.onload = (evt) => {
+        const text = evt.target?.result as string;
+        (window as any).__temp_imported_json__ = text;
+        resolve("browser_imported.json");
+      };
+      reader.readAsText(file);
+    };
+    input.click();
+  }) as Promise<string | string[] | null>;
+};
+
+const dialogSave = async (options?: any) => {
+  if (isTauri) return await save(options);
+  // Web fallback: return virtual path
+  return options?.defaultPath || "export.json";
+};
+
+const dialogConfirm = async (message: string) => {
+  if (isTauri) return await confirm(message);
+  return window.confirm(message);
+};
+
+// Safe wrapper around Tauri filesystem operations
+const fsExists = async (path: string, options?: any) => {
+  if (isTauri) return await exists(path, options);
+  return path.includes("classifier_presets");
+};
+
+const fsMkdir = async (path: string, options?: any) => {
+  if (isTauri) return await mkdir(path, options);
+  return;
+};
+
+const fsReadDir = async (path: string, options?: any) => {
+  if (isTauri) return await readDir(path, options);
+  
+  const keys = Object.keys(localStorage);
+  return keys
+    .filter(k => k.startsWith("browser_preset:"))
+    .map(k => ({ name: k.replace("browser_preset:", "") + ".json" }));
+};
+
+const fsReadTextFile = async (path: string, options?: any) => {
+  if (isTauri) return await readTextFile(path, options);
+  
+  if (path === "browser_imported.json") {
+    return (window as any).__temp_imported_json__ || "{}";
+  }
+  if (path.includes("classifier_presets")) {
+    const presetName = path.split("/").pop()?.replace(".json", "");
+    const content = localStorage.getItem(`browser_preset:${presetName}`);
+    if (content) return content;
+  }
+  throw new Error("File not found in browser storage");
+};
+
+const fsWriteTextFile = async (path: string, content: string, options?: any) => {
+  if (isTauri) return await writeTextFile(path, content, options);
+  
+  if (path.includes("classifier_presets")) {
+    const presetName = path.split("/").pop()?.replace(".json", "");
+    localStorage.setItem(`browser_preset:${presetName}`, content);
+    return;
+  }
+  
+  // Standard file download fallback for browser export
+  const blob = new Blob([content], { type: "application/json" });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = path.split("/").pop() || "backup.json";
+  a.click();
+  URL.revokeObjectURL(url);
+};
+
+const fsRemove = async (path: string, options?: any) => {
+  if (isTauri) return await remove(path, options);
+  
+  if (path.includes("classifier_presets")) {
+    const presetName = path.split("/").pop()?.replace(".json", "");
+    localStorage.removeItem(`browser_preset:${presetName}`);
+    return;
+  }
+};
+
+// Safe wrapper around Tauri commands
+const tauriInvokeMock = async (cmd: string, args?: Record<string, any>): Promise<any> => {
+  if (isTauri) {
+    return await invoke(cmd, args);
+  }
+  
+  // Browser fallback mockup data
+  if (cmd === "get_all_prompts") {
+    return [
+      "1girl, masterpiece, cinematic lighting, purple eyes, long hair, beautiful face, standing, outdoors, sunset, glowing light, high detail",
+      "masterpiece, best quality, scenery, mountain, snow, forest, river, morning sun, hyperrealistic, detailed background, 8k resolution",
+      "1boy, solo, short black hair, blue jacket, neon city lights, night scene, rain, puddles, reflection, cinematic shot, hyper detailed",
+      "1girl, solo, holding umbrella, pink dress, cherry blossoms, falling leaves, spring breeze, watercolor style, soft colors, dreamlike",
+      "masterpiece, cosmic nebula, stars, galaxies, floating rocks, astronauts, space station, neon blue light, deep space exploration, cinematic"
+    ] as any;
+  }
+  if (cmd === "generate_wildcards") {
+    return [
+      "1girl, purple eyes, standing, outdoors, sunset, glowing light",
+      "scenery, mountain, snow, forest, river, morning sun",
+      "1boy, short black hair, blue jacket, neon city lights, night scene, rain",
+      "1girl, pink dress, cherry blossoms, falling leaves, spring breeze, watercolor style",
+      "cosmic nebula, stars, galaxies, floating rocks, astronauts"
+    ] as any;
+  }
+  throw new Error(`Command ${cmd} not mocked in browser`);
+};
 
 interface Subset {
   id: number;
@@ -64,24 +222,32 @@ const TagInput = ({ tags, onChange, placeholder, colorClass = "indigo", suggesti
 
     const removeTag = (tag: string) => onChange(tags.filter(t => t !== tag));
 
+    // Custom design tokens matching the Wildcard tools look-and-feel (blue, red, amber)
     const colorMap = {
-        indigo: "bg-indigo-500/10 text-indigo-400 border-indigo-500/20 hover:border-indigo-500/40",
-        red: "bg-red-500/10 text-red-400 border-red-500/20 hover:border-red-500/40",
-        emerald: "bg-emerald-500/10 text-emerald-400 border-emerald-500/20 hover:border-emerald-500/40"
+        indigo: "bg-[#162235] text-blue-400 border-blue-500/20 hover:border-blue-400/50 hover:bg-[#1a2b42] shadow-sm",
+        red: "bg-[#2d1217] text-red-400 border-red-500/20 hover:border-red-400/50 hover:bg-[#3d1820] shadow-sm",
+        emerald: "bg-[#291e13] text-amber-400 border-amber-500/20 hover:border-amber-400/50 hover:bg-[#38281a] shadow-sm"
+    };
+
+    const headerColor = {
+        indigo: "text-blue-400 font-bold",
+        red: "text-red-400 font-bold",
+        emerald: "text-amber-400 font-bold"
     };
 
     return (
         <div className="space-y-2">
             <div className="flex items-center justify-between px-1">
-                <span className={`text-[9px] font-black uppercase tracking-widest ${colorClass === 'red' ? 'text-red-500/60' : 'text-indigo-500/60'}`}>
-                    {colorClass === 'red' ? 'Excludes (-)' : 'Includes (+)'}
+                <span className={`text-[10px] font-extrabold uppercase tracking-wider ${headerColor[colorClass]}`}>
+                    {colorClass === 'red' ? 'Excludes (-)' : colorClass === 'emerald' ? 'Variables ({})' : 'Includes (+)'}
                 </span>
                 {tags.length > 0 && (
                     <button 
                         onClick={() => setIsExpanded(!isExpanded)}
-                        className="text-[9px] font-black text-neutral-600 hover:text-neutral-400 uppercase tracking-tighter transition-colors"
+                        className="text-[9.5px] font-black text-neutral-300 hover:text-white uppercase tracking-wide transition-colors py-2 px-3 min-h-[44px] flex items-center"
+                        aria-label={isExpanded ? "Hide tags" : "Show tags"}
                     >
-                        {isExpanded ? 'Hide Tags' : `Show ${tags.length} Tags`}
+                        {isExpanded ? 'Hide' : `Show (${tags.length})`}
                     </button>
                 )}
             </div>
@@ -89,9 +255,15 @@ const TagInput = ({ tags, onChange, placeholder, colorClass = "indigo", suggesti
             {isExpanded && tags.length > 0 && (
                 <div className="flex flex-wrap gap-1.5 mb-2 animate-in fade-in slide-in-from-top-1 duration-200">
                     {tags.map(tag => (
-                        <span key={tag} className={`flex items-center gap-1.5 px-2.5 py-1 rounded-xl border text-[10px] font-black uppercase transition-all ${colorMap[colorClass]}`}>
+                        <span key={tag} className={`flex items-center gap-1.5 px-3 py-2 rounded-xl border text-[10px] font-semibold transition-all min-h-[36px] ${colorMap[colorClass]}`}>
                             {tag}
-                            <button onClick={() => removeTag(tag)} className="hover:text-white"><X className="w-3 h-3" /></button>
+                            <button 
+                              onClick={() => removeTag(tag)} 
+                              className="hover:text-white transition-colors p-2 -mr-1"
+                              aria-label={`Remove tag ${tag}`}
+                            >
+                              <X className="w-3.5 h-3.5" />
+                            </button>
                         </span>
                     ))}
                 </div>
@@ -99,7 +271,7 @@ const TagInput = ({ tags, onChange, placeholder, colorClass = "indigo", suggesti
             
             <div className="relative">
                 <input 
-                    className="w-full bg-black/40 border border-white/5 rounded-2xl px-4 py-2.5 text-xs font-mono text-neutral-300 focus:outline-none focus:border-white/20 shadow-inner"
+                    className="w-full bg-neutral-955 border border-white/10 focus:border-blue-500/50 focus:ring-1 focus:ring-blue-500/10 rounded-2xl px-4 py-3.5 text-xs font-mono text-neutral-100 placeholder-neutral-600 focus:outline-none shadow-inner min-h-[44px]"
                     value={inputValue}
                     onChange={e => { setInputValue(e.target.value); setShowSuggestions(true); }}
                     onKeyDown={e => {
@@ -118,11 +290,19 @@ const TagInput = ({ tags, onChange, placeholder, colorClass = "indigo", suggesti
                     onFocus={() => setShowSuggestions(true)}
                     onBlur={() => setTimeout(() => setShowSuggestions(false), 200)}
                     placeholder={placeholder}
+                    aria-label={placeholder}
                 />
                 {showSuggestions && filteredSuggestions.length > 0 && (
-                    <div className="absolute z-[110] left-0 right-0 mt-2 bg-[#1a1a1a] border border-white/20 rounded-2xl shadow-[0_20px_50px_rgba(0,0,0,0.5)] overflow-hidden animate-in fade-in zoom-in-95 duration-200">
+                    <div className="absolute z-[110] left-0 right-0 mt-2 bg-neutral-900 border border-white/10 rounded-2xl shadow-[0_15px_35px_rgba(0,0,0,0.8)] overflow-hidden animate-in fade-in zoom-in-95 duration-200 max-h-56 overflow-y-auto scrollbar-thin">
                         {filteredSuggestions.map(s => (
-                            <button key={s} onMouseDown={(e) => { e.preventDefault(); addTags(s); }} className="w-full text-left px-4 py-3 text-[10px] font-black uppercase text-neutral-300 hover:text-white hover:bg-indigo-600/50 transition-all border-b border-white/5 last:border-0">{s}</button>
+                            <button 
+                              key={s} 
+                              onMouseDown={(e) => { e.preventDefault(); addTags(s); }} 
+                              className="w-full text-left px-4 py-3.5 min-h-[44px] text-[10px] font-extrabold uppercase text-neutral-200 hover:text-white hover:bg-neutral-800/40 transition-all border-b border-white/[0.05] last:border-0"
+                              aria-label={`Add suggestion tag ${s}`}
+                            >
+                              {s}
+                            </button>
                         ))}
                     </div>
                 )}
@@ -132,28 +312,29 @@ const TagInput = ({ tags, onChange, placeholder, colorClass = "indigo", suggesti
 };
 
 export const TagClassifier = ({ onClose, initialData = "" }: TagClassifierProps) => {
-  const [lines, setLines] = useState<string[]>(initialData.split('\n').filter(l => l.trim()));
-  const [viewMode, setViewMode] = useState<'single' | 'bulk' | 'library'>('single');
+  const [activeMobileSection, setActiveMobileSection] = useState('editor' as 'rules' | 'editor' | 'output');
+  const [lines, setLines] = useState(initialData.split('\n').filter(l => l.trim()) as string[]);
+  const [viewMode, setViewMode] = useState('single' as 'single' | 'bulk' | 'library');
   const [currentIndex, setCurrentIndex] = useState(0);
-  const [subsets, setSubsets] = useState<Subset[]>([]);
-  const [wordGroups, setWordGroups] = useState<WordGroup[]>([]);
-  const [fullResults, setFullResults] = useState<any[]>([]);
+  const [subsets, setSubsets] = useState([] as Subset[]);
+  const [wordGroups, setWordGroups] = useState([] as WordGroup[]);
+  const [fullResults, setFullResults] = useState([] as any[]);
   const [hasProcessed, setHasProcessed] = useState(false);
-  const [expandedLines, setExpandedLines] = useState<Set<number>>(new Set());
+  const [expandedLines, setExpandedLines] = useState(new Set() as any);
   const [removeDuplicates, setRemoveDuplicates] = useState(false);
-  const [dictActiveSubsetId, setDictActiveSubsetId] = useState<number | null>(null);
-  const [dictActionMode, setDictActionMode] = useState<'include' | 'exclude'>('include');
+  const [dictActiveSubsetId, setDictActiveSubsetId] = useState(null as number | null);
+  const [dictActionMode, setDictActionMode] = useState('include' as 'include' | 'exclude');
   const [tagSearchQuery, setTagSearchQuery] = useState('');
   const [isLoading, setIsLoading] = useState(true);
   const [isRunning, setIsRunning] = useState(false);
-  const [presets, setPresets] = useState<string[]>([]);
-  const [activePreset, setActivePreset] = useState<string>("default");
+  const [presets, setPresets] = useState([] as string[]);
+  const [activePreset, setActivePreset] = useState("default" as string);
   
   // UI States
   const [isRightSidebarOpen, setIsRightSidebarOpen] = useState(true);
-  const [collapsedSubsets, setCollapsedSubsets] = useState<Set<number>>(new Set());
+  const [collapsedSubsets, setCollapsedSubsets] = useState(new Set() as any);
   
-  const workerRef = useRef<Worker | null>(null);
+  const workerRef = useRef(null as Worker | null);
 
   const { showToast } = useToast();
   const folderPath = useAppStore(state => state.folderPath);
@@ -167,15 +348,17 @@ export const TagClassifier = ({ onClose, initialData = "" }: TagClassifierProps)
   const refreshPresets = async () => {
     try {
       const subDir = getPresetSubDir();
-      if (!(await exists(subDir, { baseDir: BaseDirectory.AppData }))) {
-        await mkdir(subDir, { baseDir: BaseDirectory.AppData, recursive: true });
+      if (!(await fsExists(subDir, { baseDir: BaseDirectory.AppData }))) {
+        await fsMkdir(subDir, { baseDir: BaseDirectory.AppData, recursive: true });
       }
-      const entries = await readDir(subDir, { baseDir: BaseDirectory.AppData });
+      const entries = await fsReadDir(subDir, { baseDir: BaseDirectory.AppData });
       const list = entries
         .filter(e => e.name.endsWith(".json"))
         .map(e => e.name.replace(".json", ""));
       setPresets(list);
-    } catch (e: any) { console.error("[PresetList] Error:", e); }
+    } catch (e: any) { 
+      console.error("[PresetList] Error:", e); 
+    }
   };
 
   const savePreset = async (name: string) => {
@@ -183,63 +366,79 @@ export const TagClassifier = ({ onClose, initialData = "" }: TagClassifierProps)
     const fileName = `${getPresetSubDir()}/${name}.json`;
     try {
       const data = { subsets, wordGroups };
-      await writeTextFile(fileName, JSON.stringify(data, null, 2), { baseDir: BaseDirectory.AppData });
+      await fsWriteTextFile(fileName, JSON.stringify(data, null, 2), { baseDir: BaseDirectory.AppData });
       showToast(`Preset '${name}' saved`, "success");
       await refreshPresets();
       setActivePreset(name);
       await classifierStore.set("last_preset", name);
       await classifierStore.save();
-    } catch (e: any) { showToast(`Save failed: ${e.message || e}`, "error"); }
+    } catch (e: any) { 
+      showToast(`Save failed: ${e.message || e}`, "error"); 
+    }
   };
 
   const loadPreset = async (name: string) => {
     const fileName = `${getPresetSubDir()}/${name}.json`;
     try {
-      if (name !== 'default' && !(await exists(fileName, { baseDir: BaseDirectory.AppData }))) return;
+      if (name !== 'default' && !(await fsExists(fileName, { baseDir: BaseDirectory.AppData }))) return;
       if (name !== 'default') {
-        const content = await readTextFile(fileName, { baseDir: BaseDirectory.AppData });
+        const content = await fsReadTextFile(fileName, { baseDir: BaseDirectory.AppData });
         const config = JSON.parse(content);
         if (config.subsets) setSubsets(config.subsets);
         if (config.wordGroups) setWordGroups(config.wordGroups);
+      } else {
+        // Load clean default layout
+        setSubsets([{ id: 1, name: 'Characters', keywords: [], excludeKeywords: [] }]);
+        setWordGroups([]);
       }
       setActivePreset(name);
       await classifierStore.set("last_preset", name);
       await classifierStore.save();
       showToast(`Loaded preset: ${name}`, "info");
-    } catch (e: any) { showToast(`Load failed: ${e.message || e}`, "error"); }
+    } catch (e: any) { 
+      showToast(`Load failed: ${e.message || e}`, "error"); 
+    }
   };
 
   const deletePreset = async (name: string) => {
-    if (name === 'default') return;
-    if (!(await confirm(`Delete preset '${name}'?`))) return;
+    if (!name || name === 'default') return;
+    if (!(await dialogConfirm(`Are you sure you want to delete preset '${name}'?`))) return;
+    const fileName = `${getPresetSubDir()}/${name}.json`;
     try {
-      await remove(`${getPresetSubDir()}/${name}.json`, { baseDir: BaseDirectory.AppData });
-      showToast("Preset deleted", "info");
+      await fsRemove(fileName, { baseDir: BaseDirectory.AppData });
+      showToast(`Preset '${name}' deleted`, "info");
       await refreshPresets();
-      if (activePreset === name) setActivePreset("default");
-    } catch (e: any) { showToast("Delete failed", "error"); }
+      loadPreset("default");
+    } catch (e: any) { 
+      showToast(`Delete failed: ${e.message || e}`, "error"); 
+    }
   };
 
   const handleImportConfig = async () => {
     try {
-      const path = await open({ filters: [{ name: 'JSON', extensions: ['json'] }] });
-      if (path && typeof path === 'string') {
-        const config = JSON.parse(await readTextFile(path));
-        if (config.subsets) setSubsets(config.subsets);
-        if (config.wordGroups) setWordGroups(config.wordGroups);
-        showToast("Config imported", "success");
-      }
-    } catch (e: any) { showToast("Invalid JSON", "error"); }
+      const selected = await dialogOpen({ filters: [{ name: 'JSON', extensions: ['json'] }] });
+      if (!selected) return;
+      const path = Array.isArray(selected) ? selected[0] : selected;
+      const content = await fsReadTextFile(path);
+      const config = JSON.parse(content);
+      if (config.subsets) setSubsets(config.subsets);
+      if (config.wordGroups) setWordGroups(config.wordGroups);
+      showToast("Config imported successfully", "success");
+    } catch (e: any) {
+      showToast(`Import failed: ${e.message || e}`, "error");
+    }
   };
 
   const handleExportConfig = async () => {
     try {
-      const path = await save({ filters: [{ name: 'JSON', extensions: ['json'] }], defaultPath: `${activePreset}_backup.json` });
-      if (path) {
-        await writeTextFile(path, JSON.stringify({ subsets, wordGroups }, null, 2));
-        showToast("Config backed up", "success");
-      }
-    } catch (e: any) { showToast("Export failed", "error"); }
+      const path = await dialogSave({ filters: [{ name: 'JSON', extensions: ['json'] }], defaultPath: "tag_classifier_settings.json" });
+      if (!path) return;
+      const data = { subsets, wordGroups };
+      await fsWriteTextFile(path, JSON.stringify(data, null, 2));
+      showToast("Config exported successfully", "success");
+    } catch (e: any) {
+      showToast(`Export failed: ${e.message || e}`, "error");
+    }
   };
 
   // --- Logic Helpers ---
@@ -281,12 +480,15 @@ export const TagClassifier = ({ onClose, initialData = "" }: TagClassifierProps)
   useEffect(() => {
     const init = async () => {
       await refreshPresets();
-      const lastPreset = await classifierStore.get<string>("last_preset");
-      const s = await classifierStore.get<Subset[]>("subsets");
-      const w = await classifierStore.get<WordGroup[]>("wordGroups");
+      const lastPreset = (await classifierStore.get("last_preset")) as string | null;
+      const s = (await classifierStore.get("subsets")) as Subset[] | null;
+      const w = (await classifierStore.get("wordGroups")) as WordGroup[] | null;
       if (s) setSubsets(s); else setSubsets([{ id: 1, name: 'Characters', keywords: [], excludeKeywords: [] }]);
       if (w) setWordGroups(w); else setWordGroups([]);
-      if (lastPreset && lastPreset !== 'default') { setActivePreset(lastPreset); await loadPreset(lastPreset); }
+      if (lastPreset && lastPreset !== 'default') { 
+        setActivePreset(lastPreset); 
+        await loadPreset(lastPreset); 
+      }
       setIsLoading(false);
     };
     init();
@@ -303,40 +505,49 @@ export const TagClassifier = ({ onClose, initialData = "" }: TagClassifierProps)
   }, [subsets, wordGroups, isLoading]);
 
   const uniqueTags = useMemo(() => {
-    const tags = new Set<string>();
+    const tags = new Set() as any;
     lines.forEach(line => line.split(',').forEach(t => {
       const c = getMergedTag(t.trim().toLowerCase(), wordGroups);
       if (c) tags.add(c);
     }));
-    return Array.from(tags).sort();
+    return Array.from(tags).sort() as string[];
   }, [lines, wordGroups]);
 
-  // 파이프라인 1: 직접 임포트 (폴더 전체)
+  // Import folder prompts
   const importDirect = async () => {
-    if (!folderPath) { showToast("Select a folder first", "error"); return; }
+    if (isTauri && !folderPath) { 
+      showToast("Select a folder in ComfyView first", "error"); 
+      return; 
+    }
     setIsRunning(true);
     try {
-        const results: string[] = await invoke("get_all_prompts", { folder: folderPath, recursive });
-        if (!results || results.length === 0) { showToast("No prompts found in folder", "info"); }
-        else {
-            setLines(results); setCurrentIndex(0);
-            showToast(`Direct Import: ${results.length} prompts`, "success");
+        const results: string[] = await tauriInvokeMock("get_all_prompts", { folder: folderPath, recursive });
+        if (!results || results.length === 0) { 
+          showToast("No prompts found in selected directory", "info"); 
+        } else {
+            setLines(results); 
+            setCurrentIndex(0);
+            showToast(`Direct Import: Loaded ${results.length} prompts`, "success");
         }
     } catch (e: any) { 
         showToast(`Import failed: ${e.message || e}`, "error"); 
-    } finally { setIsRunning(false); }
+    } finally { 
+      setIsRunning(false); 
+    }
   };
 
-  // 파이프라인 2: 필터링 임포트 (와일드카드 워크숍 엔진 활용)
+  // Import filtered prompts (from active images workshop)
   const importFiltered = async () => {
-    if (!rawImages || rawImages.length === 0) { showToast("No images to filter", "error"); return; }
+    if (isTauri && (!rawImages || rawImages.length === 0)) { 
+      showToast("No active images loaded in workshop", "error"); 
+      return; 
+    }
     setIsRunning(true);
     try {
         const targetPaths = rawImages.map(img => img.path);
+        showToast(`Processing images through workshop engine...`, "info");
         
-        showToast(`Processing ${targetPaths.length} images through Workshop engine...`, "info");
-        
-        const results: string[] = await invoke("generate_wildcards", { 
+        const results: string[] = await tauriInvokeMock("generate_wildcards", { 
             paths: targetPaths, 
             prompts: [],
             threshold: 0.95,
@@ -344,7 +555,7 @@ export const TagClassifier = ({ onClose, initialData = "" }: TagClassifierProps)
         });
         
         if (!results || results.length === 0) { 
-            showToast("No prompts passed the current workshop filters", "info"); 
+            showToast("No prompts match current workshop filters", "info"); 
         } else {
             setLines(results); 
             setCurrentIndex(0);
@@ -353,19 +564,30 @@ export const TagClassifier = ({ onClose, initialData = "" }: TagClassifierProps)
     } catch (e: any) { 
         console.error("Filtered Import Error:", e);
         showToast(`Import failed: ${e.message || e}`, "error"); 
-    } finally { setIsRunning(false); }
+    } finally { 
+      setIsRunning(false); 
+    }
   };
 
+  // Compile datasets
   const runAnalysis = async () => {
     if (lines.length === 0) return;
     setIsRunning(true);
     
     try {
-      const results = await apiClient.invoke<any[]>("classify_prompts_command", {
-        lines,
-        subsets,
-        wordGroups
-      });
+      let results: any[];
+      if (isTauri) {
+        results = await api.classifyPromptsCommand(lines, subsets, wordGroups);
+      } else {
+        // Browser mockup local javascript logic
+        results = lines.map((line, idx) => {
+          return {
+            lineIndex: idx + 1,
+            data: parseLine(line)
+          };
+        });
+        await new Promise(r => setTimeout(r, 650));
+      }
       
       setFullResults(results);
       setHasProcessed(true);
@@ -380,395 +602,623 @@ export const TagClassifier = ({ onClose, initialData = "" }: TagClassifierProps)
   if (isLoading) return null;
 
   return (
-    <div className="fixed inset-0 z-[100] bg-[#0a0a0a] flex flex-col animate-in fade-in duration-300 font-sans">
-      <header className="h-20 border-b border-white/5 bg-neutral-900/50 flex items-center justify-between px-8 shrink-0 text-white overflow-hidden">
-        <div className="flex items-center gap-5 shrink-0">
-          <div className="w-12 h-12 bg-indigo-600 rounded-2xl flex items-center justify-center shadow-lg shadow-indigo-600/20">
-            <Database className="w-6 h-6" />
-          </div>
-          <div className="hidden lg:block">
-            <h2 className="text-lg font-black uppercase tracking-widest flex items-center gap-3">
-              Dataset Workstation
-              <span className="px-2 py-0.5 bg-indigo-500/10 text-indigo-400 text-[9px] rounded-full border border-indigo-500/20">PRO</span>
-            </h2>
-            <p className="text-[10px] text-neutral-500 font-bold uppercase tracking-tight">Sequential Waterfall Analysis</p>
-          </div>
-        </div>
-
-        <div className="flex items-center gap-6 overflow-x-auto no-scrollbar py-2">
-          <div className="flex items-center gap-2 bg-black/40 px-4 py-2 rounded-2xl border border-white/5 shadow-inner min-w-max">
-            <Settings2 className="w-4 h-4 text-neutral-500" />
-            <select 
-              className="bg-transparent text-xs font-black uppercase text-neutral-300 outline-none cursor-pointer hover:text-white transition-colors"
-              value={activePreset}
-              onChange={(e) => loadPreset(e.target.value)}
-            >
-              <option value="default" className="bg-neutral-900">Default Config</option>
-              {presets.map(p => <option key={p} value={p} className="bg-neutral-900">{p.toUpperCase()}</option>)}
-            </select>
-            <div className="flex items-center gap-1 ml-2 border-l border-white/10 pl-2">
-                <button onClick={() => { const name = prompt("Enter preset name:"); if (name) savePreset(name); }} title="Save current as preset" className="p-1.5 hover:bg-indigo-500/20 rounded-lg text-indigo-400"><Save className="w-4 h-4" /></button>
-                {activePreset !== 'default' && (
-                    <button onClick={() => deletePreset(activePreset)} title="Delete preset" className="p-1.5 hover:bg-red-500/20 rounded-lg text-red-500"><Trash2 className="w-4 h-4" /></button>
-                )}
+    <div className="fixed inset-0 z-50 bg-black/60 backdrop-blur-md flex items-center justify-center p-4 animate-in fade-in duration-200 font-sans text-neutral-100 select-none overflow-hidden">
+      <div className="bg-neutral-900 border border-white/10 rounded-3xl w-full max-w-6xl h-[90vh] shadow-2xl overflow-hidden flex flex-col">
+        {/* Header */}
+        <div className="p-6 border-b border-white/5 flex items-center justify-between shrink-0 bg-solid-panel">
+          <div className="flex items-center gap-3">
+            <div className="w-10 h-10 bg-blue-600/20 rounded-xl flex items-center justify-center">
+              <Database className="w-5 h-5 text-blue-500" />
+            </div>
+            <div className="min-w-0">
+              <h2 className="text-sm font-black uppercase tracking-widest truncate">Tag Classifier</h2>
+              <p className="text-[10px] text-neutral-350 font-bold uppercase truncate">Sequential Waterfall Analysis</p>
             </div>
           </div>
-
-          <div className="flex bg-black/40 p-1.5 rounded-2xl border border-white/5 shrink-0">
-            <button onClick={() => setViewMode('single')} className={`px-6 py-2 rounded-xl text-xs font-black uppercase transition-all ${viewMode === 'single' ? 'bg-white/10 text-white shadow-xl' : 'text-neutral-500 hover:text-neutral-300'}`}>Editor</button>
-            <button onClick={() => setViewMode('bulk')} className={`px-4 py-2 rounded-xl text-xs font-black uppercase transition-all ${viewMode === 'bulk' ? 'bg-white/10 text-white shadow-xl' : 'text-neutral-500 hover:text-neutral-300'}`}>Source</button>
-            <button onClick={() => setViewMode('library')} className={`px-4 py-2 rounded-xl text-xs font-black uppercase transition-all ${viewMode === 'library' ? 'bg-white/10 text-white shadow-xl' : 'text-neutral-500 hover:text-neutral-300'}`}>Library</button>
-          </div>
-
-          <div className="flex gap-2 shrink-0">
-            <button onClick={importDirect} disabled={isRunning} title="Direct Import (Full Folder)" className="p-2.5 bg-emerald-600/20 hover:bg-emerald-600/30 text-emerald-400 rounded-2xl border border-emerald-500/20 transition-all shadow-lg shadow-emerald-600/10 disabled:opacity-50"><Sparkles className="w-5 h-5" /></button>
-            <button onClick={importFiltered} disabled={isRunning} title="Filtered Import (Current Workshop)" className="p-2.5 bg-blue-600/20 hover:bg-blue-600/30 text-blue-400 rounded-2xl border border-blue-500/20 transition-all shadow-lg shadow-blue-600/10 disabled:opacity-50"><ListFilter className="w-5 h-5" /></button>
-            
-            <button onClick={handleImportConfig} title="Import JSON" className="p-2.5 bg-neutral-800 hover:bg-neutral-700 rounded-2xl text-neutral-400 hover:text-white transition-all border border-white/5"><Upload className="w-5 h-5" /></button>
-            <button onClick={runAnalysis} disabled={isRunning} className="flex items-center gap-3 bg-indigo-600 hover:bg-indigo-500 disabled:opacity-50 text-white px-8 py-2.5 rounded-2xl text-xs font-black uppercase tracking-widest transition-all shadow-xl active:scale-95">
-              {isRunning ? <RefreshCw className="w-4 h-4 animate-spin" /> : <Play className="w-4 h-4" />}
-              Compile
-            </button>
-          </div>
-          
-          <div className="w-px h-10 bg-white/10 mx-2 shrink-0" />
-          <button onClick={onClose} className="p-2.5 hover:bg-white/5 rounded-full transition-all group shrink-0"><X className="w-8 h-8 text-neutral-500 group-hover:text-white" /></button>
-        </div>
-      </header>
-
-      <main className="flex-1 flex overflow-hidden flex-col md:flex-row">
-        <aside className="w-full md:w-[22rem] lg:w-[28rem] border-r border-white/5 flex flex-col bg-neutral-900/20 shrink-0 min-h-0">
-          <div className="p-6 border-b border-white/5 bg-black/20 flex items-center justify-between shrink-0">
-            <span className="text-xs font-black uppercase text-neutral-500 tracking-widest flex items-center gap-3"><Filter className="w-4 h-4" /> Pipeline Rules</span>
-            <button onClick={() => setSubsets([...subsets, { id: Date.now(), name: 'New Group', keywords: [], excludeKeywords: [] }])} className="p-2 hover:bg-white/5 rounded-xl text-indigo-400"><Plus className="w-5 h-5" /></button>
-          </div>
-          
-          <div className="flex-1 overflow-y-auto p-6 space-y-6 scrollbar-thin">
-            {subsets.map((sub, idx) => {
-              const isCollapsed = collapsedSubsets.has(sub.id);
-              return (
-                <div key={sub.id} className="relative group animate-in slide-in-from-left-2 duration-300">
-                  {idx < subsets.length && <div className="absolute left-5 -bottom-6 w-0.5 h-6 bg-indigo-500/20 z-0 hidden md:block" />}
-                  <div className={`bg-neutral-800/40 border rounded-3xl p-5 relative z-10 transition-all shadow-xl ${dictActiveSubsetId === sub.id && viewMode === 'library' ? 'border-indigo-500 bg-indigo-500/5 ring-1 ring-indigo-500/20' : 'border-white/5 hover:border-indigo-500/30'}`}>
-                    <div className="flex items-center justify-between mb-4">
-                      <div className="flex items-center gap-3 flex-1">
-                        <button 
-                          onClick={() => {
-                            const next = new Set(collapsedSubsets);
-                            if (next.has(sub.id)) next.delete(sub.id);
-                            else next.add(sub.id);
-                            setCollapsedSubsets(next);
-                          }}
-                          className="p-1 hover:bg-white/5 rounded-lg text-neutral-500 transition-transform"
-                        >
-                          <ChevronRight className={`w-4 h-4 transition-transform ${!isCollapsed ? 'rotate-90' : ''}`} />
-                        </button>
-                        <button onClick={() => setDictActiveSubsetId(sub.id)} className="flex items-center gap-3 flex-1 text-left group/name">
-                          <div className={`w-6 h-6 rounded-lg flex items-center justify-center text-[10px] font-black transition-all ${dictActiveSubsetId === sub.id ? 'bg-indigo-600 text-white' : 'bg-indigo-600/20 text-indigo-400'}`}>{idx + 1}</div>
-                          <input className={`bg-transparent text-xs font-black uppercase focus:outline-none w-32 transition-all ${dictActiveSubsetId === sub.id ? 'text-indigo-400' : 'text-neutral-300 focus:text-white'}`} value={sub.name} onChange={e => setSubsets(subsets.map(s => s.id === sub.id ? {...s, name: e.target.value} : s))} />
-                          {viewMode === 'library' && dictActiveSubsetId === sub.id && <MousePointer2 className="w-3 h-3 text-indigo-500 animate-pulse" />}
-                        </button>
-                      </div>
-                      <div className="flex gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
-                        <button onClick={() => { const ns = [...subsets]; if (idx > 0) [ns[idx], ns[idx-1]] = [ns[idx-1], ns[idx]]; setSubsets(ns); }} className="p-1 text-neutral-500 hover:text-white"><ArrowUp className="w-4 h-4" /></button>
-                        <button onClick={() => { const ns = [...subsets]; if (idx < subsets.length - 1) [ns[idx], ns[idx+1]] = [ns[idx+1], ns[idx]]; setSubsets(ns); }} className="p-1 text-neutral-500 hover:text-white"><ArrowDown className="w-4 h-4" /></button>
-                        <button onClick={() => setSubsets(subsets.filter(s => s.id !== sub.id))} className="p-1 text-neutral-500 hover:text-red-500"><Trash2 className="w-4 h-4" /></button>
-                      </div>
-                    </div>
-                    
-                    {!isCollapsed && (
-                      <div className="space-y-4 animate-in fade-in slide-in-from-top-2 duration-200">
-                        <div className="space-y-1.5">
-                          <span className="text-[9px] font-black text-indigo-500/60 uppercase tracking-widest px-1">Includes (+)</span>
-                          <TagInput tags={sub.keywords} onChange={tags => setSubsets(subsets.map(s => s.id === sub.id ? {...s, keywords: tags} : s))} placeholder="Add include tag..." colorClass="indigo" suggestions={uniqueTags} />
-                        </div>
-                        <div className="space-y-1.5">
-                          <span className="text-[9px] font-black text-red-500/60 uppercase tracking-widest px-1">Excludes (-)</span>
-                          <TagInput tags={sub.excludeKeywords} onChange={tags => setSubsets(subsets.map(s => s.id === sub.id ? {...s, excludeKeywords: tags} : s))} placeholder="Add exclude tag..." colorClass="red" suggestions={uniqueTags} />
-                        </div>
-                      </div>
-                    )}
-                  </div>
-                </div>
-              );
-            })}
-            <div className="bg-neutral-900/40 border border-dashed border-white/10 rounded-3xl p-6 text-center shrink-0"><span className="text-xs font-black text-neutral-600 uppercase tracking-widest opacity-50">Waterfall End</span></div>
-          </div>
-
-          <div className="p-6 border-t border-white/5 bg-black/20 shrink-0">
-            <div className="flex items-center justify-between mb-4">
-              <span className="text-xs font-black uppercase text-emerald-500/70 tracking-widest flex items-center gap-3"><Box className="w-4 h-4" /> Tag Variables</span>
-              <button onClick={() => setWordGroups([...wordGroups, { id: Date.now(), name: 'var', words: [] }])} className="p-1 hover:bg-emerald-500/10 rounded-lg text-emerald-500"><Plus className="w-4 h-4" /></button>
-            </div>
-            <div className="space-y-3 max-h-56 overflow-y-auto scrollbar-thin pr-2">
-              {wordGroups.map(wg => (
-                <div key={wg.id} className="p-4 bg-emerald-500/5 border border-emerald-500/10 rounded-3xl group">
-                  <div className="flex items-center gap-2 mb-3">
-                    <span className="text-emerald-500/50 text-xs font-bold">{"{"}</span>
-                    <input className="bg-transparent text-xs font-black text-emerald-400 focus:outline-none w-full uppercase" value={wg.name} onChange={e => setWordGroups(wordGroups.map(w => w.id === wg.id ? {...w, name: e.target.value.toLowerCase()} : w))} />
-                    <span className="text-emerald-500/50 text-xs font-bold">{"}"}</span>
-                    <button onClick={() => setWordGroups(wordGroups.filter(w => w.id !== wg.id))} className="opacity-0 group-hover:opacity-100 transition-opacity text-neutral-600 hover:text-red-500"><X className="w-4 h-4" /></button>
-                  </div>
-                  <TagInput tags={wg.words} onChange={tags => setWordGroups(wordGroups.map(w => w.id === wg.id ? {...w, words: tags} : w))} placeholder="Add word..." colorClass="emerald" suggestions={uniqueTags} />
-                </div>
-              ))}
-            </div>
-          </div>
-        </aside>
-
-        <section className="flex-1 flex flex-col bg-black/40 relative overflow-hidden min-w-0 transition-all duration-300">
           <button 
-            onClick={() => setIsRightSidebarOpen(!isRightSidebarOpen)}
-            className="absolute right-0 top-1/2 -translate-y-1/2 z-50 p-1.5 bg-neutral-800 border-l border-y border-white/10 rounded-l-xl text-neutral-500 hover:text-white transition-all shadow-2xl"
+            onClick={onClose} 
+            className="w-11 h-11 flex items-center justify-center hover:bg-white/5 rounded-full transition-colors shrink-0"
+            aria-label="Close Workstation"
           >
-            {isRightSidebarOpen ? <ChevronRight className="w-5 h-5" /> : <ChevronLeft className="w-5 h-5" />}
+            <X className="w-5 h-5" />
           </button>
+        </div>
 
-          <div className="flex-1 p-6 lg:p-10 flex flex-col gap-8 overflow-hidden">
-            {viewMode === 'single' && (
-              <div className="flex-1 flex flex-col gap-8 overflow-hidden animate-in slide-in-from-bottom-2 duration-500">
-                <div className="flex items-center justify-between bg-neutral-900 border border-white/10 p-4 sm:p-5 rounded-[2.5rem] shadow-2xl shrink-0 overflow-x-auto no-scrollbar">
-                  <div className="flex items-center gap-6 min-w-max">
-                    <div className="flex gap-2">
-                      <button onClick={() => setCurrentIndex(p => Math.max(0, p - 1))} className="p-3 bg-black/40 hover:bg-white/5 border border-white/5 rounded-2xl transition-all shadow-inner"><ChevronLeft className="w-6 h-6 text-neutral-400" /></button>
-                      <button onClick={() => setCurrentIndex(p => Math.min(lines.length - 1, p + 1))} className="p-3 bg-black/40 hover:bg-white/5 border border-white/5 rounded-2xl transition-all shadow-inner"><ChevronRight className="w-6 h-6 text-neutral-400" /></button>
-                    </div>
-                    <div>
-                      <span className="text-[10px] font-black text-neutral-500 uppercase tracking-widest block mb-1">Focus Mode</span>
-                      <span className="text-base font-mono font-black text-blue-400">#L-{String(currentIndex + 1).padStart(4, '0')} <span className="text-neutral-600 font-normal ml-2">/ {lines.length}</span></span>
-                    </div>
-                  </div>
-                  <div className="flex gap-2 ml-4 shrink-0">
-                    <button onClick={() => { const nl = [...lines]; nl.splice(currentIndex+1, 0, ""); setLines(nl); setCurrentIndex(currentIndex+1); }} className="px-5 py-2 bg-neutral-800 hover:bg-neutral-700 text-xs font-black uppercase rounded-xl border border-white/5 transition-all">Insert</button>
-                    <button onClick={() => { if (lines.length <= 1) return; setLines(lines.filter((_, i) => i !== currentIndex)); setCurrentIndex(Math.max(0, currentIndex-1)); }} className="px-5 py-2 bg-red-900/20 hover:bg-red-900/40 text-red-500 text-xs font-black uppercase rounded-xl border border-red-500/20 transition-all">Delete</button>
-                  </div>
-                </div>
+        {/* Main Column Containers */}
+        <div className="flex flex-col lg:flex-row flex-1 overflow-y-auto lg:overflow-hidden scrollbar-thin">
+          
+          {/* Left Sidebar: Pipeline Rules */}
+          <aside className={`w-full lg:w-80 border-b lg:border-b-0 lg:border-r border-white/5 flex flex-col bg-solid-nested shrink-0 min-h-0 ${activeMobileSection === 'rules' ? 'flex' : 'hidden lg:flex'}`}>
+            <div className="p-4 border-b border-white/5 bg-solid-panel flex items-center justify-between shrink-0">
+              <span className="text-[10px] font-black uppercase text-neutral-300 tracking-widest flex items-center gap-2"><Filter className="w-3.5 h-3.5 text-blue-400" /> Pipeline Rules</span>
+              <button 
+                onClick={() => setSubsets([...subsets, { id: Date.now(), name: 'New Group', keywords: [], excludeKeywords: [] }])} 
+                className="w-11 h-11 flex items-center justify-center text-neutral-400 hover:text-white hover:bg-white/5 rounded-xl transition-all"
+                aria-label="Add new subset group"
+              >
+                <Plus className="w-5 h-5" />
+              </button>
+            </div>
 
-                <div className="flex-[3] flex flex-col gap-4 min-h-0">
-                  <label className="text-xs font-black uppercase text-neutral-600 tracking-widest px-3">Active Data Stream</label>
-                  <div className="flex-1 relative group min-h-0">
-                    <textarea 
-                      className="w-full h-full bg-neutral-900/80 border border-white/10 rounded-[3rem] p-10 text-xl font-mono text-neutral-200 focus:outline-none focus:border-indigo-500/50 resize-none shadow-[inner_0_4px_32px_rgba(0,0,0,0.6)] leading-relaxed scrollbar-thin transition-all"
-                      value={lines[currentIndex] || ""}
-                      onChange={e => { const nl = [...lines]; nl[currentIndex] = e.target.value; setLines(nl); }}
-                      placeholder="Input tags..."
-                    />
-                    <div className="absolute right-8 bottom-8 opacity-0 group-hover:opacity-100 transition-opacity"><Terminal className="w-8 h-8 text-neutral-700" /></div>
-                  </div>
-                </div>
-
-                <div className="flex-[2] min-h-[180px] bg-indigo-600/5 border border-indigo-500/20 rounded-[2.5rem] p-8 flex flex-col gap-6 shadow-2xl shrink-0 overflow-hidden">
-                  <div className="flex items-center justify-between shrink-0">
-                    <div className="flex items-center gap-4 text-indigo-400">
-                      <RefreshCw className="w-5 h-5" />
-                      <span className="text-xs font-black uppercase tracking-widest">Flow Result</span>
-                    </div>
-                    <div className="flex items-center gap-2">
-                      <span className="w-2.5 h-2.5 rounded-full bg-emerald-500 animate-pulse shadow-[0_0_10px_rgba(16,185,129,0.5)]" />
-                      <span className="text-[10px] font-black text-neutral-500 uppercase">Live Engine</span>
-                    </div>
-                  </div>
-                  <div className="flex-1 overflow-y-auto space-y-4 pr-4 scrollbar-thin text-white">
-                    {parseLine(lines[currentIndex] || "").map((sub: any) => (
-                      <div key={sub.id} className="flex items-start gap-6 group">
-                        <div className="w-32 shrink-0 flex items-center gap-3">
-                          <span className={`text-[10px] font-black uppercase px-3 py-1.5 rounded-xl w-full text-center border transition-all ${sub.id === 0 ? 'text-neutral-500 border-white/5 bg-black/40' : 'text-indigo-400 border-indigo-500/20 bg-indigo-500/10'}`}>{sub.name}</span>
-                          <ArrowRight className="w-4 h-4 text-neutral-700" />
+            {/* Presets Control Sub-bar */}
+            <div className="p-3 border-b border-white/5 bg-solid-base flex items-center justify-between shrink-0">
+              <div className="flex items-center gap-2 flex-1 min-w-0 bg-neutral-950 px-2 py-1 rounded-xl border border-white/5 focus-within:border-blue-500/50 transition-all h-11">
+                <Settings2 className="w-3.5 h-3.5 text-blue-400 shrink-0" />
+                <select 
+                  className="bg-transparent text-[10px] font-black uppercase text-neutral-250 outline-none cursor-pointer hover:text-white transition-colors w-full"
+                  value={activePreset}
+                  onChange={(e) => loadPreset(e.target.value)}
+                  aria-label="Preset Configuration Selection"
+                >
+                  <option value="default" className="bg-[#0c0b17] text-neutral-200">Default Config</option>
+                  {presets.map(p => <option key={p} value={p} className="bg-[#0c0b17] text-neutral-200">{p.toUpperCase()}</option>)}
+                </select>
+              </div>
+              <div className="flex items-center gap-0.5 ml-2 shrink-0">
+                <button 
+                  onClick={() => { const name = prompt("Enter preset name:"); if (name) savePreset(name); }} 
+                  title="Save Preset" 
+                  className="w-11 h-11 flex items-center justify-center hover:bg-blue-500/20 rounded-xl text-blue-400 transition-all"
+                  aria-label="Save preset"
+                >
+                  <Save className="w-4 h-4" />
+                </button>
+                {activePreset !== 'default' && (
+                  <button 
+                    onClick={() => deletePreset(activePreset)} 
+                    title="Delete Preset" 
+                    className="w-11 h-11 flex items-center justify-center hover:bg-red-500/20 rounded-xl text-red-400 transition-all"
+                    aria-label="Delete preset"
+                  >
+                    <Trash2 className="w-4 h-4" />
+                  </button>
+                )}
+              </div>
+            </div>
+            
+            <div className="flex-1 overflow-y-auto p-4 space-y-4 scrollbar-thin">
+              {subsets.map((sub, idx) => {
+                const isCollapsed = collapsedSubsets.has(sub.id);
+                const isActiveInLibrary = dictActiveSubsetId === sub.id && viewMode === 'library';
+                return (
+                  <div key={sub.id} className="relative group animate-in slide-in-from-left-2 duration-300">
+                    <div className={`border rounded-3xl p-4 relative z-10 transition-all shadow-md ${isActiveInLibrary ? 'border-blue-500/40 bg-solid-element ring-1 ring-blue-500/25' : 'border-white/5 bg-solid-card hover:border-white/10 hover:bg-solid-active'}`}>
+                      <div className="flex items-center justify-between mb-4 relative">
+                        <div 
+                          onClick={() => setDictActiveSubsetId(sub.id)}
+                          className="flex items-center gap-3 flex-1 cursor-pointer py-1 min-h-[44px] pr-20"
+                          title="Click to activate group"
+                        >
+                          <button 
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              const next = new Set(collapsedSubsets);
+                              if (next.has(sub.id)) next.delete(sub.id);
+                              else next.add(sub.id);
+                              setCollapsedSubsets(next);
+                            }}
+                            className="w-11 h-11 flex items-center justify-center hover:bg-white/5 rounded-xl text-neutral-400 transition-transform"
+                            aria-label={isCollapsed ? `Collapse group ${sub.name}` : `Expand group ${sub.name}`}
+                          >
+                            <ChevronRight className={`w-4 h-4 transition-transform ${!isCollapsed ? 'rotate-90' : ''}`} />
+                          </button>
+                          <div className="flex items-center gap-3 flex-1">
+                            <div 
+                              className={`w-6 h-6 rounded-lg flex items-center justify-center text-[10px] font-black transition-all ${dictActiveSubsetId === sub.id ? 'bg-blue-600 text-white shadow-md' : 'bg-neutral-850 text-neutral-350'}`}
+                            >
+                              {idx + 1}
+                            </div>
+                            <input 
+                              className={`bg-transparent text-xs font-black uppercase focus:outline-none w-full transition-all border-b border-transparent focus:border-blue-500/40 ${dictActiveSubsetId === sub.id ? 'text-blue-400' : 'text-neutral-350 focus:text-white'}`} 
+                              value={sub.name} 
+                              onChange={e => setSubsets(subsets.map(s => s.id === sub.id ? {...s, name: e.target.value} : s))} 
+                              onClick={(e) => e.stopPropagation()}
+                              aria-label={`Group ${idx + 1} Name`} 
+                            />
+                            {viewMode === 'library' && dictActiveSubsetId === sub.id && <MousePointer2 className="w-3.5 h-3.5 text-blue-400 animate-pulse" />}
+                          </div>
                         </div>
-                        <div className="flex-1 flex flex-wrap gap-2 pt-1.5">
-                          {sub.matches.length > 0 ? sub.matches.map((m: string, i: number) => <span key={i} className="px-2.5 py-0.5 bg-neutral-800 border border-white/5 rounded-lg text-xs font-mono text-neutral-300 shadow-inner">{m}</span>) : <span className="text-[10px] text-neutral-700 italic pt-1 uppercase font-bold tracking-widest opacity-50">Empty</span>}
+                        <div className="absolute right-0 top-1/2 -translate-y-1/2 flex gap-1 opacity-0 group-hover:opacity-100 transition-opacity bg-neutral-900/90 backdrop-blur-sm p-1 rounded-xl border border-white/5 z-20">
+                          <span role="button" onClick={() => { const ns = [...subsets]; if (idx > 0) [ns[idx], ns[idx-1]] = [ns[idx-1], ns[idx]]; setSubsets(ns); }} className="w-8 h-8 flex items-center justify-center text-neutral-400 hover:text-white hover:bg-white/5 rounded-lg cursor-pointer" title="Move Up"><ArrowUp className="w-3.5 h-3.5" /></span>
+                          <span role="button" onClick={() => { const ns = [...subsets]; if (idx < subsets.length - 1) [ns[idx], ns[idx+1]] = [ns[idx+1], ns[idx]]; setSubsets(ns); }} className="w-8 h-8 flex items-center justify-center text-neutral-400 hover:text-white hover:bg-white/5 rounded-lg cursor-pointer" title="Move Down"><ArrowDown className="w-3.5 h-3.5" /></span>
+                          <span role="button" onClick={() => setSubsets(subsets.filter(s => s.id !== sub.id))} className="w-8 h-8 flex items-center justify-center text-neutral-400 hover:text-red-400 hover:bg-red-500/10 rounded-lg cursor-pointer" title="Delete"><Trash2 className="w-3.5 h-3.5" /></span>
                         </div>
                       </div>
-                    ))}
-                  </div>
-                </div>
-              </div>
-            )}
-
-            {viewMode === 'bulk' && (
-              <textarea className="flex-1 w-full bg-neutral-900 border border-white/10 rounded-[3rem] p-12 text-sm sm:text-base font-mono text-neutral-400 focus:outline-none focus:border-indigo-500/50 resize-none shadow-inner leading-relaxed scrollbar-thin animate-in zoom-in-95 duration-500" value={lines.join('\n')} onChange={e => setLines(e.target.value.split('\n'))} placeholder="Paste thousands of lines here..." />
-            )}
-
-            {viewMode === 'library' && (
-              <div className="flex-1 flex flex-col gap-8 overflow-hidden animate-in slide-in-from-right-4 duration-500">
-                <div className="grid grid-cols-1 lg:grid-cols-3 gap-6 bg-neutral-900/80 p-8 rounded-[3rem] border border-white/10 shadow-2xl">
-                  <div className="space-y-3">
-                    <label className="text-[10px] font-black uppercase text-neutral-500 tracking-widest block ml-2">Active Pipeline Layer</label>
-                    <div className="flex flex-wrap gap-2">
-                        {subsets.map(s => (
-                            <button 
-                                key={s.id} 
-                                onClick={() => setDictActiveSubsetId(s.id)}
-                                className={`px-4 py-2 rounded-2xl text-[10px] font-black uppercase transition-all border ${dictActiveSubsetId === s.id ? 'bg-indigo-600 border-indigo-400 text-white shadow-lg' : 'bg-black/40 border-white/5 text-neutral-500 hover:text-neutral-300'}`}
-                            >
-                                {s.name}
-                            </button>
-                        ))}
-                    </div>
-                  </div>
-                  <div className="space-y-3">
-                    <label className="text-[10px] font-black uppercase text-neutral-500 tracking-widest block ml-2">Action Mode</label>
-                    <div className="flex bg-black/40 rounded-2xl border border-white/10 p-1.5 shadow-inner">
-                        <button onClick={() => setDictActionMode('include')} className={`flex-1 py-3 rounded-xl text-[10px] font-black uppercase transition-all ${dictActionMode === 'include' ? 'bg-indigo-600 text-white shadow-xl' : 'text-neutral-500'}`}>Include (+)</button>
-                        <button onClick={() => setDictActionMode('exclude')} className={`flex-1 py-3 rounded-xl text-[10px] font-black uppercase transition-all ${dictActionMode === 'exclude' ? 'bg-red-600 text-white shadow-xl' : 'text-neutral-500'}`}>Exclude (-)</button>
-                    </div>
-                  </div>
-                  <div className="space-y-3 relative">
-                    <label className="text-[10px] font-black uppercase text-neutral-500 tracking-widest block ml-2">Search Global Dataset</label>
-                    <div className="relative">
-                        <Search className="absolute left-5 top-1/2 -translate-y-1/2 w-5 h-5 text-neutral-600" />
-                        <input className="w-full bg-black/40 border border-white/10 rounded-2xl pl-14 p-4 text-sm font-bold text-white outline-none focus:border-indigo-500 placeholder-neutral-700 shadow-inner" value={tagSearchQuery} onChange={e => setTagSearchQuery(e.target.value)} placeholder="Filter tags..." />
-                    </div>
-                  </div>
-                </div>
-
-                <div className="flex-1 overflow-y-auto bg-neutral-900/40 rounded-[3rem] border border-white/5 p-12 shadow-inner scrollbar-thin">
-                    <div className="flex flex-wrap gap-3 content-start">
-                    {uniqueTags.filter(t => t.toLowerCase().includes(tagSearchQuery.toLowerCase())).map(tag => {
-                        const activeSub = subsets.find(s => s.id === dictActiveSubsetId);
-                        const isInc = activeSub?.keywords.includes(tag); 
-                        const isExc = activeSub?.excludeKeywords.includes(tag);
-                        const isIncVar = !isInc && activeSub?.keywords.some(k => tag.includes(k.replace(/\{.*?\}/, ''))); 
-                        const isExcVar = !isExc && activeSub?.excludeKeywords.some(k => tag.includes(k.replace(/\{.*?\}/, '')));
-                        
-                        let style = "bg-neutral-800 text-neutral-500 border-white/5 hover:bg-neutral-700 hover:text-neutral-300";
-                        let tooltip = "Click to toggle";
-                        let indicator = null;
-
-                        if (isIncVar) { style = "bg-indigo-600/10 text-indigo-400 border-indigo-500/30 border-dashed hover:bg-indigo-600/20"; indicator = <div className="w-1.5 h-1.5 rounded-full bg-indigo-500/50" />; }
-                        if (!isInc && isExcVar) { style = "bg-red-600/10 text-red-400 border-red-500/30 border-dashed hover:bg-red-600/20"; indicator = <div className="w-1.5 h-1.5 rounded-full bg-red-500/50" />; }
-                        if (isExc) { style = "bg-red-600 text-white border-red-400 shadow-xl shadow-red-600/40 font-black"; tooltip = "Explicitly excluded"; indicator = <XCircle className="w-3 h-3" />; }
-                        if (isInc) { style = "bg-indigo-600 text-white border-indigo-400 shadow-xl shadow-indigo-600/40 font-black"; tooltip = "Explicitly included"; indicator = <CheckCircle className="w-3 h-3" />; }
-                        
-                        const hasVar = /\{.*?\}/.test(tag);
-
-                        return (
-                          <button 
-                            key={tag} 
-                            title={hasVar ? "Click 1: Base | Click 2: Full | Click 3: Clear" : tooltip}
-                            onClick={() => { 
-                              if (!dictActiveSubsetId) return; 
-                              const sub = subsets.find(s => s.id === dictActiveSubsetId)!; 
-                              const field = dictActionMode === 'include' ? 'keywords' : 'excludeKeywords'; 
-                              let current = [...sub[field]];
-                              if (hasVar) {
-                                const baseTag = tag.replace(/\{.*?\}/g, '').replace(/\s+/g, ' ').trim();
-                                if (current.includes(tag)) current = current.filter(t => t !== tag);
-                                else if (current.includes(baseTag)) { current = current.filter(t => t !== baseTag); current.push(tag); }
-                                else current.push(baseTag);
-                              } else {
-                                if (current.includes(tag)) current = current.filter(t => t !== tag);
-                                else current.push(tag);
-                              }
-                              setSubsets(subsets.map(s => s.id === sub.id ? {...s, [field]: current} : s));
-                            }} 
-                            className={`px-5 py-2.5 rounded-2xl text-[11px] font-mono border transition-all active:scale-95 flex items-center gap-2 ${style}`}
-                          >
-                            {indicator}
-                            {tag}
-                          </button>
-                        );
-                    })}
-                </div></div>
-              </div>
-            )}
-          </div>
-        </section>
-
-        <aside className={`border-l border-white/5 flex flex-col bg-neutral-900/40 shrink-0 min-h-0 transition-all duration-300 overflow-hidden ${isRightSidebarOpen ? 'w-full md:w-[24rem] lg:w-[32rem]' : 'w-0 border-none'}`}>
-          {!hasProcessed ? (
-            <div className="flex-1 flex flex-col items-center justify-center p-12 text-center opacity-20"><Terminal className="w-16 h-16 mb-6" /><h3 className="text-sm font-black uppercase tracking-[0.3em] mb-3">System Idle</h3><p className="text-xs font-bold text-neutral-500 uppercase leading-relaxed">Compile dataset to<br/>stream results</p></div>
-          ) : (
-            <>
-              <div className="p-8 border-b border-white/5 bg-black/20 flex flex-col gap-4 shrink-0">
-                <div className="flex items-center justify-between">
-                  <div>
-                    <span className="text-xs font-black uppercase text-indigo-400 tracking-widest flex items-center gap-3"><CheckCircle className="w-5 h-5" /> Output Stream</span>
-                    <p className="text-[10px] text-neutral-600 font-bold uppercase mt-2">{fullResults.length} Records Compiled</p>
-                  </div>
-                  <div className="flex gap-2">
-                      <button onClick={async () => {
-                          let linesToExport: string[] = [];
-                          fullResults.forEach(res => {
-                              const allTags = res.data.flatMap((s: any) => s.matches);
-                              linesToExport.push(allTags.join(', '));
-                          });
-                          if (removeDuplicates) linesToExport = Array.from(new Set(linesToExport.filter(l => l.trim())));
-                          const path = await save({ filters: [{ name: 'Text', extensions: ['txt'] }], defaultPath: `tags_all_merged.txt` });
-                          if (path) { await writeTextFile(path, linesToExport.join('\n')); showToast(`Saved All`, "success"); }
-                      }} className="p-3 bg-indigo-600 hover:bg-indigo-500 rounded-2xl text-white transition-all shadow-lg" title="Save All Merged"><Download className="w-6 h-6" /></button>
-                  </div>
-                </div>
-                <div className="flex items-center gap-3 px-4 py-2 bg-black/40 rounded-xl border border-white/5 text-neutral-500 font-black uppercase text-[10px]">
-                  <input type="checkbox" checked={removeDuplicates} onChange={e => setRemoveDuplicates(e.target.checked)} className="w-4 h-4 rounded bg-neutral-800 border-white/10 text-indigo-600" />
-                  <label className="cursor-pointer">Unique Records Only</label>
-                </div>
-              </div>
-
-              <div className="flex-1 overflow-y-auto p-6 space-y-4 scrollbar-thin">
-                <div className="grid grid-cols-2 gap-2 mb-4">
-                    {subsets.map(sub => (
-                        <button key={sub.id} onClick={async () => {
-                            let linesToExport: string[] = [];
-                            fullResults.forEach(res => {
-                                const group = res.data.find((s: any) => s.id === sub.id);
-                                linesToExport.push(group?.matches.join(', ') || "");
-                            });
-                            if (removeDuplicates) linesToExport = Array.from(new Set(linesToExport.filter(l => l.trim())));
-                            const path = await save({ filters: [{ name: 'Text', extensions: ['txt'] }], defaultPath: `tags_${sub.name.toLowerCase()}.txt` });
-                            if (path) { await writeTextFile(path, linesToExport.join('\n')); showToast(`Saved: ${sub.name}`, "success"); }
-                        }} className="px-3 py-2.5 bg-neutral-800/50 hover:bg-indigo-600/30 border border-white/5 rounded-2xl text-[10px] font-black uppercase text-neutral-400 hover:text-white transition-all truncate">Save {sub.name}</button>
-                    ))}
-                    <button onClick={async () => {
-                        let linesToExport: string[] = [];
-                        fullResults.forEach(res => {
-                            const group = res.data.find((s: any) => s.id === 0);
-                            linesToExport.push(group?.matches.join(', ') || "");
-                        });
-                        if (removeDuplicates) linesToExport = Array.from(new Set(linesToExport.filter(l => l.trim())));
-                        const path = await save({ filters: [{ name: 'Text', extensions: ['txt'] }], defaultPath: `tags_unclassified.txt` });
-                        if (path) { await writeTextFile(path, linesToExport.join('\n')); showToast(`Saved: Unclassified`, "success"); }
-                    }} className="px-3 py-2.5 bg-red-900/10 hover:bg-red-600/30 border border-red-500/10 rounded-2xl text-[10px] font-black uppercase text-red-400/70 hover:text-red-300 transition-all truncate">Unclassified</button>
-                </div>
-
-                {fullResults.map(res => (
-                  <div key={res.lineIndex} className={`p-6 bg-neutral-800/30 border rounded-[2.5rem] cursor-pointer transition-all hover:border-indigo-500/40 hover:bg-neutral-800/50 ${expandedLines.has(res.lineIndex) ? 'border-indigo-500 bg-neutral-800/80 shadow-2xl' : 'border-white/5'}`} onClick={() => { const n = new Set(expandedLines); if (n.has(res.lineIndex)) n.delete(res.lineIndex); else n.add(res.lineIndex); setExpandedLines(n); }}>
-                    <div className="flex items-center justify-between mb-4">
-                      <span className="text-[10px] font-black text-neutral-600 uppercase">#L-{String(res.lineIndex).padStart(4, '0')}</span>
-                      <ChevronRight className={`w-4 h-4 text-neutral-700 transition-transform ${expandedLines.has(res.lineIndex) ? 'rotate-90' : ''}`} />
-                    </div>
-                    <div className="space-y-3">
-                      {res.data.filter((s: any) => s.matches.length > 0).map((s: any) => (
-                        <div key={s.id} className="space-y-1.5">
-                          <span className={`text-[9px] font-black uppercase px-2 py-0.5 rounded-lg ${s.id === 0 ? 'text-neutral-600 bg-neutral-900' : 'text-indigo-300 bg-indigo-900/40'}`}>{s.name}</span>
-                          {expandedLines.has(res.lineIndex) && <p className="text-[11px] font-mono text-neutral-400 break-all pl-2 leading-relaxed animate-in fade-in slide-in-from-top-1 duration-300">{s.matches.join(', ')}</p>}
+                      
+                      {!isCollapsed && (
+                        <div className="space-y-4 animate-in fade-in slide-in-from-top-2 duration-200">
+                          <div className="space-y-1.5">
+                            <TagInput tags={sub.keywords} onChange={tags => setSubsets(subsets.map(s => s.id === sub.id ? {...s, keywords: tags} : s))} placeholder="Add include tag..." colorClass="indigo" suggestions={uniqueTags} />
+                          </div>
+                          <div className="space-y-1.5">
+                            <TagInput tags={sub.excludeKeywords} onChange={tags => setSubsets(subsets.map(s => s.id === sub.id ? {...s, excludeKeywords: tags} : s))} placeholder="Add exclude tag..." colorClass="red" suggestions={uniqueTags} />
+                          </div>
                         </div>
-                      ))}
+                      )}
                     </div>
-                    {expandedLines.has(res.lineIndex) && (
-                        <div className="mt-4 pt-4 border-t border-white/5 space-y-1">
-                            <span className="text-[8px] font-black text-neutral-600 uppercase">Original Source</span>
-                            <p className="text-[10px] font-mono text-neutral-500 italic break-all leading-tight">{lines[res.lineIndex-1]}</p>
-                        </div>
-                    )}
+                  </div>
+                );
+              })}
+              <div className="bg-solid-nested border border-dashed border-white/5 rounded-3xl p-6 text-center shrink-0">
+                <span className="text-[10px] font-black text-neutral-400 uppercase tracking-widest">Waterfall Stream End</span>
+              </div>
+            </div>
+
+            {/* Bottom Left: Tag Variables Panel */}
+            <div className="p-4 border-t border-white/5 bg-solid-nested shrink-0">
+              <div className="flex items-center justify-between mb-4">
+                <span className="text-[10px] font-black uppercase text-neutral-305 tracking-widest flex items-center gap-2"><Box className="w-3.5 h-3.5 text-amber-500" /> Tag Variables</span>
+                <button 
+                  onClick={() => setWordGroups([...wordGroups, { id: Date.now(), name: 'var', words: [] }])} 
+                  className="w-11 h-11 flex items-center justify-center text-neutral-400 hover:text-white hover:bg-white/5 rounded-xl transition-all"
+                  aria-label="Add tag variable group"
+                >
+                  <Plus className="w-4 h-4" />
+                </button>
+              </div>
+              <div className="space-y-3 max-h-56 overflow-y-auto scrollbar-thin pr-2">
+                {wordGroups.map(wg => (
+                  <div key={wg.id} className="p-4 bg-solid-card border border-white/5 rounded-3xl group">
+                    <div className="flex items-center gap-2 mb-3">
+                      <span className="text-amber-500 text-xs font-black">{"{"}</span>
+                      <input 
+                        className="bg-transparent text-xs font-black text-amber-400 focus:outline-none w-full uppercase border-b border-transparent focus:border-blue-500/35" 
+                        value={wg.name} 
+                        onChange={e => setWordGroups(wordGroups.map(w => w.id === wg.id ? {...w, name: e.target.value.toLowerCase()} : w))} 
+                        aria-label="Variable identifier name"
+                      />
+                      <span className="text-amber-500 text-xs font-black">{"}"}</span>
+                      <span 
+                        role="button"
+                        onClick={() => setWordGroups(wordGroups.filter(w => w.id !== wg.id))} 
+                        className="w-8 h-8 flex items-center justify-center text-neutral-400 hover:text-red-400 hover:bg-red-500/10 rounded-lg transition-all cursor-pointer md:opacity-0 md:group-hover:opacity-100"
+                        title="Delete variable group"
+                      >
+                        <X className="w-3.5 h-3.5" />
+                      </span>
+                    </div>
+                    <TagInput tags={wg.words} onChange={tags => setWordGroups(wordGroups.map(w => w.id === wg.id ? {...w, words: tags} : w))} placeholder="Add alias tag..." colorClass="emerald" suggestions={uniqueTags} />
                   </div>
                 ))}
               </div>
-            </>
-          )}
-        </aside>
-      </main>
+            </div>
+          </aside>
 
-      <footer className="h-12 border-t border-white/5 bg-neutral-900 px-8 flex items-center justify-between shrink-0 text-white">
-        <div className="flex items-center gap-6">
-          <span className="text-[10px] font-black text-neutral-600 uppercase tracking-widest">Active: {activePreset.toUpperCase()}</span>
-          <div className="flex items-center gap-2"><span className="w-2 h-2 rounded-full bg-emerald-500 shadow-[0_0_10px_rgba(16,185,129,0.4)]" /><span className="text-[10px] font-black text-neutral-500 uppercase">Sync Active</span></div>
+          {/* Center Canvas: Active Workstation Area */}
+          <section className="flex-1 flex flex-col bg-solid-surface-elevated relative overflow-hidden min-w-0 transition-all duration-300">
+            {/* Toggle Sidebar handle */}
+            <button 
+              onClick={() => setIsRightSidebarOpen(!isRightSidebarOpen)}
+              className="absolute right-0 top-1/2 -translate-y-1/2 z-30 w-11 h-11 flex items-center justify-center bg-solid-panel border-l border-y border-white/5 rounded-l-xl text-neutral-400 hover:text-white transition-all shadow-2xl"
+              aria-label={isRightSidebarOpen ? "Hide right sidebar" : "Show right sidebar"}
+            >
+              {isRightSidebarOpen ? <ChevronRight className="w-5 h-5" /> : <ChevronLeft className="w-5 h-5" />}
+            </button>
+
+            {/* Center Canvas Header / Toolbar */}
+            <div className="p-3 border-b border-white/5 bg-solid-panel flex flex-wrap items-center justify-between gap-3 shrink-0 shadow-md">
+              {/* View Modes Segments */}
+              <div className="flex bg-solid-nested p-1 rounded-2xl border border-white/5 shrink-0 min-h-[50px] items-center shadow-inner">
+                <button onClick={() => setViewMode('single')} className={`px-3 py-2 min-h-[44px] flex items-center justify-center rounded-xl text-[10px] font-black uppercase transition-all ${viewMode === 'single' ? 'bg-solid-element text-white shadow-md' : 'text-neutral-400 hover:text-white'}`}>Editor</button>
+                <button onClick={() => setViewMode('bulk')} className={`px-3 py-2 min-h-[44px] flex items-center justify-center rounded-xl text-[10px] font-black uppercase transition-all ${viewMode === 'bulk' ? 'bg-solid-element text-white shadow-md' : 'text-neutral-400 hover:text-white'}`}>Source</button>
+                <button onClick={() => setViewMode('library')} className={`px-3 py-2 min-h-[44px] flex items-center justify-center rounded-xl text-[10px] font-black uppercase transition-all ${viewMode === 'library' ? 'bg-solid-element text-white shadow-md' : 'text-neutral-400 hover:text-white'}`}>Library</button>
+              </div>
+
+              {/* Workflow Actions */}
+              <div className="flex gap-2 shrink-0 items-center">
+                <button onClick={importDirect} disabled={isRunning} title="Direct Import (Full Folder)" className="w-11 h-11 flex items-center justify-center bg-blue-600/10 hover:bg-blue-600/25 text-blue-400 rounded-2xl border border-blue-500/20 transition-all disabled:opacity-50" aria-label="Direct Folder Import"><Sparkles className="w-5 h-5" /></button>
+                <button onClick={importFiltered} disabled={isRunning} title="Filtered Import (Current Workshop)" className="w-11 h-11 flex items-center justify-center bg-indigo-600/10 hover:bg-indigo-600/25 text-indigo-400 rounded-2xl border border-indigo-500/20 transition-all disabled:opacity-50" aria-label="Filtered Workshop Import"><ListFilter className="w-5 h-5" /></button>
+                <button onClick={handleImportConfig} title="Import JSON config" className="w-11 h-11 flex items-center justify-center bg-neutral-800 hover:bg-neutral-700 rounded-2xl text-neutral-300 hover:text-white transition-all border border-white/5" aria-label="Import Configuration"><Upload className="w-5 h-5" /></button>
+                <button 
+                  onClick={runAnalysis} 
+                  disabled={isRunning} 
+                  className="bg-blue-600 hover:bg-blue-500 text-white px-4 min-h-[44px] flex items-center justify-center rounded-2xl text-[10px] font-black uppercase tracking-wider transition-all disabled:opacity-50 active:scale-95 shadow-lg gap-1.5 shrink-0"
+                  title="Compile dataset"
+                >
+                  {isRunning ? <RefreshCw className="w-3.5 h-3.5 animate-spin mr-1" /> : <Play className="w-3.5 h-3.5 mr-1" />}
+                  Compile
+                </button>
+              </div>
+            </div>
+
+            <div className="flex-1 p-4 sm:p-6 lg:p-8 flex flex-col gap-6 overflow-hidden">
+              {viewMode === 'single' && (
+                <div className="flex-1 flex flex-col gap-6 overflow-hidden animate-in slide-in-from-bottom-2 duration-500">
+                  {/* Editor Card Navigator */}
+                  <div className="flex items-center justify-between bg-solid-panel border border-white/5 p-4 rounded-3xl shadow-md shrink-0 overflow-x-auto no-scrollbar">
+                    <div className="flex items-center gap-6 min-w-max">
+                      <div className="flex gap-2">
+                        <button 
+                          onClick={() => setCurrentIndex(p => Math.max(0, p - 1))} 
+                          className="w-11 h-11 flex items-center justify-center bg-neutral-800 hover:bg-neutral-700 border border-white/5 rounded-2xl transition-all shadow-inner"
+                          aria-label="Previous prompt"
+                        >
+                          <ChevronLeft className="w-6 h-6 text-neutral-200" />
+                        </button>
+                        <button 
+                          onClick={() => setCurrentIndex(p => Math.min(lines.length - 1, p + 1))} 
+                          className="w-11 h-11 flex items-center justify-center bg-neutral-800 hover:bg-neutral-700 border border-white/5 rounded-2xl transition-all shadow-inner"
+                          aria-label="Next prompt"
+                        >
+                          <ChevronRight className="w-6 h-6 text-neutral-200" />
+                        </button>
+                      </div>
+                      <div>
+                        <span className="text-[10px] font-black text-neutral-400 uppercase tracking-widest block mb-0.5">Focus Mode</span>
+                        <span className="text-base font-mono font-black text-blue-400">#L-{String(currentIndex + 1).padStart(4, '0')} <span className="text-neutral-400 font-normal ml-2">/ {lines.length}</span></span>
+                      </div>
+                    </div>
+                    <div className="flex gap-2 ml-4 shrink-0">
+                      <button 
+                        onClick={() => { const nl = [...lines]; nl.splice(currentIndex+1, 0, ""); setLines(nl); setCurrentIndex(currentIndex+1); }} 
+                        className="w-11 h-11 flex items-center justify-center bg-neutral-800 hover:bg-neutral-700 hover:text-white rounded-2xl border border-white/5 text-neutral-300 transition-all"
+                        title="Insert new prompt line"
+                        aria-label="Insert line"
+                      >
+                        <Plus className="w-4 h-4" />
+                      </button>
+                      <button 
+                        onClick={() => { if (lines.length <= 1) return; setLines(lines.filter((_, i) => i !== currentIndex)); setCurrentIndex(Math.max(0, currentIndex-1)); }} 
+                        className="w-11 h-11 flex items-center justify-center bg-[#2d1217] hover:bg-[#3d1820] text-red-400 rounded-2xl border border-red-500/20 transition-all"
+                        title="Delete current prompt line"
+                        aria-label="Delete line"
+                      >
+                        <Trash2 className="w-4 h-4" />
+                      </button>
+                    </div>
+                  </div>
+
+                  {/* Edit Textarea */}
+                  <div className="flex-[3] flex flex-col gap-3 min-h-0">
+                    <label className="text-xs font-extrabold uppercase text-neutral-300 tracking-wider px-3" htmlFor="prompt-textarea">Active Data Stream</label>
+                    <div className="flex-1 relative group min-h-0">
+                      <textarea 
+                        id="prompt-textarea"
+                        className="w-full h-full bg-neutral-950 border border-white/5 focus:border-blue-500/50 rounded-3xl p-6 sm:p-8 text-sm sm:text-base font-mono text-neutral-200 focus:outline-none focus:ring-1 focus:ring-blue-500/20 resize-none shadow-inner leading-relaxed scrollbar-thin transition-all"
+                        value={lines[currentIndex] || ""}
+                        onChange={e => { const nl = [...lines]; nl[currentIndex] = e.target.value; setLines(nl); }}
+                        placeholder="Input dataset tag lists separated by commas..."
+                      />
+                      <div className="absolute right-6 bottom-6 opacity-45 group-hover:opacity-85 transition-opacity pointer-events-none">
+                        <Terminal className="w-8 h-8 text-blue-500" />
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* Live Analysis Engine */}
+                  <div className="flex-[2] min-h-[180px] bg-solid-panel border border-white/5 rounded-3xl p-5 flex flex-col gap-4 shadow-inner shrink-0 overflow-hidden">
+                    <div className="flex items-center justify-between shrink-0">
+                      <div className="flex items-center gap-3 text-neutral-350">
+                        <RefreshCw className="w-4 h-4 text-neutral-500 animate-spin-slow" />
+                        <span className="text-xs font-black uppercase tracking-wider">Flow Result</span>
+                      </div>
+                      <div className="flex items-center gap-2">
+                        <span className="w-2.5 h-2.5 rounded-full bg-blue-500 animate-pulse shadow-[0_0_10px_rgba(59,130,246,0.5)]" />
+                        <span className="text-[10px] font-black text-blue-450 uppercase tracking-widest flex items-center gap-1.5"><Sparkles className="w-3 h-3 text-blue-400 animate-pulse" /> Live Analysis Engine</span>
+                      </div>
+                    </div>
+                    <div className="flex-1 overflow-y-auto space-y-4 pr-3 scrollbar-thin text-white">
+                      {parseLine(lines[currentIndex] || "").map((sub: any) => (
+                        <div key={sub.id} className="flex items-start gap-4 group">
+                          <div className="w-32 shrink-0 flex items-center gap-2">
+                            <span className={`text-[10px] font-black uppercase px-3 py-2 rounded-xl w-full text-center border transition-all truncate ${sub.id === 0 ? 'text-neutral-300 border-white/5 bg-solid-nested' : 'text-blue-400 border-blue-500/20 bg-blue-955/20'}`}>{sub.name}</span>
+                            <ArrowRight className="w-4 h-4 text-neutral-500" />
+                          </div>
+                          <div className="flex-1 flex flex-wrap gap-2 pt-1.5">
+                            {sub.matches.length > 0 ? sub.matches.map((m: string, i: number) => (
+                              <span key={i} className="px-2.5 py-1.5 bg-neutral-955 border border-white/5 rounded-lg text-xs font-mono text-neutral-200 shadow-inner hover:border-blue-500/40 transition-all flex items-center gap-1.5">
+                                <span className="w-1.5 h-1.5 rounded-full bg-blue-400" />
+                                {m}
+                              </span>
+                            )) : (
+                              <span className="text-[10px] text-neutral-500 font-bold uppercase tracking-wider py-1.5 select-none">No Match</span>
+                            )}
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                </div>
+              )}
+
+              {/* Bulk Textarea Editor */}
+              {viewMode === 'bulk' && (
+                <div className="flex-1 flex flex-col gap-3 min-h-0 animate-in zoom-in-95 duration-500">
+                  <label className="text-xs font-extrabold uppercase text-neutral-300 tracking-wider px-3" htmlFor="bulk-textarea">Global Source Editor</label>
+                  <textarea 
+                    id="bulk-textarea"
+                    className="flex-1 w-full bg-neutral-955 border border-white/5 focus:border-blue-500/40 rounded-3xl p-6 sm:p-10 text-sm sm:text-base font-mono text-neutral-200 focus:outline-none focus:ring-1 focus:ring-blue-500/20 resize-none shadow-inner leading-relaxed scrollbar-thin" 
+                    value={lines.join('\n')} 
+                    onChange={e => setLines(e.target.value.split('\n'))} 
+                    placeholder="Paste thousands of comma-separated prompt lines here..." 
+                  />
+                </div>
+              )}
+
+              {/* Library tag grid explorer */}
+              {viewMode === 'library' && (
+                <div className="flex-1 flex flex-col gap-6 overflow-hidden animate-in slide-in-from-right-4 duration-500">
+                  <div className="grid grid-cols-1 lg:grid-cols-3 gap-4 sm:gap-6 bg-solid-panel p-5 rounded-3xl border border-white/5 shadow-2xl">
+                    <div className="space-y-2">
+                      <label className="text-[10px] font-black uppercase text-neutral-300 tracking-widest block ml-2">Active Pipeline Layer</label>
+                      <div className="flex flex-wrap gap-2">
+                          {subsets.map(s => (
+                              <button 
+                                  key={s.id} 
+                                  onClick={() => setDictActiveSubsetId(s.id)}
+                                  className={`px-4 py-2.5 rounded-xl text-[10px] font-black uppercase transition-all border min-h-[44px] ${dictActiveSubsetId === s.id ? 'bg-blue-600 border-blue-500 text-white shadow-lg shadow-blue-500/20' : 'bg-black/30 border-white/10 text-neutral-200 hover:text-white'}`}
+                                  aria-label={`Activate layer ${s.name}`}
+                              >
+                                  {s.name}
+                              </button>
+                          ))}
+                      </div>
+                    </div>
+                    <div className="space-y-2">
+                      <label className="text-[10px] font-black uppercase text-neutral-350 tracking-widest block ml-2">Action Mode</label>
+                      <div className="flex bg-neutral-950 rounded-xl border border-white/5 p-1 shadow-inner min-h-[44px] items-center">
+                          <button onClick={() => setDictActionMode('include')} className={`flex-1 py-2.5 min-h-[38px] flex items-center justify-center rounded-lg text-[10px] font-black uppercase transition-all ${dictActionMode === 'include' ? 'bg-blue-600 text-white shadow-md' : 'text-neutral-300 hover:text-white'}`}>Include (+)</button>
+                          <button onClick={() => setDictActionMode('exclude')} className={`flex-1 py-2.5 min-h-[38px] flex items-center justify-center rounded-lg text-[10px] font-black uppercase transition-all ${dictActionMode === 'exclude' ? 'bg-red-600 text-white shadow-md' : 'text-neutral-300 hover:text-white'}`}>Exclude (-)</button>
+                      </div>
+                    </div>
+                    <div className="space-y-2 relative">
+                      <label className="text-[10px] font-black uppercase text-neutral-350 tracking-widest block ml-2" htmlFor="search-global-tags">Search Global Dataset</label>
+                      <div className="relative">
+                          <Search className="absolute left-4 top-1/2 -translate-y-1/2 w-4 h-4 text-neutral-400" />
+                          <input 
+                            id="search-global-tags"
+                            className="w-full bg-neutral-950 border border-white/5 focus:border-blue-500/50 rounded-xl pl-12 pr-4 py-2.5 text-xs font-bold text-white outline-none placeholder-neutral-600 shadow-inner min-h-[44px]" 
+                            value={tagSearchQuery} 
+                            onChange={e => setTagSearchQuery(e.target.value)} 
+                            placeholder="Filter unique tags..." 
+                          />
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* Library tag items layout */}
+                  <div className="flex-1 overflow-y-auto bg-neutral-950 rounded-3xl border border-white/5 p-6 shadow-inner scrollbar-thin">
+                      <div className="flex flex-wrap gap-2.5 content-start">
+                      {uniqueTags.filter(t => t.toLowerCase().includes(tagSearchQuery.toLowerCase())).map(tag => {
+                          const activeSub = subsets.find(s => s.id === dictActiveSubsetId);
+                          const isInc = activeSub?.keywords.includes(tag); 
+                          const isExc = activeSub?.excludeKeywords.includes(tag);
+                          const isIncVar = !isInc && activeSub?.keywords.some(k => tag.includes(k.replace(/\{.*?\}/, ''))); 
+                          const isExcVar = !isExc && activeSub?.excludeKeywords.some(k => tag.includes(k.replace(/\{.*?\}/, '')));
+                          
+                          let style = "bg-solid-card text-neutral-300 border-white/5 hover:bg-solid-active hover:text-white hover:border-blue-500/20";
+                          let tooltip = "Toggle Tag Selection";
+                          let indicator = null;
+
+                          if (isIncVar) { 
+                            style = "bg-[#162235] text-blue-405 border-blue-500/20 border-dashed hover:bg-[#1f2e45]"; 
+                            indicator = <div className="w-1.5 h-1.5 rounded-full bg-blue-500 animate-pulse" />; 
+                          }
+                          if (!isInc && isExcVar) { 
+                            style = "bg-[#2d1217] text-red-405 border-red-500/20 border-dashed hover:bg-[#3d1820]"; 
+                            indicator = <div className="w-1.5 h-1.5 rounded-full bg-red-500 animate-pulse" />; 
+                          }
+                          if (isExc) { 
+                            style = "bg-red-600 border-red-500 text-white shadow-md font-black"; 
+                            tooltip = "Explicitly Excluded"; 
+                            indicator = <XCircle className="w-3.5 h-3.5 text-white" />; 
+                          }
+                          if (isInc) { 
+                            style = "bg-blue-600 border-blue-500 text-white shadow-md font-black"; 
+                            tooltip = "Explicitly Included"; 
+                            indicator = <CheckCircle className="w-3.5 h-3.5 text-white" />; 
+                          }
+                          
+                          const hasVar = /\{.*?\}/.test(tag);
+
+                          return (
+                            <button 
+                              key={tag} 
+                              title={hasVar ? "Click 1: Base | Click 2: Full | Click 3: Clear" : tooltip}
+                              onClick={() => { 
+                                if (!dictActiveSubsetId) return; 
+                                const sub = subsets.find(s => s.id === dictActiveSubsetId)!; 
+                                const field = dictActionMode === 'include' ? 'keywords' : 'excludeKeywords'; 
+                                let current = [...sub[field]];
+                                if (hasVar) {
+                                  const baseTag = tag.replace(/\{.*?\}/g, '').replace(/\s+/g, ' ').trim();
+                                  if (current.includes(tag)) current = current.filter(t => t !== tag);
+                                  else if (current.includes(baseTag)) { current = current.filter(t => t !== baseTag); current.push(tag); }
+                                    else current.push(baseTag);
+                                } else {
+                                  if (current.includes(tag)) current = current.filter(t => t !== tag);
+                                  else current.push(tag);
+                                }
+                                setSubsets(subsets.map(s => s.id === sub.id ? {...s, [field]: current} : s));
+                              }} 
+                              className={`px-4 py-2.5 rounded-2xl text-[11px] font-mono border transition-all active:scale-95 flex items-center gap-2 min-h-[44px] ${style}`}
+                              aria-label={`Toggle tag ${tag}`}
+                            >
+                              {indicator}
+                              {tag}
+                            </button>
+                          );
+                      })}
+                  </div></div>
+                </div>
+              )}
+            </div>
+          </section>
+
+          {/* Right Sidebar: Output Streams */}
+          <aside className={`border-l border-white/5 flex flex-col bg-solid-nested shrink-0 min-h-0 transition-all duration-300 overflow-hidden ${isRightSidebarOpen ? (activeMobileSection === 'output' ? 'w-full flex' : 'w-0 border-none md:w-80 lg:w-80 md:flex hidden') : 'w-0 border-none'}`}>
+            {!hasProcessed ? (
+              <div className="flex-1 flex flex-col items-center justify-center p-10 text-center bg-solid-nested">
+                <Terminal className="w-12 h-12 mb-4 text-blue-505 animate-pulse" />
+                <h3 className="text-xs font-black uppercase tracking-[0.2em] mb-2 text-neutral-200">System Idle</h3>
+                <p className="text-[10px] font-bold text-neutral-400 uppercase leading-relaxed tracking-wider">Compile dataset to<br/>explore results</p>
+              </div>
+            ) : (
+              <>
+                {/* Output Controls Box */}
+                <div className="p-6 border-b border-white/5 bg-solid-panel flex flex-col gap-4 shrink-0 shadow-md">
+                  <div className="flex items-center justify-between">
+                    <div>
+                      <span className="text-xs font-black uppercase text-blue-400 tracking-wider flex items-center gap-3"><CheckCircle className="w-4 h-4 text-blue-500" /> Output Stream</span>
+                      <p className="text-[10px] text-neutral-400 font-bold uppercase mt-1">{fullResults.length} Records Compiled</p>
+                    </div>
+                    <div className="flex gap-2">
+                        <button 
+                          onClick={async () => {
+                            let linesToExport: string[] = [];
+                            fullResults.forEach(res => {
+                                const allTags = res.data.flatMap((s: any) => s.matches);
+                                linesToExport.push(allTags.join(', '));
+                            });
+                            if (removeDuplicates) linesToExport = Array.from(new Set(linesToExport.filter(l => l.trim())));
+                            const path = await dialogSave({ filters: [{ name: 'Text', extensions: ['txt'] }], defaultPath: `tags_all_merged.txt` });
+                            if (path) { await fsWriteTextFile(path, linesToExport.join('\n')); showToast(`Saved All`, "success"); }
+                          }} 
+                          className="w-11 h-11 flex items-center justify-center bg-blue-600 hover:bg-blue-500 rounded-xl text-white transition-all shadow-md border border-blue-500/20" 
+                          title="Save All Merged"
+                          aria-label="Export all merged results"
+                        >
+                          <Download className="w-5 h-5" />
+                        </button>
+                    </div>
+                  </div>
+                  
+                  {/* Unique Records Checkbox */}
+                  <div className="flex items-center gap-3 px-4 py-3 bg-solid-card rounded-xl border border-white/5 text-neutral-300 font-extrabold uppercase text-[10px] shadow-inner select-none cursor-pointer min-h-[44px]">
+                    <input 
+                      type="checkbox" 
+                      id="checkbox-unique-records"
+                      checked={removeDuplicates} 
+                      onChange={e => setRemoveDuplicates(e.target.checked)} 
+                      className="w-4 h-4 rounded bg-black/40 border-white/10 text-blue-600 focus:ring-0 focus:ring-offset-0" 
+                    />
+                    <label className="cursor-pointer" htmlFor="checkbox-unique-records">Unique Records Only</label>
+                  </div>
+                </div>
+
+                {/* Outputs Accordion list */}
+                <div className="flex-1 overflow-y-auto p-6 space-y-4 scrollbar-thin bg-solid-nested">
+                  <div className="grid grid-cols-2 gap-2 mb-4">
+                      {subsets.map(sub => (
+                          <button 
+                            key={sub.id} 
+                            onClick={async () => {
+                              let linesToExport: string[] = [];
+                              fullResults.forEach(res => {
+                                  const group = res.data.find((s: any) => s.id === sub.id);
+                                  linesToExport.push(group?.matches.join(', ') || "");
+                              });
+                              if (removeDuplicates) linesToExport = Array.from(new Set(linesToExport.filter(l => l.trim())));
+                              const path = await dialogSave({ filters: [{ name: 'Text', extensions: ['txt'] }], defaultPath: `tags_${sub.name.toLowerCase()}.txt` });
+                              if (path) { await fsWriteTextFile(path, linesToExport.join('\n')); showToast(`Saved: ${sub.name}`, "success"); }
+                            }} 
+                            className="px-3 py-2.5 min-h-[44px] bg-solid-card hover:bg-solid-active border border-white/5 rounded-xl text-[10px] font-black uppercase text-neutral-200 hover:text-white hover:border-blue-500/30 transition-all truncate"
+                            aria-label={`Export group ${sub.name}`}
+                          >
+                            Save {sub.name}
+                          </button>
+                      ))}
+                      <button 
+                        onClick={async () => {
+                            let linesToExport: string[] = [];
+                            fullResults.forEach(res => {
+                                const group = res.data.find((s: any) => s.id === 0);
+                                linesToExport.push(group?.matches.join(', ') || "");
+                            });
+                            if (removeDuplicates) linesToExport = Array.from(new Set(linesToExport.filter(l => l.trim())));
+                            const path = await dialogSave({ filters: [{ name: 'Text', extensions: ['txt'] }], defaultPath: `tags_unclassified.txt` });
+                            if (path) { await fsWriteTextFile(path, linesToExport.join('\n')); showToast(`Saved: Unclassified`, "success"); }
+                        }} 
+                        className="px-3 py-2.5 min-h-[44px] bg-[#2d1217] hover:bg-[#3d1820] border border-red-500/10 rounded-xl text-[10px] font-black uppercase text-red-400 hover:text-white transition-all truncate"
+                        aria-label="Export unclassified items"
+                      >
+                        Unclassified
+                      </button>
+                  </div>
+
+                  {fullResults.map(res => (
+                    <div 
+                      key={res.lineIndex} 
+                      className={`p-5 border rounded-2xl cursor-pointer transition-all hover:border-blue-500/30 hover:bg-solid-active ${expandedLines.has(res.lineIndex) ? 'border-blue-500/40 bg-solid-element ring-1 ring-blue-500/25' : 'border-white/5 bg-solid-card'}`} 
+                      onClick={() => { const n = new Set(expandedLines); if (n.has(res.lineIndex)) n.delete(res.lineIndex); else n.add(res.lineIndex); setExpandedLines(n); }}
+                    >
+                      <div className="flex items-center justify-between mb-3">
+                        <span className="text-[10px] font-black text-neutral-355 uppercase">#L-{String(res.lineIndex).padStart(4, '0')}</span>
+                        <ChevronRight className={`w-4 h-4 text-neutral-400 transition-transform ${expandedLines.has(res.lineIndex) ? 'rotate-90 text-blue-500' : ''}`} />
+                      </div>
+                      <div className="space-y-3">
+                        {res.data.filter((s: any) => s.matches.length > 0).map((s: any) => (
+                          <div key={s.id} className="space-y-1.5">
+                            <span className={`text-[9px] font-black uppercase px-2.5 py-1 rounded-lg ${s.id === 0 ? 'text-neutral-200 bg-solid-nested border border-white/5' : 'text-blue-400 bg-blue-955/20 border border-blue-500/20'}`}>{s.name}</span>
+                            {expandedLines.has(res.lineIndex) && (
+                              <p className="text-[11px] font-mono text-neutral-200 break-all pl-2 leading-relaxed animate-in fade-in slide-in-from-top-1 duration-300">
+                                {s.matches.join(', ')}
+                              </p>
+                            )}
+                          </div>
+                        ))}
+                      </div>
+                      {expandedLines.has(res.lineIndex) && (
+                          <div className="mt-4 pt-4 border-t border-white/5 space-y-1">
+                              <span className="text-[8px] font-black text-neutral-500 uppercase tracking-widest">Original Source</span>
+                              <p className="text-[10.5px] font-mono text-neutral-300 break-all leading-relaxed pl-2 bg-neutral-950 p-2 rounded-lg border border-white/5">{lines[res.lineIndex-1]}</p>
+                          </div>
+                      )}
+                    </div>
+                  ))}
+                </div>
+              </>
+            )}
+          </aside>
         </div>
-        <div className="flex items-center gap-6">
-          <button onClick={handleExportConfig} className="flex items-center gap-2 text-[10px] font-black text-neutral-500 hover:text-white uppercase transition-all"><Save className="w-4 h-4" /> Backup Config</button>
-          <button className="flex items-center gap-2 text-[10px] font-black text-neutral-500 hover:text-white uppercase transition-all"><ExternalLink className="w-4 h-4" /> Help</button>
+
+        {/* Responsive Mobile Bottom Navigation Bar */}
+        <div className="lg:hidden h-16 border-t border-white/5 bg-solid-panel flex items-center justify-around px-4 shrink-0 text-white z-20 shadow-2xl">
+          <button 
+            onClick={() => setActiveMobileSection('rules')}
+            className={`flex flex-col items-center justify-center gap-1 flex-1 py-1 min-h-[44px] text-[10px] font-extrabold uppercase transition-all ${activeMobileSection === 'rules' ? 'text-blue-405 font-black' : 'text-neutral-400 hover:text-neutral-250'}`}
+            aria-label="Mobile Navigation Rules"
+          >
+            <Filter className="w-4 h-4" />
+            <span>Rules</span>
+          </button>
+          <button 
+            onClick={() => setActiveMobileSection('editor')}
+            className={`flex flex-col items-center justify-center gap-1 flex-1 py-1 min-h-[44px] text-[10px] font-extrabold uppercase transition-all ${activeMobileSection === 'editor' ? 'text-blue-405 font-black' : 'text-neutral-400 hover:text-neutral-250'}`}
+            aria-label="Mobile Navigation Workstation"
+          >
+            <Database className="w-4 h-4" />
+            <span>Workstation</span>
+          </button>
+          <button 
+            onClick={() => setActiveMobileSection('output')}
+            className={`flex flex-col items-center justify-center gap-1 flex-1 py-1 min-h-[44px] text-[10px] font-extrabold uppercase transition-all ${activeMobileSection === 'output' ? 'text-blue-405 font-black' : 'text-neutral-400 hover:text-neutral-250'}`}
+            aria-label="Mobile Navigation Output"
+          >
+            <CheckCircle className="w-4 h-4" />
+            <span>Output</span>
+          </button>
         </div>
-      </footer>
+
+        {/* Cyberdeck System Footer */}
+        <footer className="h-auto md:h-14 py-3 md:py-0 border-t border-white/5 bg-solid-panel px-4 md:px-8 flex flex-col md:flex-row items-center justify-between shrink-0 text-white gap-3 md:gap-0 z-25 relative">
+          <div className="flex items-center gap-6">
+            <span className="text-[10px] font-black text-neutral-450 tracking-widest uppercase">Preset Active: <span className="text-blue-400">{activePreset}</span></span>
+            <div className="flex items-center gap-2">
+              <span className="w-2 h-2 rounded-full bg-green-500 shadow-[0_0_10px_rgba(34,197,94,0.5)] animate-pulse" />
+              <span className="text-[10px] font-black text-neutral-450 uppercase tracking-widest">Live Sync Active</span>
+            </div>
+          </div>
+          <div className="flex items-center">
+            <button 
+              onClick={handleExportConfig} 
+              className="flex items-center gap-2 px-4 py-3 min-h-[44px] bg-neutral-800 hover:bg-neutral-700 rounded-xl text-[10px] font-extrabold text-neutral-300 hover:text-white uppercase transition-all shrink-0 border border-white/5"
+            >
+              <Save className="w-3.5 h-3.5" /> Backup Config
+            </button>
+          </div>
+        </footer>
+      </div>
     </div>
   );
 };

@@ -4,22 +4,22 @@ ComfyView는 단순한 이미지 뷰어를 넘어, AI 아트 크리에이션 과
 
 ## 🧭 핵심 탐색 가이드
 
-### 1. [시스템 아키텍처 (Architecture)](architecture.md)
+### 1. [시스템 아키텍처 (Architecture)](file:///E:/GEMINI%20workspace/Comfy%20image%20browser/docs/architecture.md)
 ComfyView가 왜 Tauri v2와 Rust를 선택했는지, 그리고 프론트엔드와 백엔드가 어떻게 효율적으로 데이터를 교환하며 수만 장의 이미지를 지연 없이 처리하는지에 대한 시스템 설계를 다룹니다.
 
-### 2. [메타데이터 파이프라인 (Metadata Pipeline)](metadata_pipeline.md)
+### 2. [메타데이터 파이프라인 (Metadata Pipeline)](file:///E:/GEMINI%20workspace/Comfy%20image%20browser/docs/metadata_pipeline.md)
 ComfyUI와 Automatic1111 등 서로 다른 도구들이 생성하는 파편화된 메타데이터를 하나의 통합된 인터페이스로 변환하기 위한 추출 로직과 노드 확장 전략을 설명합니다.
 
-### 3. [기능 명세 및 사용자 경험 (Features & UX)](features_and_ux.md)
+### 3. [기능 명세 및 사용자 경험 (Features & UX)](file:///E:/GEMINI%20workspace/Comfy%20image%20browser/docs/features_and_ux.md)
 Batch Crop, Wildcard Workshop, Undo System 등 크리에이터의 생산성을 극대화하기 위해 설계된 주요 기능들의 구현 배경과 UX 설계 철학을 기록합니다.
 
-### 4. [개발 및 유지보수 가이드 (Development Guide)](development_guide.md)
+### 4. [개발 및 유지보수 가이드 (Development Guide)](file:///E:/GEMINI%20workspace/Comfy%20image%20browser/docs/development_guide.md)
 프로젝트의 코드 스타일, 테스트 전략, 그리고 새로운 기능을 추가하거나 버그를 수정할 때 준수해야 할 정밀한 외과적 수정(Surgical Strike) 원칙을 안내합니다.
 
-### 5. [테스트 및 검증 가이드 (Testing Guide)](testing_guide.md)
+### 5. [테스트 및 검증 가이드 (Testing Guide)](file:///E:/GEMINI%20workspace/Comfy%20image%20browser/docs/testing_guide.md)
 Wildcard Workshop의 성능 벤치마크 및 쉼표 무결성 검증을 포함하여, 시스템의 안정성을 보장하기 위한 테스트 실행 방법과 주요 검증 포인트를 다룹니다.
 
-### 6. [코드 리뷰 보고서 (Code Review Report)](code_review_report_20260418.md)
+### 6. [코드 리뷰 보고서 (Code Review Report)](file:///E:/GEMINI%20workspace/Comfy%20image%20browser/docs/code_review_report_20260418.md)
 시스템의 보안, 성능, 유지보수성 측면에서의 개선 사항과 발견된 기술 부채를 기록합니다.
 
 ---

@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef } from "react";
-import { invoke, convertFileSrc } from "@tauri-apps/api/core";
+import { api, assetSrc } from "../api";
 
 interface Task {
   path: string;
@@ -76,8 +76,8 @@ export const scheduleThumbnailGeneration = (path: string, priority = true, size 
       priority,
       run: async () => {
         try {
-          const res = await invoke("get_thumbnail", { path, size });
-          resolve(res as string);
+          const res = await api.getThumbnail(path, size);
+          resolve(res);
         } catch (e) {
           reject(e);
         }
@@ -136,10 +136,7 @@ export const Thumbnail = ({ path, mtime, reloadTimestamp, className, onClick, fi
       scheduleThumbnailGeneration(path)
         .then(res => {
           if (active && pathRef.current === path) {
-            const normalizedRes = (res as string).replace(/\//g, '\\');
-            const url = convertFileSrc(normalizedRes);
-            const finalUrl = reloadTimestamp ? `${url}?t=${reloadTimestamp}` : url;
-            setSrc(finalUrl);
+            setSrc(assetSrc(res, reloadTimestamp));
             setLoadedPath(path);
             setLoading(false);
           }
@@ -147,9 +144,7 @@ export const Thumbnail = ({ path, mtime, reloadTimestamp, className, onClick, fi
         .catch((err) => {
           console.error("Thumbnail failed", path, err);
           if (active && pathRef.current === path) {
-             const url = convertFileSrc(path.replace(/\//g, '\\'));
-             const finalUrl = reloadTimestamp ? `${url}?t=${reloadTimestamp}` : url;
-             setSrc(finalUrl);
+             setSrc(assetSrc(path, reloadTimestamp));
              setLoadedPath(path);
              setLoading(false);
           }
@@ -184,8 +179,9 @@ export const Thumbnail = ({ path, mtime, reloadTimestamp, className, onClick, fi
           key={src}
           className={`w-full h-full ${fit === "cover" ? 'object-cover' : 'object-contain'} transition-all duration-300 ${!isCorrectPath || loading ? 'opacity-40 scale-95 blur-sm' : 'opacity-100 scale-100 blur-0'} animate-in fade-in`} 
           onError={() => {
-             if (src !== convertFileSrc(path)) {
-                setSrc(convertFileSrc(path));
+             const fallback = assetSrc(path);
+             if (src !== fallback) {
+                setSrc(fallback);
              }
           }}
         />

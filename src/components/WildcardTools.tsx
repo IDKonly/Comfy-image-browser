@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef } from "react";
-import { invoke } from "@tauri-apps/api/core";
+import { api } from "../api";
 import { listen } from "@tauri-apps/api/event";
 import { open, save } from "@tauri-apps/plugin-dialog";
 import { LazyStore } from "@tauri-apps/plugin-store";
@@ -34,7 +34,7 @@ const MergeFilterModal = ({ onMerge, onClose }: MergeFilterModalProps) => {
           <button onClick={onClose} className="p-2 hover:bg-white/5 rounded-full"><X className="w-4 h-4" /></button>
         </div>
         <div className="p-6 space-y-4">
-            <p className="text-[10px] text-neutral-500 font-bold uppercase">Paste tags (comma or newline separated)</p>
+            <p className="text-[10px] text-neutral-300 font-bold uppercase">Paste tags (comma or newline separated)</p>
             <textarea 
                 value={input} 
                 onChange={e => setInput(e.target.value)}
@@ -135,7 +135,7 @@ export const WildcardTools = ({ onClose, images, currentIndex, batchRange }: Wil
           const loadedFilter = { ...currentFilter };
           for (const file of files) {
             try {
-              const content = await invoke("read_filter_file", { name: file.name }) as string;
+              const content = await api.readFilterFile(file.name);
               if (content) {
                 (loadedFilter as any)[file.key] = content.split(',').map((s: string) => s.trim()).filter((s: string) => s);
               }
@@ -230,10 +230,7 @@ export const WildcardTools = ({ onClose, images, currentIndex, batchRange }: Wil
     const newPaths: string[] = [];
 
     try {
-        const result = await invoke("scan_paths", { 
-            paths, 
-            recursive: recursiveRef.current 
-        }) as any[];
+        const result = await api.scanPaths(paths, recursiveRef.current);
         if (result && Array.isArray(result)) {
             const imgPaths = result.map((img: any) => img.path);
             newPaths.push(...imgPaths);
@@ -283,21 +280,21 @@ export const WildcardTools = ({ onClose, images, currentIndex, batchRange }: Wil
 
       let res: string[] = [];
       if (comparisonPath || comparisonPrompts.length > 0) {
-          res = await invoke("compare_tags", { 
-              targetPaths, 
+          res = await api.compareTags({
+              targetPaths,
               targetPrompts: prompts,
               comparisonPaths: comparisonPath ? [comparisonPath] : [],
               comparisonPrompts,
               threshold,
               filter
-          }) as string[];
+          });
       } else {
-          res = await invoke("generate_wildcards", { 
-            paths: targetPaths, 
+          res = await api.generateWildcards({
+            paths: targetPaths,
             prompts,
-            threshold, 
-            filter 
-          }) as string[];
+            threshold,
+            filter
+          });
       }
       
       setResults(res);
@@ -333,7 +330,7 @@ export const WildcardTools = ({ onClose, images, currentIndex, batchRange }: Wil
       // Fetch counts from images
       let counts: Record<string, number> = {};
       if (targetPaths.length > 0) {
-        counts = await invoke("get_tag_counts", { paths: targetPaths }) as Record<string, number>;
+        counts = await api.getTagCounts(targetPaths);
       }
       
       // Merge counts from text prompts
@@ -357,7 +354,7 @@ export const WildcardTools = ({ onClose, images, currentIndex, batchRange }: Wil
   const saveFilterList = async (key: keyof FilterState, filename: string) => {
     try {
         const content = (filter[key] as string[]).join(', ');
-        await invoke("write_filter_file", { name: filename, content });
+        await api.writeFilterFile(filename, content);
         showToast(`Saved ${filename}`, 'success');
     } catch (e: any) {
         showToast(e.toString(), 'error');
@@ -377,7 +374,7 @@ export const WildcardTools = ({ onClose, images, currentIndex, batchRange }: Wil
         defaultPath: 'wildcards.txt'
       });
       if (path) {
-        await invoke("save_to_file", { path, content: results.join('\n') });
+        await api.saveToFile(path, results.join('\n'));
         showToast("Exported successfully", "success");
       }
     } catch (e: any) {
@@ -400,36 +397,36 @@ export const WildcardTools = ({ onClose, images, currentIndex, batchRange }: Wil
             <div className="w-10 h-10 bg-blue-600/20 rounded-xl flex items-center justify-center">
               <Wand2 className="w-5 h-5 text-blue-500" />
             </div>
-            <div>
-              <h2 className="text-sm font-black uppercase tracking-widest">Wildcard Workshop</h2>
-              <p className="text-[10px] text-neutral-500 font-bold uppercase">Mixed Input Analysis (Images + Text)</p>
+            <div className="min-w-0">
+              <h2 className="text-sm font-black uppercase tracking-widest truncate">Wildcard Workshop</h2>
+              <p className="text-[10px] text-neutral-300 font-bold uppercase truncate">Mixed Input Analysis (Images + Text)</p>
             </div>
           </div>
-          <button onClick={onClose} className="p-2 hover:bg-white/5 rounded-full transition-colors">
+          <button onClick={onClose} className="w-11 h-11 flex items-center justify-center hover:bg-white/5 rounded-full transition-colors shrink-0">
             <X className="w-5 h-5" />
           </button>
         </div>
 
-        <div className="flex flex-1 overflow-hidden">
+        <div className="flex flex-col lg:flex-row flex-1 overflow-y-auto lg:overflow-hidden scrollbar-thin">
           {/* Combined Sidebar */}
-          <div className="w-80 border-r border-white/5 flex flex-col overflow-hidden bg-neutral-950/20">
+          <div className="w-full lg:w-80 border-b lg:border-b-0 lg:border-r border-white/5 flex flex-col bg-solid-nested shrink-0">
             {/* Top: Image List */}
-            <div className="h-1/2 flex flex-col border-b border-white/5 overflow-hidden">
-                <div className="p-4 border-b border-white/5 flex items-center justify-between shrink-0 bg-neutral-900/50">
-                    <span className="text-[10px] font-black uppercase tracking-widest text-neutral-500">Target Images ({targetPaths.length})</span>
-                    <button onClick={clearPaths} className="text-[9px] font-black uppercase text-red-500 hover:text-red-400 transition-colors">Clear</button>
+            <div className="h-[250px] lg:h-1/2 flex flex-col border-b border-white/5 overflow-hidden shrink-0">
+                <div className="p-4 border-b border-white/5 flex items-center justify-between shrink-0 bg-solid-panel">
+                    <span className="text-[10px] font-black uppercase tracking-widest text-neutral-300">Target Images ({targetPaths.length})</span>
+                    <button onClick={clearPaths} className="text-[9px] font-black uppercase text-red-500 hover:text-red-400 transition-colors min-h-[44px] h-11 px-3 flex items-center justify-center">Clear</button>
                 </div>
                 
-                <div className="p-3 grid grid-cols-1 gap-2 border-b border-white/5 bg-neutral-950/20 shrink-0">
-                    <button onClick={handleImportFromViewer} className="flex items-center justify-center gap-2 py-1.5 bg-blue-600/20 hover:bg-blue-600/30 border border-blue-500/20 rounded-lg text-[9px] font-black uppercase transition-all text-blue-400">
-                        <LayoutGrid className="w-3 h-3" /> Import from Viewer
+                <div className="p-3 grid grid-cols-1 gap-2 border-b border-white/5 bg-solid-nested shrink-0">
+                    <button onClick={handleImportFromViewer} className="flex items-center justify-center gap-2 py-2.5 min-h-[44px] bg-[#1a2333] hover:bg-[#25354c] border border-blue-500/20 rounded-lg text-[9px] font-black uppercase transition-all text-blue-400">
+                        <LayoutGrid className="w-3.5 h-3.5" /> Import from Viewer
                     </button>
                     <div className="grid grid-cols-2 gap-2">
-                        <button onClick={handleAddFiles} className="flex items-center justify-center gap-2 py-1.5 bg-neutral-800 hover:bg-neutral-700 rounded-lg text-[9px] font-black uppercase transition-all">
-                            <FilePlus className="w-3 h-3" /> Files
+                        <button onClick={handleAddFiles} className="flex items-center justify-center gap-2 py-2.5 min-h-[44px] bg-neutral-800 hover:bg-neutral-700 rounded-lg text-[9px] font-black uppercase transition-all">
+                            <FilePlus className="w-3.5 h-3.5" /> Files
                         </button>
-                        <button onClick={handleAddFolder} className="flex items-center justify-center gap-2 py-1.5 bg-neutral-800 hover:bg-neutral-700 rounded-lg text-[9px] font-black uppercase transition-all">
-                            <FolderPlus className="w-3 h-3" /> Folder
+                        <button onClick={handleAddFolder} className="flex items-center justify-center gap-2 py-2.5 min-h-[44px] bg-neutral-800 hover:bg-neutral-700 rounded-lg text-[9px] font-black uppercase transition-all">
+                            <FolderPlus className="w-3.5 h-3.5" /> Folder
                         </button>
                     </div>
                 </div>
@@ -451,7 +448,7 @@ export const WildcardTools = ({ onClose, images, currentIndex, batchRange }: Wil
                                             <div style={style} className="pr-2 pb-1">
                                                 <div className="group flex items-center justify-between p-1.5 bg-neutral-800/50 hover:bg-neutral-800 rounded border border-transparent hover:border-white/5 transition-all h-full">
                                                     <span className="text-[9px] text-neutral-400 truncate flex-1 pr-2">{p.split(/[\\/]/).pop()}</span>
-                                                    <button onClick={() => removePath(p)} className="opacity-0 group-hover:opacity-100 p-1 hover:bg-red-900/20 rounded text-red-500"><Trash2 className="w-3 h-3" /></button>
+                                                    <button onClick={() => removePath(p)} className="opacity-0 group-hover:opacity-100 w-11 h-11 flex items-center justify-center hover:bg-red-900/20 rounded text-red-500 shrink-0"><Trash2 className="w-3.5 h-3.5" /></button>
                                                 </div>
                                             </div>
                                         );
@@ -460,7 +457,7 @@ export const WildcardTools = ({ onClose, images, currentIndex, batchRange }: Wil
                             )}
                         </AutoSizer>
                     ) : (
-                        <div className="flex flex-col items-center justify-center h-full opacity-20 p-4 text-center">
+                        <div className="flex flex-col items-center justify-center h-full p-4 text-center bg-solid-nested rounded-2xl text-neutral-200">
                             <p className="text-[8px] font-bold uppercase tracking-wider leading-relaxed">No images</p>
                         </div>
                     )}
@@ -468,19 +465,19 @@ export const WildcardTools = ({ onClose, images, currentIndex, batchRange }: Wil
             </div>
 
             {/* Bottom: Text Input */}
-            <div className="h-1/2 flex flex-col overflow-hidden bg-neutral-950/40">
-                <div className="p-4 border-b border-white/5 flex items-center justify-between shrink-0 bg-neutral-900/50">
-                    <span className="text-[10px] font-black uppercase tracking-widest text-neutral-500">Text Prompts</span>
+            <div className="h-[200px] lg:h-1/2 flex flex-col overflow-hidden bg-solid-base shrink-0">
+                <div className="p-4 border-b border-white/5 flex items-center justify-between shrink-0 bg-solid-panel">
+                    <span className="text-[10px] font-black uppercase tracking-widest text-neutral-300">Text Prompts</span>
                     <div className="flex gap-2">
-                        <button onClick={handleLoadTextFile} className="text-[9px] font-black uppercase text-blue-500 hover:text-blue-400 transition-colors">Import</button>
-                        <button onClick={() => setTextInput("")} className="text-[9px] font-black uppercase text-red-500 hover:text-red-400 transition-colors">Clear</button>
+                        <button onClick={handleLoadTextFile} className="text-[9px] font-black uppercase text-blue-500 hover:text-blue-400 transition-colors min-h-[44px] h-11 px-3 flex items-center justify-center">Import</button>
+                        <button onClick={() => setTextInput("")} className="text-[9px] font-black uppercase text-red-500 hover:text-red-400 transition-colors min-h-[44px] h-11 px-3 flex items-center justify-center">Clear</button>
                     </div>
                 </div>
                 <div className="flex-1 p-3">
                     <textarea 
                         value={textInput}
                         onChange={e => setTextInput(e.target.value)}
-                        className="w-full h-full bg-neutral-950/50 border border-white/5 rounded-xl p-3 text-[10px] font-mono focus:outline-none focus:border-blue-500/50 resize-none scrollbar-thin"
+                        className="w-full h-full bg-solid-base border border-white/5 rounded-xl p-3 text-[10px] font-mono focus:outline-none focus:border-blue-500/50 resize-none scrollbar-thin"
                         placeholder="1girl, solo, baelz...&#10;1girl, solo, marine..."
                     />
                 </div>
@@ -488,8 +485,8 @@ export const WildcardTools = ({ onClose, images, currentIndex, batchRange }: Wil
           </div>
 
           {/* Main Content Area */}
-          <div className="flex-1 flex flex-col overflow-hidden bg-neutral-900/50">
-            <div className="p-6 flex-1 overflow-y-auto space-y-6 scrollbar-thin">
+          <div className="w-full lg:flex-1 flex flex-col lg:overflow-hidden bg-solid-surface-elevated">
+            <div className="p-6 flex-1 lg:overflow-y-auto space-y-6 scrollbar-thin">
               
               {/* Progress Bar Area */}
               {loading && (
@@ -505,22 +502,22 @@ export const WildcardTools = ({ onClose, images, currentIndex, batchRange }: Wil
               )}
 
               {/* Cleaning Base Section (Integrated) */}
-              <div className="grid grid-cols-2 gap-4 bg-amber-600/5 border border-amber-500/10 p-4 rounded-2xl">
+              <div className="grid grid-cols-2 gap-4 bg-[#241a10] border border-[#4a351a] p-4 rounded-2xl">
                 <div className="col-span-2 flex items-center gap-2 mb-1">
-                    <span className="text-[10px] font-black uppercase text-amber-500/70 tracking-widest">Cleaning Base (Subtract Common Tags)</span>
-                    <Info className="w-3 h-3 text-amber-600" />
+                    <span className="text-[10px] font-black uppercase text-amber-400 tracking-widest">Cleaning Base (Subtract Common Tags)</span>
+                    <Info className="w-3 h-3 text-amber-500" />
                 </div>
                 {/* Base Image */}
-                <div className="space-y-2">
-                    <span className="text-[8px] font-black uppercase text-neutral-600 tracking-widest">Base Image</span>
+                 <div className="space-y-2">
+                    <span className="text-[8px] font-black uppercase text-neutral-400 tracking-widest">Base Image</span>
                     <div className={`p-3 rounded-xl border min-h-[50px] flex items-center justify-between transition-all ${comparisonPath ? 'bg-neutral-950 border-amber-500/30 shadow-[inner_0_2px_4px_rgba(0,0,0,0.3)]' : 'bg-neutral-950 border-white/5'}`}>
                         <span className="text-[10px] text-neutral-400 truncate">{comparisonPath ? comparisonPath.split(/[\\/]/).pop() : "Drag image here"}</span>
-                        {comparisonPath && <button onClick={() => setComparisonPath(null)} className="p-1 hover:bg-red-900/20 rounded text-red-500"><X className="w-3 h-3" /></button>}
+                        {comparisonPath && <button onClick={() => setComparisonPath(null)} className="w-11 h-11 flex items-center justify-center hover:bg-red-900/20 rounded text-red-500 shrink-0"><X className="w-4 h-4" /></button>}
                     </div>
                 </div>
                 {/* Subtractive Text */}
                 <div className="space-y-2">
-                    <span className="text-[8px] font-black uppercase text-neutral-600 tracking-widest">Subtractive Tags</span>
+                    <span className="text-[8px] font-black uppercase text-neutral-400 tracking-widest">Subtractive Tags</span>
                     <textarea 
                         value={comparisonText}
                         onChange={e => setComparisonText(e.target.value)}
@@ -533,30 +530,30 @@ export const WildcardTools = ({ onClose, images, currentIndex, batchRange }: Wil
               {/* Settings Area */}
               <div className="space-y-3">
                   {/* Main Settings Row */}
-                  <div className="grid grid-cols-5 gap-4">
+                  <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-3 lg:gap-4">
                     {!filter.simple_mode && (
                       <>
                         <div className="col-span-1 bg-neutral-950 p-3 rounded-2xl border border-white/5 flex flex-col justify-center">
                             <div className="flex items-center justify-between mb-2">
-                                <span className="text-[10px] font-black uppercase text-neutral-500 tracking-wider">Similarity</span>
+                                <span className="text-[10px] font-black uppercase text-neutral-400 tracking-wider">Similarity</span>
                                 <span className="text-[11px] font-mono text-blue-400 font-bold">{threshold.toFixed(2)}</span>
                             </div>
-                            <input type="range" min="0" max="1" step="0.05" value={threshold} onChange={e => setThreshold(parseFloat(e.target.value))} className="w-full accent-blue-600" />
+                            <input type="range" min="0" max="1" step="0.05" value={threshold} onChange={e => setThreshold(parseFloat(e.target.value))} aria-label="Similarity Threshold" className="w-full accent-blue-600" />
                         </div>
                         <div className="bg-neutral-950 p-3 rounded-2xl border border-white/5 flex flex-col justify-center">
-                            <label className="text-[8px] font-black uppercase text-neutral-600 mb-1 block tracking-widest">Max Words/Tag</label>
-                            <input type="number" value={filter.max_words} onChange={e => setFilter({...filter, max_words: parseInt(e.target.value)})} className="bg-transparent text-[11px] font-bold text-neutral-300 w-full focus:outline-none" />
+                            <label className="text-[8px] font-black uppercase text-neutral-400 mb-1 block tracking-widest">Max Words/Tag</label>
+                            <input type="number" value={filter.max_words} onChange={e => setFilter({...filter, max_words: parseInt(e.target.value)})} aria-label="Max Words Per Tag" className="bg-transparent text-[11px] font-bold text-neutral-300 w-full focus:outline-none" />
                         </div>
                         <div className="bg-neutral-950 p-3 rounded-2xl border border-white/5 flex flex-col justify-center">
-                            <label className="text-[8px] font-black uppercase text-neutral-600 mb-1 block tracking-widest">Min Tags/Group</label>
-                            <input type="number" value={filter.min_tags} onChange={e => setFilter({...filter, min_tags: parseInt(e.target.value)})} className="bg-transparent text-[11px] font-bold text-neutral-300 w-full focus:outline-none" />
+                            <label className="text-[8px] font-black uppercase text-neutral-400 mb-1 block tracking-widest">Min Tags/Group</label>
+                            <input type="number" value={filter.min_tags} onChange={e => setFilter({...filter, min_tags: parseInt(e.target.value)})} aria-label="Min Tags Per Group" className="bg-transparent text-[11px] font-bold text-neutral-300 w-full focus:outline-none" />
                         </div>
                         <div className="bg-neutral-950 p-3 rounded-2xl border border-white/5 flex flex-col justify-center relative group">
                             <div className="flex items-center justify-between mb-1">
-                                <label className="text-[8px] font-black uppercase text-neutral-600 block tracking-widest">Max Depth</label>
+                                <label className="text-[8px] font-black uppercase text-neutral-400 block tracking-widest">Max Depth</label>
                                 <Info className="w-2.5 h-2.5 text-neutral-700 cursor-help" />
                             </div>
-                            <input type="number" value={filter.max_depth} onChange={e => setFilter({...filter, max_depth: parseInt(e.target.value)})} className="bg-transparent text-[11px] font-bold text-neutral-300 w-full focus:outline-none" />
+                            <input type="number" value={filter.max_depth} onChange={e => setFilter({...filter, max_depth: parseInt(e.target.value)})} aria-label="Max Recursive Depth" className="bg-transparent text-[11px] font-bold text-neutral-300 w-full focus:outline-none" />
                             <div className="absolute left-0 bottom-full mb-2 w-48 p-2 bg-neutral-900 border border-white/10 rounded-lg text-[8px] text-neutral-400 opacity-0 group-hover:opacity-100 transition-opacity pointer-events-none z-10 shadow-2xl leading-tight">
                                 Limits recursive pattern matching to prevent errors. Lower values result in flatter, simpler wildcards.
                             </div>
@@ -564,7 +561,7 @@ export const WildcardTools = ({ onClose, images, currentIndex, batchRange }: Wil
                       </>
                     )}
                     {filter.simple_mode && (
-                      <div className="col-span-4 bg-amber-600/5 border border-amber-500/20 rounded-2xl p-4 flex flex-col justify-center">
+                      <div className="col-span-1 sm:col-span-2 md:col-span-4 bg-amber-600/5 border border-amber-500/20 rounded-2xl p-4 flex flex-col justify-center">
                         <div className="flex items-center justify-between mb-2">
                           <span className="text-[10px] font-black uppercase text-amber-500 tracking-wider">Simple Exclusions</span>
                           <span className="text-[8px] text-amber-600 font-bold uppercase">Only basic string removal logic is applied</span>
@@ -580,16 +577,16 @@ export const WildcardTools = ({ onClose, images, currentIndex, batchRange }: Wil
                     <div className="flex flex-col gap-2">
                       <button 
                           onClick={() => setFilter({...filter, simple_mode: !filter.simple_mode})}
-                          className={`flex-1 rounded-xl border flex flex-col items-center justify-center transition-all ${filter.simple_mode ? 'bg-amber-600 border-amber-500 text-white shadow-lg shadow-amber-600/20' : 'bg-neutral-950 border-white/5 text-neutral-500 hover:text-neutral-300'}`}
+                          className={`flex-1 py-1 rounded-xl border flex flex-col items-center justify-center transition-all min-h-[44px] ${filter.simple_mode ? 'bg-amber-600 border-amber-500 text-white shadow-lg shadow-amber-600/20' : 'bg-neutral-950 border-white/5 text-neutral-400 hover:text-neutral-200'}`}
                       >
-                          <label className={`text-[8px] font-black uppercase mb-0.5 block tracking-widest cursor-pointer ${filter.simple_mode ? 'text-amber-100' : 'text-neutral-600'}`}>Simple Mode</label>
+                          <label className={`text-[8px] font-black uppercase mb-0.5 block tracking-widest cursor-pointer ${filter.simple_mode ? 'text-amber-100' : 'text-neutral-400'}`}>Simple Mode</label>
                           <span className="text-[9px] font-black uppercase">{filter.simple_mode ? 'Enabled' : 'Disabled'}</span>
                       </button>
                       <button 
                           onClick={() => setFilter({...filter, mix_mode: !filter.mix_mode})}
-                          className={`flex-1 rounded-xl border flex flex-col items-center justify-center transition-all ${filter.mix_mode ? 'bg-indigo-600 border-indigo-500 text-white shadow-lg shadow-indigo-600/20' : 'bg-neutral-950 border-white/5 text-neutral-500 hover:text-neutral-300'}`}
+                          className={`flex-1 py-1 rounded-xl border flex flex-col items-center justify-center transition-all min-h-[44px] ${filter.mix_mode ? 'bg-indigo-600 border-indigo-500 text-white shadow-lg shadow-indigo-600/20' : 'bg-neutral-950 border-white/5 text-neutral-400 hover:text-neutral-200'}`}
                       >
-                          <label className={`text-[8px] font-black uppercase mb-0.5 block tracking-widest cursor-pointer ${filter.mix_mode ? 'text-indigo-100' : 'text-neutral-600'}`}>Mix Mode</label>
+                          <label className={`text-[8px] font-black uppercase mb-0.5 block tracking-widest cursor-pointer ${filter.mix_mode ? 'text-indigo-100' : 'text-neutral-400'}`}>Mix Mode</label>
                           <span className="text-[9px] font-black uppercase">{filter.mix_mode ? 'Enabled' : 'Disabled'}</span>
                       </button>
                     </div>
@@ -655,10 +652,10 @@ export const WildcardTools = ({ onClose, images, currentIndex, batchRange }: Wil
               <div className="space-y-4 pt-4 border-t border-white/5">
                 <button 
                     onClick={() => setShowFilters(!showFilters)}
-                    className="flex items-center gap-2 text-[10px] font-black uppercase tracking-widest text-neutral-500 hover:text-neutral-300 transition-colors"
+                    className="flex items-center justify-between w-full min-h-[44px] px-4 py-2.5 bg-solid-element border border-white/5 hover:bg-solid-active rounded-xl text-[10px] font-black uppercase tracking-widest text-neutral-300 transition-all"
                 >
-                    {showFilters ? <ChevronUp className="w-3.5 h-3.5" /> : <ChevronDown className="w-3.5 h-3.5" />}
-                    Exclusion Filters
+                    <span className="flex items-center gap-2">Exclusion Filters</span>
+                    {showFilters ? <ChevronUp className="w-4 h-4 text-neutral-400" /> : <ChevronDown className="w-4 h-4 text-neutral-400" />}
                 </button>
                 
                 {showFilters && (
@@ -672,11 +669,11 @@ export const WildcardTools = ({ onClose, images, currentIndex, batchRange }: Wil
                                 <div className="flex items-center justify-between">
                                     <span className="text-[9px] font-bold uppercase text-neutral-500">{f.label}</span>
                                     <div className="flex gap-1">
-                                        <button onClick={() => setMergeTarget(f.id as any)} className="p-1 hover:bg-white/5 rounded transition-colors" title="Merge from text/file">
-                                            <FileUp className="w-3 h-3 text-neutral-600 hover:text-blue-400" />
+                                        <button onClick={() => setMergeTarget(f.id as any)} className="w-11 h-11 flex items-center justify-center hover:bg-white/5 rounded-xl transition-all" title="Merge from text/file">
+                                            <FileUp className="w-4 h-4 text-neutral-600 hover:text-blue-400" />
                                         </button>
-                                        <button onClick={() => saveFilterList(f.id as any, f.filename)} className="p-1 hover:bg-white/5 rounded transition-colors" title="Save as Default">
-                                            <Save className="w-3 h-3 text-neutral-600 hover:text-blue-400" />
+                                        <button onClick={() => saveFilterList(f.id as any, f.filename)} className="w-11 h-11 flex items-center justify-center hover:bg-white/5 rounded-xl transition-all" title="Save as Default">
+                                            <Save className="w-4 h-4 text-neutral-600 hover:text-blue-400" />
                                         </button>
                                     </div>
                                 </div>
@@ -735,7 +732,7 @@ export const WildcardTools = ({ onClose, images, currentIndex, batchRange }: Wil
                 // Auto-save exact match filter
                 try {
                     const content = excluded.join(', ');
-                    await invoke("write_filter_file", { name: 'default_exact_exclusion.txt', content });
+                    await api.writeFilterFile('default_exact_exclusion.txt', content);
                     showToast(`Applied & Saved ${excluded.length} exclusions`, 'success');
                 } catch (e: any) {
                     showToast(`Applied but failed to save: ${e}`, 'error');

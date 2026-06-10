@@ -21,13 +21,15 @@ pub struct TwitterSettings {
     pub phrases_to_pick: Vec<String>,
     #[serde(alias = "auto_copy_image")]
     pub auto_copy_image: bool,
-    #[serde(alias = "api_key")]
+    // Credentials are kept in the OS keychain (see secrets.rs); these remain on the struct
+    // only for backward-compatible deserialization and are no longer read during upload.
+    #[serde(alias = "api_key", default)]
     pub api_key: String,
-    #[serde(alias = "api_secret")]
+    #[serde(alias = "api_secret", default)]
     pub api_secret: String,
-    #[serde(alias = "access_token")]
+    #[serde(alias = "access_token", default)]
     pub access_token: String,
-    #[serde(alias = "access_secret")]
+    #[serde(alias = "access_secret", default)]
     pub access_secret: String,
 }
 
@@ -167,12 +169,14 @@ fn format_character_hashtags(prompt: &str) -> String {
 
 #[tauri::command]
 pub fn twitter_upload(
-    app_handle: AppHandle, 
+    app_handle: AppHandle,
     watcher_state: tauri::State<'_, crate::scanner::WatcherState>,
-    path: String, 
+    path: String,
     settings: TwitterSettings
-) -> Result<(), String> {
+) -> Result<String, String> {
     crate::scanner::validate_path(&path, &watcher_state)?;
+    // Credentials are loaded from the OS keychain, never from the (non-secret) settings payload.
+    let secrets = crate::secrets::load_twitter_secrets_internal();
     let metadata = read_metadata(&path).map_err(|e| e.to_string())?;
     
     let mut phrases_found = Vec::new();
@@ -211,7 +215,7 @@ pub fn twitter_upload(
         }
         
         // If API keys are missing, fallback to clipboard + browser
-        if settings.api_key.is_empty() || settings.access_token.is_empty() {
+        if !secrets.is_complete() {
             let mut clipboard = Clipboard::new().map_err(|e| e.to_string())?;
             
             // 1. Copy image to clipboard first
@@ -232,7 +236,7 @@ pub fn twitter_upload(
             let intent_url = format!("https://x.com/intent/post?text={}", encoded_text);
             
             app_handle.opener().open_url(intent_url, None::<String>).map_err(|e| e.to_string())?;
-            return Ok(());
+            return Ok("clipboard".to_string());
         }
     
         // Standard API Upload Logic
@@ -246,7 +250,7 @@ pub fn twitter_upload(
             ("total_bytes".to_string(), file_size.to_string()),
             ("media_type".to_string(), "image/png".to_string()), // Simplified for now
         ];
-        let auth_header = generate_oauth_header("POST", media_upload_url, &params, &settings.api_key, &settings.api_secret, &settings.access_token, &settings.access_secret);
+        let auth_header = generate_oauth_header("POST", media_upload_url, &params, &secrets.api_key, &secrets.api_secret, &secrets.access_token, &secrets.access_secret);
         let resp = client.post(media_upload_url)
             .header("Authorization", auth_header)
             .form(&params)
@@ -265,7 +269,7 @@ pub fn twitter_upload(
             ("media_id".to_string(), media_id_string.clone()),
             ("segment_index".to_string(), "0".to_string()),
         ];
-        let auth_header_append = generate_oauth_header("POST", media_upload_url, &params_append, &settings.api_key, &settings.api_secret, &settings.access_token, &settings.access_secret);
+        let auth_header_append = generate_oauth_header("POST", media_upload_url, &params_append, &secrets.api_key, &secrets.api_secret, &secrets.access_token, &secrets.access_secret);
         
         let part = reqwest::blocking::multipart::Part::bytes(buffer).file_name("blob");
         let form = reqwest::blocking::multipart::Form::new()
@@ -284,7 +288,7 @@ pub fn twitter_upload(
             ("command".to_string(), "FINALIZE".to_string()),
             ("media_id".to_string(), media_id_string.clone()),
         ];
-        let auth_header_fin = generate_oauth_header("POST", media_upload_url, &params_fin, &settings.api_key, &settings.api_secret, &settings.access_token, &settings.access_secret);
+        let auth_header_fin = generate_oauth_header("POST", media_upload_url, &params_fin, &secrets.api_key, &secrets.api_secret, &secrets.access_token, &secrets.access_secret);
         client.post(media_upload_url)
             .header("Authorization", auth_header_fin)
             .form(&params_fin)
@@ -301,7 +305,7 @@ pub fn twitter_upload(
             }
         });
     
-    let auth_header_tweet = generate_oauth_header("POST", tweet_url, &[], &settings.api_key, &settings.api_secret, &settings.access_token, &settings.access_secret);
+    let auth_header_tweet = generate_oauth_header("POST", tweet_url, &[], &secrets.api_key, &secrets.api_secret, &secrets.access_token, &secrets.access_secret);
     let resp_tweet = client.post(tweet_url)
         .header("Authorization", auth_header_tweet)
         .json(&json_body)
@@ -312,6 +316,6 @@ pub fn twitter_upload(
         return Err(format!("Tweet failed: {}", err_text));
     }
 
-    Ok(())
+    Ok("api".to_string())
 }
 

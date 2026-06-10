@@ -7,6 +7,7 @@ mod wildcard;
 mod twitter;
 mod crop;
 mod mobile_server;
+mod secrets;
 #[cfg(test)]
 mod benchmarks;
 
@@ -102,6 +103,7 @@ pub fn run() {
             scanner::get_batch_range,
             scanner::search_images,
             scanner::search_advanced_images,
+            scanner::search_similar_images,
             scanner::get_tag_suggestions,
             scanner::get_filter_options,
             db::get_db_status,
@@ -126,6 +128,10 @@ pub fn run() {
             wildcard::save_to_file,
             wildcard::classify_prompts_command,
             twitter::twitter_upload,
+            secrets::save_twitter_secrets,
+            secrets::load_twitter_secrets,
+            secrets::has_twitter_secrets,
+            secrets::delete_twitter_secrets,
             crop::process_batch_crop,
             mobile_server::update_mobile_server,
             mobile_server::get_local_ip

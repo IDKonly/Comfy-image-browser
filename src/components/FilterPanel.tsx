@@ -1,11 +1,6 @@
 import { useState, useEffect } from "react";
-import { invoke } from "@tauri-apps/api/core";
+import { api, FilterOptions } from "../api";
 import { X, Filter, ChevronDown } from "lucide-react";
-
-interface FilterOptions {
-  models: string[];
-  samplers: string[];
-}
 
 interface FilterPanelProps {
   folderPath: string | null;
@@ -20,8 +15,8 @@ export const FilterPanel = ({ folderPath, onFilterChange, onClose }: FilterPanel
 
   useEffect(() => {
     if (folderPath) {
-      invoke("get_filter_options", { folder: folderPath })
-        .then((res) => setOptions(res as FilterOptions))
+      api.getFilterOptions(folderPath)
+        .then((res) => setOptions(res))
         .catch(console.error);
     }
   }, [folderPath]);

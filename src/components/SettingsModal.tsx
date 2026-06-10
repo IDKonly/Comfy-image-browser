@@ -1,6 +1,6 @@
 import { X, Keyboard, History, Zap, Smartphone, Link, Plus, Trash2 } from "lucide-react";
-import { Shortcuts, DEFAULT_SHORTCUTS, useAppStore } from "../store/useAppStore";
-import { invoke } from "@tauri-apps/api/core";
+import { Shortcuts, DEFAULT_SHORTCUTS, SortMethod, useAppStore } from "../store/useAppStore";
+import { api } from "../api";
 import { open, confirm } from "@tauri-apps/plugin-dialog";
 import { useState, useEffect } from "react";
 
@@ -34,11 +34,22 @@ export const SettingsModal = ({
   const { imageCacheSize, setImageCacheSize, mobileServerSettings, setMobileServerSettings } = useAppStore();
   const [localIp, setLocalIp] = useState<string | null>(null);
 
+  // Twitter/X credentials live in the OS keychain, not in the persisted store.
+  const [twitterSecrets, setTwitterSecrets] = useState({ apiKey: '', apiSecret: '', accessToken: '', accessSecret: '' });
+
   useEffect(() => {
     if (show && mobileServerSettings.enabled) {
-      invoke("get_local_ip").then(ip => setLocalIp(ip as string)).catch(() => setLocalIp(null));
+      api.getLocalIp().then(ip => setLocalIp(ip)).catch(() => setLocalIp(null));
     }
   }, [show, mobileServerSettings.enabled]);
+
+  useEffect(() => {
+    if (show) {
+      api.loadTwitterSecrets()
+        .then(s => setTwitterSecrets(s))
+        .catch(() => {});
+    }
+  }, [show]);
 
   if (!show) return null;
 
@@ -53,6 +64,10 @@ export const SettingsModal = ({
                 ...mobileServerSettings,
                 authorizedFolders: [...currentFolders, selected]
             });
+            showToast(`Indexing folder in background: ${selected}`, "info");
+            api.scanDirectory(selected, "NameAsc", true)
+                .then(() => showToast(`Successfully indexed authorized folder: ${selected}`, "success"))
+                .catch(e => showToast(`Failed to index folder: ${e}`, "error"));
         }
     }
   };
@@ -171,13 +186,10 @@ export const SettingsModal = ({
                     <button 
                         onClick={() => {
                             const { recentFolders } = useAppStore.getState();
-                            invoke("update_mobile_server", { 
-                                settings: {
-                                    ...mobileServerSettings,
-                                    authorizedFolders: mobileServerSettings.authorizedFolders || []
-                                }, 
-                                recentFolders: recentFolders 
-                            }).then(() => showToast("Manual sync success", "success"))
+                            api.updateMobileServer(
+                                { ...mobileServerSettings, authorizedFolders: mobileServerSettings.authorizedFolders || [] },
+                                recentFolders
+                            ).then(() => showToast("Manual sync success", "success"))
                               .catch(e => showToast(`Sync failed: ${e}`, "error"));
                         }}
                         className="text-[8px] font-black uppercase text-blue-500 hover:text-blue-400 underline underline-offset-4"
@@ -219,27 +231,42 @@ export const SettingsModal = ({
           <div className="space-y-4 pt-6 border-t border-white/5">
             <h4 className="text-[10px] font-black uppercase tracking-[0.2em] text-blue-500">Twitter (X) Integration</h4>
             <p className="text-[9px] text-neutral-500 italic mb-4 leading-relaxed">
-                Leave API keys empty to use the **Clipboard + Browser** method. 
+                Leave API keys empty to use the **Clipboard + Browser** method.
                 Fill them in for **Standard API Direct Upload**.
+                Keys are stored securely in your OS keychain (Windows Credential Manager), not in plain text.
             </p>
             <div className="grid grid-cols-2 gap-3">
               <div className="space-y-2">
                 <label className="text-[8px] font-black uppercase text-neutral-600 block tracking-widest">API Key</label>
-                <input type="password" value={twitterSettings.apiKey} onChange={e => setTwitterSettings({...twitterSettings, apiKey: e.target.value})} className="w-full bg-neutral-950 border border-white/5 rounded-xl px-3 py-2 text-[10px] focus:outline-none focus:border-blue-500/50" />
+                <input type="password" autoComplete="off" value={twitterSecrets.apiKey} onChange={e => setTwitterSecrets({...twitterSecrets, apiKey: e.target.value})} className="w-full bg-neutral-950 border border-white/5 rounded-xl px-3 py-2 text-[10px] focus:outline-none focus:border-blue-500/50" />
               </div>
               <div className="space-y-2">
                 <label className="text-[8px] font-black uppercase text-neutral-600 block tracking-widest">API Secret</label>
-                <input type="password" value={twitterSettings.apiSecret} onChange={e => setTwitterSettings({...twitterSettings, apiSecret: e.target.value})} className="w-full bg-neutral-950 border border-white/5 rounded-xl px-3 py-2 text-[10px] focus:outline-none focus:border-blue-500/50" />
+                <input type="password" autoComplete="off" value={twitterSecrets.apiSecret} onChange={e => setTwitterSecrets({...twitterSecrets, apiSecret: e.target.value})} className="w-full bg-neutral-950 border border-white/5 rounded-xl px-3 py-2 text-[10px] focus:outline-none focus:border-blue-500/50" />
               </div>
               <div className="space-y-2">
                 <label className="text-[8px] font-black uppercase text-neutral-600 block tracking-widest">Access Token</label>
-                <input type="password" value={twitterSettings.accessToken} onChange={e => setTwitterSettings({...twitterSettings, accessToken: e.target.value})} className="w-full bg-neutral-950 border border-white/5 rounded-xl px-3 py-2 text-[10px] focus:outline-none focus:border-blue-500/50" />
+                <input type="password" autoComplete="off" value={twitterSecrets.accessToken} onChange={e => setTwitterSecrets({...twitterSecrets, accessToken: e.target.value})} className="w-full bg-neutral-950 border border-white/5 rounded-xl px-3 py-2 text-[10px] focus:outline-none focus:border-blue-500/50" />
               </div>
               <div className="space-y-2">
                 <label className="text-[8px] font-black uppercase text-neutral-600 block tracking-widest">Access Secret</label>
-                <input type="password" value={twitterSettings.accessSecret} onChange={e => setTwitterSettings({...twitterSettings, accessSecret: e.target.value})} className="w-full bg-neutral-950 border border-white/5 rounded-xl px-3 py-2 text-[10px] focus:outline-none focus:border-blue-500/50" />
+                <input type="password" autoComplete="off" value={twitterSecrets.accessSecret} onChange={e => setTwitterSecrets({...twitterSecrets, accessSecret: e.target.value})} className="w-full bg-neutral-950 border border-white/5 rounded-xl px-3 py-2 text-[10px] focus:outline-none focus:border-blue-500/50" />
               </div>
             </div>
+            <button
+              onClick={async () => {
+                try {
+                  await api.saveTwitterSecrets(twitterSecrets);
+                  const cleared = !twitterSecrets.apiKey && !twitterSecrets.apiSecret && !twitterSecrets.accessToken && !twitterSecrets.accessSecret;
+                  showToast(cleared ? "API keys cleared from secure storage" : "API keys saved to secure storage", "success");
+                } catch (e: any) {
+                  showToast(`Failed to save keys: ${e}`, "error");
+                }
+              }}
+              className="w-full py-2.5 bg-blue-950/10 hover:bg-blue-600 border border-blue-500/20 hover:border-blue-500 rounded-xl text-[10px] font-black uppercase tracking-widest text-blue-500 hover:text-white transition-all"
+            >
+              Save Keys to Secure Storage
+            </button>
             <div className="space-y-3 pt-2">
               <label className="text-[9px] font-bold uppercase text-neutral-500">Post Template</label>
               <textarea 
@@ -273,22 +300,36 @@ export const SettingsModal = ({
           <div className="space-y-4 pt-6 border-t border-white/5">
             <h4 className="text-[10px] font-black uppercase tracking-[0.2em] text-red-500">Database Management</h4>
             <p className="text-[9px] text-neutral-500 italic leading-relaxed">
-                If search results are incorrect or performance is lagging, you can reset the indexing database. 
-                This will force a full re-scan of folders you visit.
+                If search results are incorrect or performance is lagging, you can sync/index your Authorized Folders or reset the entire indexing database.
             </p>
+
+            <button 
+                onClick={async () => {
+                    const folders = mobileServerSettings.authorizedFolders || [];
+                    if (folders.length === 0) {
+                        showToast("No authorized folders configured.", "info");
+                        return;
+                    }
+                    showToast("Indexing all authorized folders in background...", "info");
+                    for (const folder of folders) {
+                        api.scanDirectory(folder, "NameAsc", true)
+                            .then(() => showToast(`Finished indexing: ${folder}`, "success"))
+                            .catch(e => showToast(`Indexing failed for ${folder}: ${e}`, "error"));
+                    }
+                }}
+                className="w-full py-3 bg-blue-950/10 hover:bg-blue-600 border border-blue-500/20 hover:border-blue-500 rounded-2xl text-[10px] font-black uppercase tracking-widest text-blue-500 hover:text-white transition-all flex items-center justify-center gap-2 mb-3 shadow-md"
+            >
+                <History className="w-3.5 h-3.5" /> Index & Sync Authorized Folders
+            </button>
+
             <button 
                 onClick={async () => {
                     if (await confirm("Are you sure you want to CLEAR the entire image database? This will trigger full re-indexing of all folders.")) {
                         try {
-                            await invoke("clear_database");
+                            await api.clearDatabase();
                             if (folderPath) {
                                 showToast("Database Initialized. Full re-indexing current folder...", "success");
-                                const result = await invoke("scan_directory", { 
-                                    path: folderPath, 
-                                    sortMethod, 
-                                    recursive,
-                                    forceReindex: true 
-                                }) as any;
+                                const result = await api.scanDirectory(folderPath, sortMethod as SortMethod, recursive, true);
                                 setImages(result.images);
                             } else {
                                 showToast("Database Initialized.", "success");
@@ -298,7 +339,7 @@ export const SettingsModal = ({
                         }
                     }
                 }}
-                className="w-full py-3 bg-red-950/10 hover:bg-red-600 border border-red-500/20 hover:border-red-500 rounded-2xl text-[10px] font-black uppercase tracking-widest text-red-500 hover:text-white transition-all flex items-center justify-center gap-2"
+                className="w-full py-3 bg-red-950/10 hover:bg-red-600 border border-red-500/20 hover:border-red-500 rounded-2xl text-[10px] font-black uppercase tracking-widest text-red-500 hover:text-white transition-all flex items-center justify-center gap-2 shadow-md"
             >
                 <History className="w-3.5 h-3.5" /> Initialize & Rebuild Database
             </button>
