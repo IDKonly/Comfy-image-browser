@@ -3,57 +3,20 @@ import { api } from "../api";
 import { listen } from "@tauri-apps/api/event";
 import { open, save } from "@tauri-apps/plugin-dialog";
 import { LazyStore } from "@tauri-apps/plugin-store";
-import { X, Wand2, Copy, Info, Trash2, FolderPlus, ListFilter, FilePlus, Save, LayoutGrid, ChevronDown, ChevronUp, Download, FileUp } from "lucide-react";
-// @ts-ignore
-import { FixedSizeList as List } from "react-window";
-import AutoSizer from "react-virtualized-auto-sizer";
+import { X, Wand2, ListFilter } from "lucide-react";
 import { useToast } from "./Toast";
 import { TagRefiner } from "./TagRefiner";
+import { useAppStore, FilterState } from "../store/useAppStore";
+import { splitLines, splitCommaOrNewline, splitCommaTrimNonEmpty, uniqueMerge } from "./wildcardtools/utils";
+import { MergeFilterModal } from "./wildcardtools/MergeFilterModal";
+import { TargetImagesPanel } from "./wildcardtools/TargetImagesPanel";
+import { TextPromptsPanel } from "./wildcardtools/TextPromptsPanel";
+import { CleaningBaseCard } from "./wildcardtools/CleaningBaseCard";
+import { WorkshopSettings } from "./wildcardtools/WorkshopSettings";
+import { ExclusionFiltersSection } from "./wildcardtools/ExclusionFiltersSection";
+import { WorkshopResults } from "./wildcardtools/WorkshopResults";
 
 const settingsStore = new LazyStore(".settings.json");
-
-interface MergeFilterModalProps {
-  onMerge: (tags: string[]) => void;
-  onClose: () => void;
-}
-
-const MergeFilterModal = ({ onMerge, onClose }: MergeFilterModalProps) => {
-  const [input, setInput] = useState("");
-  
-  const processMerge = () => {
-    const tags = input.split(/[,\n]/).map(s => s.trim()).filter(s => s);
-    onMerge(tags);
-    onClose();
-  };
-
-  return (
-    <div className="fixed inset-0 z-[70] bg-black/80 backdrop-blur-xl flex items-center justify-center p-4">
-      <div className="bg-neutral-900 border border-white/10 rounded-3xl w-full max-w-md shadow-2xl overflow-hidden">
-        <div className="p-6 border-b border-white/5 flex items-center justify-between">
-          <h3 className="text-xs font-black uppercase tracking-widest text-white">Merge Tags</h3>
-          <button onClick={onClose} className="p-2 hover:bg-white/5 rounded-full"><X className="w-4 h-4" /></button>
-        </div>
-        <div className="p-6 space-y-4">
-            <p className="text-[10px] text-neutral-300 font-bold uppercase">Paste tags (comma or newline separated)</p>
-            <textarea 
-                value={input} 
-                onChange={e => setInput(e.target.value)}
-                className="w-full h-40 bg-neutral-950 border border-white/5 rounded-2xl p-4 text-[11px] font-mono focus:outline-none focus:border-blue-500/50 resize-none scrollbar-thin"
-                placeholder="tag1, tag2, tag3..."
-            />
-            <button 
-                onClick={processMerge}
-                className="w-full py-3 bg-blue-600 hover:bg-blue-500 rounded-2xl text-[10px] font-black uppercase tracking-widest text-white transition-all shadow-xl"
-            >
-                Merge Into List
-            </button>
-        </div>
-      </div>
-    </div>
-  );
-};
-
-import { useAppStore, FilterState } from "../store/useAppStore";
 
 interface WildcardToolsProps {
   onClose: () => void;
@@ -69,7 +32,7 @@ export const WildcardTools = ({ onClose, images, currentIndex, batchRange }: Wil
   const [progress, setProgress] = useState(0);
   const [textInput, setTextInput] = useState("");
   const [comparisonText, setComparisonText] = useState("");
-  
+
   const targetPaths = useAppStore(state => state.workshopTargetPaths);
   const setTargetPaths = useAppStore(state => state.setWorkshopTargetPaths);
   const filter = useAppStore(state => state.workshopFilter);
@@ -78,7 +41,7 @@ export const WildcardTools = ({ onClose, images, currentIndex, batchRange }: Wil
   const [comparisonPath, setComparisonPath] = useState<string | null>(null);
   const [showFilters, setShowFilters] = useState(false);
   const [recursive, setRecursive] = useState(false);
-  
+
   const [showRefiner, setShowRefiner] = useState(false);
   const [tagCounts, setTagCounts] = useState<Record<string, number>>({});
   const [mergeTarget, setMergeTarget] = useState<keyof FilterState | null>(null);
@@ -105,7 +68,7 @@ export const WildcardTools = ({ onClose, images, currentIndex, batchRange }: Wil
 
       if (savedThreshold != null) setThreshold(savedThreshold);
       if (savedRecursive != null) setRecursive(savedRecursive);
-      
+
       const currentFilter = { ...filter };
       if (savedFilter) {
           Object.assign(currentFilter, savedFilter);
@@ -137,7 +100,7 @@ export const WildcardTools = ({ onClose, images, currentIndex, batchRange }: Wil
             try {
               const content = await api.readFilterFile(file.name);
               if (content) {
-                (loadedFilter as any)[file.key] = content.split(',').map((s: string) => s.trim()).filter((s: string) => s);
+                (loadedFilter as any)[file.key] = splitCommaTrimNonEmpty(content);
               }
             } catch (e) {}
           }
@@ -178,7 +141,7 @@ export const WildcardTools = ({ onClose, images, currentIndex, batchRange }: Wil
       // Check if the wildcard modal is currently in the DOM
       const modal = document.querySelector('[data-wildcard-modal]');
       if (!modal) return;
-      
+
       const payload = event.payload as any;
       const paths = payload.paths as string[];
       if (paths && paths.length > 0) {
@@ -189,9 +152,9 @@ export const WildcardTools = ({ onClose, images, currentIndex, batchRange }: Wil
       }
     });
 
-    return () => { 
+    return () => {
         unlistenProgress.then(f => f());
-        unlistenDrop.then(f => f()); 
+        unlistenDrop.then(f => f());
     };
   }, []);
 
@@ -203,7 +166,7 @@ export const WildcardTools = ({ onClose, images, currentIndex, batchRange }: Wil
   const handleMerge = (newTags: string[]) => {
     if (!mergeTarget) return;
     const currentList = filter[mergeTarget] as string[];
-    const combined = Array.from(new Set([...currentList, ...newTags]));
+    const combined = uniqueMerge(currentList, newTags);
     setFilter({ ...filter, [mergeTarget]: (combined as any) });
     showToast(`Merged ${newTags.length} tags`, 'success');
   };
@@ -217,7 +180,7 @@ export const WildcardTools = ({ onClose, images, currentIndex, batchRange }: Wil
     }
 
     if (pathsToAdd.length > 0) {
-        const uniqueNew = Array.from(new Set([...targetPaths, ...pathsToAdd]));
+        const uniqueNew = uniqueMerge(targetPaths, pathsToAdd);
         setTargetPaths(uniqueNew);
         showToast(`Imported ${pathsToAdd.length} images from viewer`, 'success');
     } else {
@@ -240,7 +203,7 @@ export const WildcardTools = ({ onClose, images, currentIndex, batchRange }: Wil
     }
 
     if (newPaths.length > 0) {
-        const uniqueNew = Array.from(new Set([...targetPathsRef.current, ...newPaths]));
+        const uniqueNew = uniqueMerge(targetPathsRef.current, newPaths);
         totalAdded = uniqueNew.length - targetPathsRef.current.length;
         setTargetPaths(uniqueNew);
     }
@@ -270,9 +233,9 @@ export const WildcardTools = ({ onClose, images, currentIndex, batchRange }: Wil
     setLoading(true);
     setProgress(0);
     try {
-      const prompts = textInput.split('\n').map(s => s.trim()).filter(s => s);
-      const comparisonPrompts = comparisonText.split(/[\n,]/).map(s => s.trim()).filter(s => s);
-      
+      const prompts = splitLines(textInput);
+      const comparisonPrompts = splitCommaOrNewline(comparisonText);
+
       if (targetPaths.length === 0 && prompts.length === 0) {
         showToast("No input (images or text) provided", "error");
         return;
@@ -296,7 +259,7 @@ export const WildcardTools = ({ onClose, images, currentIndex, batchRange }: Wil
             filter
           });
       }
-      
+
       setResults(res);
       showToast(`Workshop complete: ${res.length} items`, "success");
     } catch (e: any) {
@@ -332,9 +295,9 @@ export const WildcardTools = ({ onClose, images, currentIndex, batchRange }: Wil
       if (targetPaths.length > 0) {
         counts = await api.getTagCounts(targetPaths);
       }
-      
+
       // Merge counts from text prompts
-      const prompts = textInput.split('\n').map(s => s.trim()).filter(s => s);
+      const prompts = splitLines(textInput);
       prompts.forEach(p => {
           p.split(',').forEach(t => {
               const tag = t.trim();
@@ -410,84 +373,26 @@ export const WildcardTools = ({ onClose, images, currentIndex, batchRange }: Wil
         <div className="flex flex-col lg:flex-row flex-1 overflow-y-auto lg:overflow-hidden scrollbar-thin">
           {/* Combined Sidebar */}
           <div className="w-full lg:w-80 border-b lg:border-b-0 lg:border-r border-white/5 flex flex-col bg-solid-nested shrink-0">
-            {/* Top: Image List */}
-            <div className="h-[250px] lg:h-1/2 flex flex-col border-b border-white/5 overflow-hidden shrink-0">
-                <div className="p-4 border-b border-white/5 flex items-center justify-between shrink-0 bg-solid-panel">
-                    <span className="text-[10px] font-black uppercase tracking-widest text-neutral-300">Target Images ({targetPaths.length})</span>
-                    <button onClick={clearPaths} className="text-[9px] font-black uppercase text-red-500 hover:text-red-400 transition-colors min-h-[44px] h-11 px-3 flex items-center justify-center">Clear</button>
-                </div>
-                
-                <div className="p-3 grid grid-cols-1 gap-2 border-b border-white/5 bg-solid-nested shrink-0">
-                    <button onClick={handleImportFromViewer} className="flex items-center justify-center gap-2 py-2.5 min-h-[44px] bg-[#1a2333] hover:bg-[#25354c] border border-blue-500/20 rounded-lg text-[9px] font-black uppercase transition-all text-blue-400">
-                        <LayoutGrid className="w-3.5 h-3.5" /> Import from Viewer
-                    </button>
-                    <div className="grid grid-cols-2 gap-2">
-                        <button onClick={handleAddFiles} className="flex items-center justify-center gap-2 py-2.5 min-h-[44px] bg-neutral-800 hover:bg-neutral-700 rounded-lg text-[9px] font-black uppercase transition-all">
-                            <FilePlus className="w-3.5 h-3.5" /> Files
-                        </button>
-                        <button onClick={handleAddFolder} className="flex items-center justify-center gap-2 py-2.5 min-h-[44px] bg-neutral-800 hover:bg-neutral-700 rounded-lg text-[9px] font-black uppercase transition-all">
-                            <FolderPlus className="w-3.5 h-3.5" /> Folder
-                        </button>
-                    </div>
-                </div>
-
-                <div className="flex-1 p-2">
-                    {targetPaths.length > 0 ? (
-                        <AutoSizer>
-                            {({ height, width }) => (
-                                <List
-                                    className="scrollbar-thin"
-                                    height={height}
-                                    itemCount={targetPaths.length}
-                                    itemSize={36}
-                                    width={width}
-                                >
-                                    {({ index, style }: any) => {
-                                        const p = targetPaths[index];
-                                        return (
-                                            <div style={style} className="pr-2 pb-1">
-                                                <div className="group flex items-center justify-between p-1.5 bg-neutral-800/50 hover:bg-neutral-800 rounded border border-transparent hover:border-white/5 transition-all h-full">
-                                                    <span className="text-[9px] text-neutral-400 truncate flex-1 pr-2">{p.split(/[\\/]/).pop()}</span>
-                                                    <button onClick={() => removePath(p)} className="opacity-0 group-hover:opacity-100 w-11 h-11 flex items-center justify-center hover:bg-red-900/20 rounded text-red-500 shrink-0"><Trash2 className="w-3.5 h-3.5" /></button>
-                                                </div>
-                                            </div>
-                                        );
-                                    }}
-                                </List>
-                            )}
-                        </AutoSizer>
-                    ) : (
-                        <div className="flex flex-col items-center justify-center h-full p-4 text-center bg-solid-nested rounded-2xl text-neutral-200">
-                            <p className="text-[8px] font-bold uppercase tracking-wider leading-relaxed">No images</p>
-                        </div>
-                    )}
-                </div>
-            </div>
-
-            {/* Bottom: Text Input */}
-            <div className="h-[200px] lg:h-1/2 flex flex-col overflow-hidden bg-solid-base shrink-0">
-                <div className="p-4 border-b border-white/5 flex items-center justify-between shrink-0 bg-solid-panel">
-                    <span className="text-[10px] font-black uppercase tracking-widest text-neutral-300">Text Prompts</span>
-                    <div className="flex gap-2">
-                        <button onClick={handleLoadTextFile} className="text-[9px] font-black uppercase text-blue-500 hover:text-blue-400 transition-colors min-h-[44px] h-11 px-3 flex items-center justify-center">Import</button>
-                        <button onClick={() => setTextInput("")} className="text-[9px] font-black uppercase text-red-500 hover:text-red-400 transition-colors min-h-[44px] h-11 px-3 flex items-center justify-center">Clear</button>
-                    </div>
-                </div>
-                <div className="flex-1 p-3">
-                    <textarea 
-                        value={textInput}
-                        onChange={e => setTextInput(e.target.value)}
-                        className="w-full h-full bg-solid-base border border-white/5 rounded-xl p-3 text-[10px] font-mono focus:outline-none focus:border-blue-500/50 resize-none scrollbar-thin"
-                        placeholder="1girl, solo, baelz...&#10;1girl, solo, marine..."
-                    />
-                </div>
-            </div>
+            <TargetImagesPanel
+              paths={targetPaths}
+              onClear={clearPaths}
+              onImportFromViewer={handleImportFromViewer}
+              onAddFiles={handleAddFiles}
+              onAddFolder={handleAddFolder}
+              onRemove={removePath}
+            />
+            <TextPromptsPanel
+              value={textInput}
+              onChange={setTextInput}
+              onImport={handleLoadTextFile}
+              onClear={() => setTextInput("")}
+            />
           </div>
 
           {/* Main Content Area */}
           <div className="w-full lg:flex-1 flex flex-col lg:overflow-hidden bg-solid-surface-elevated">
             <div className="p-6 flex-1 lg:overflow-y-auto space-y-6 scrollbar-thin">
-              
+
               {/* Progress Bar Area */}
               {loading && (
                 <div className="space-y-2 animate-in fade-in duration-300">
@@ -501,234 +406,59 @@ export const WildcardTools = ({ onClose, images, currentIndex, batchRange }: Wil
                 </div>
               )}
 
-              {/* Cleaning Base Section (Integrated) */}
-              <div className="grid grid-cols-2 gap-4 bg-[#241a10] border border-[#4a351a] p-4 rounded-2xl">
-                <div className="col-span-2 flex items-center gap-2 mb-1">
-                    <span className="text-[10px] font-black uppercase text-amber-400 tracking-widest">Cleaning Base (Subtract Common Tags)</span>
-                    <Info className="w-3 h-3 text-amber-500" />
-                </div>
-                {/* Base Image */}
-                 <div className="space-y-2">
-                    <span className="text-[8px] font-black uppercase text-neutral-400 tracking-widest">Base Image</span>
-                    <div className={`p-3 rounded-xl border min-h-[50px] flex items-center justify-between transition-all ${comparisonPath ? 'bg-neutral-950 border-amber-500/30 shadow-[inner_0_2px_4px_rgba(0,0,0,0.3)]' : 'bg-neutral-950 border-white/5'}`}>
-                        <span className="text-[10px] text-neutral-400 truncate">{comparisonPath ? comparisonPath.split(/[\\/]/).pop() : "Drag image here"}</span>
-                        {comparisonPath && <button onClick={() => setComparisonPath(null)} className="w-11 h-11 flex items-center justify-center hover:bg-red-900/20 rounded text-red-500 shrink-0"><X className="w-4 h-4" /></button>}
-                    </div>
-                </div>
-                {/* Subtractive Text */}
-                <div className="space-y-2">
-                    <span className="text-[8px] font-black uppercase text-neutral-400 tracking-widest">Subtractive Tags</span>
-                    <textarea 
-                        value={comparisonText}
-                        onChange={e => setComparisonText(e.target.value)}
-                        className="w-full h-[50px] bg-neutral-950 border border-white/5 rounded-xl p-3 text-[10px] font-mono text-neutral-300 focus:outline-none focus:border-amber-500/30 resize-none scrollbar-thin"
-                        placeholder="masterpiece, best quality, solo..."
-                    />
-                </div>
-              </div>
+              <CleaningBaseCard
+                comparisonPath={comparisonPath}
+                onClearComparisonPath={() => setComparisonPath(null)}
+                comparisonText={comparisonText}
+                onComparisonTextChange={setComparisonText}
+              />
 
-              {/* Settings Area */}
-              <div className="space-y-3">
-                  {/* Main Settings Row */}
-                  <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-3 lg:gap-4">
-                    {!filter.simple_mode && (
-                      <>
-                        <div className="col-span-1 bg-neutral-950 p-3 rounded-2xl border border-white/5 flex flex-col justify-center">
-                            <div className="flex items-center justify-between mb-2">
-                                <span className="text-[10px] font-black uppercase text-neutral-400 tracking-wider">Similarity</span>
-                                <span className="text-[11px] font-mono text-blue-400 font-bold">{threshold.toFixed(2)}</span>
-                            </div>
-                            <input type="range" min="0" max="1" step="0.05" value={threshold} onChange={e => setThreshold(parseFloat(e.target.value))} aria-label="Similarity Threshold" className="w-full accent-blue-600" />
-                        </div>
-                        <div className="bg-neutral-950 p-3 rounded-2xl border border-white/5 flex flex-col justify-center">
-                            <label className="text-[8px] font-black uppercase text-neutral-400 mb-1 block tracking-widest">Max Words/Tag</label>
-                            <input type="number" value={filter.max_words} onChange={e => setFilter({...filter, max_words: parseInt(e.target.value)})} aria-label="Max Words Per Tag" className="bg-transparent text-[11px] font-bold text-neutral-300 w-full focus:outline-none" />
-                        </div>
-                        <div className="bg-neutral-950 p-3 rounded-2xl border border-white/5 flex flex-col justify-center">
-                            <label className="text-[8px] font-black uppercase text-neutral-400 mb-1 block tracking-widest">Min Tags/Group</label>
-                            <input type="number" value={filter.min_tags} onChange={e => setFilter({...filter, min_tags: parseInt(e.target.value)})} aria-label="Min Tags Per Group" className="bg-transparent text-[11px] font-bold text-neutral-300 w-full focus:outline-none" />
-                        </div>
-                        <div className="bg-neutral-950 p-3 rounded-2xl border border-white/5 flex flex-col justify-center relative group">
-                            <div className="flex items-center justify-between mb-1">
-                                <label className="text-[8px] font-black uppercase text-neutral-400 block tracking-widest">Max Depth</label>
-                                <Info className="w-2.5 h-2.5 text-neutral-700 cursor-help" />
-                            </div>
-                            <input type="number" value={filter.max_depth} onChange={e => setFilter({...filter, max_depth: parseInt(e.target.value)})} aria-label="Max Recursive Depth" className="bg-transparent text-[11px] font-bold text-neutral-300 w-full focus:outline-none" />
-                            <div className="absolute left-0 bottom-full mb-2 w-48 p-2 bg-neutral-900 border border-white/10 rounded-lg text-[8px] text-neutral-400 opacity-0 group-hover:opacity-100 transition-opacity pointer-events-none z-10 shadow-2xl leading-tight">
-                                Limits recursive pattern matching to prevent errors. Lower values result in flatter, simpler wildcards.
-                            </div>
-                        </div>
-                      </>
-                    )}
-                    {filter.simple_mode && (
-                      <div className="col-span-1 sm:col-span-2 md:col-span-4 bg-amber-600/5 border border-amber-500/20 rounded-2xl p-4 flex flex-col justify-center">
-                        <div className="flex items-center justify-between mb-2">
-                          <span className="text-[10px] font-black uppercase text-amber-500 tracking-wider">Simple Exclusions</span>
-                          <span className="text-[8px] text-amber-600 font-bold uppercase">Only basic string removal logic is applied</span>
-                        </div>
-                        <textarea 
-                          value={filter.simple_exclusions.join(', ')} 
-                          onChange={e => setFilter({...filter, simple_exclusions: e.target.value.split(',').map(s => s.trim()).filter(Boolean)})}
-                          className="bg-neutral-950/50 border border-white/5 rounded-xl p-2 text-[10px] font-mono text-neutral-300 h-12 focus:outline-none focus:border-amber-500/30 resize-none scrollbar-thin"
-                          placeholder="e.g. masterpiece, best quality, solo, rating:safe..."
-                        />
-                      </div>
-                    )}
-                    <div className="flex flex-col gap-2">
-                      <button 
-                          onClick={() => setFilter({...filter, simple_mode: !filter.simple_mode})}
-                          className={`flex-1 py-1 rounded-xl border flex flex-col items-center justify-center transition-all min-h-[44px] ${filter.simple_mode ? 'bg-amber-600 border-amber-500 text-white shadow-lg shadow-amber-600/20' : 'bg-neutral-950 border-white/5 text-neutral-400 hover:text-neutral-200'}`}
-                      >
-                          <label className={`text-[8px] font-black uppercase mb-0.5 block tracking-widest cursor-pointer ${filter.simple_mode ? 'text-amber-100' : 'text-neutral-400'}`}>Simple Mode</label>
-                          <span className="text-[9px] font-black uppercase">{filter.simple_mode ? 'Enabled' : 'Disabled'}</span>
-                      </button>
-                      <button 
-                          onClick={() => setFilter({...filter, mix_mode: !filter.mix_mode})}
-                          className={`flex-1 py-1 rounded-xl border flex flex-col items-center justify-center transition-all min-h-[44px] ${filter.mix_mode ? 'bg-indigo-600 border-indigo-500 text-white shadow-lg shadow-indigo-600/20' : 'bg-neutral-950 border-white/5 text-neutral-400 hover:text-neutral-200'}`}
-                      >
-                          <label className={`text-[8px] font-black uppercase mb-0.5 block tracking-widest cursor-pointer ${filter.mix_mode ? 'text-indigo-100' : 'text-neutral-400'}`}>Mix Mode</label>
-                          <span className="text-[9px] font-black uppercase">{filter.mix_mode ? 'Enabled' : 'Disabled'}</span>
-                      </button>
-                    </div>
-                  </div>
-
-                  {/* Advanced Mix Mode Settings Row */}
-                  {!filter.simple_mode && filter.mix_mode && (
-                      <div className="bg-indigo-900/10 border border-indigo-500/20 p-4 rounded-2xl grid grid-cols-3 gap-6 animate-in slide-in-from-top-2 duration-300">
-                          <div className="space-y-2">
-                              <div className="flex items-center justify-between">
-                                  <span className="text-[9px] font-black uppercase text-indigo-400 tracking-wider">Mix Depth (Start)</span>
-                                  <span className="text-[10px] font-mono text-indigo-400 font-bold">{filter.mix_depth}</span>
-                              </div>
-                              <input 
-                                  type="range" min="0" max="10" step="1" 
-                                  value={filter.mix_depth} 
-                                  onChange={e => setFilter({...filter, mix_depth: parseInt(e.target.value)})} 
-                                  className="w-full accent-indigo-600" 
-                              />
-                          </div>
-                          <div className="space-y-2">
-                              <div className="flex items-center justify-between">
-                                  <span className="text-[9px] font-black uppercase text-indigo-400 tracking-wider">Min Branches</span>
-                                  <span className="text-[10px] font-mono text-indigo-400 font-bold">{filter.mix_tandem_min_branches}</span>
-                              </div>
-                              <input 
-                                  type="range" min="1" max="10" step="1" 
-                                  value={filter.mix_tandem_min_branches} 
-                                  onChange={e => setFilter({...filter, mix_tandem_min_branches: parseInt(e.target.value)})} 
-                                  className="w-full accent-indigo-600" 
-                              />
-                          </div>
-                          <div className="space-y-2">
-                              <div className="flex items-center justify-between">
-                                  <span className="text-[9px] font-black uppercase text-indigo-400 tracking-wider">Tandem Ratio</span>
-                                  <span className="text-[10px] font-mono text-indigo-400 font-bold">{((filter.mix_tandem_ratio || 0.51) * 100).toFixed(0)}%</span>
-                              </div>
-                              <input 
-                                  type="range" min="0.1" max="1.0" step="0.01" 
-                                  value={filter.mix_tandem_ratio} 
-                                  onChange={e => setFilter({...filter, mix_tandem_ratio: parseFloat(e.target.value)})} 
-                                  className="w-full accent-indigo-600" 
-                              />
-                          </div>
-                      </div>
-                  )}
-              </div>
+              <WorkshopSettings
+                threshold={threshold}
+                onThresholdChange={setThreshold}
+                filter={filter}
+                onFilterChange={setFilter}
+              />
 
               {/* Action Button & Refiner */}
               <div className="flex gap-3">
-                <button 
+                <button
                     onClick={runWorkshop} disabled={loading || (targetPaths.length === 0 && textInput.trim() === "")}
                     className="flex-1 py-4 bg-blue-600 hover:bg-blue-500 disabled:opacity-50 disabled:cursor-not-allowed rounded-2xl text-[11px] font-black uppercase tracking-widest transition-all shadow-xl active:scale-95 text-white"
                 >
-                    {loading ? "Processing..." : `Generate Wildcards (${targetPaths.length} Images + ${textInput.split('\n').filter(s => s.trim()).length} Text)`}
+                    {loading ? "Processing..." : `Generate Wildcards (${targetPaths.length} Images + ${splitLines(textInput).length} Text)`}
                 </button>
                 <button onClick={openRefiner} disabled={targetPaths.length === 0 && textInput.trim() === ""} className="px-6 py-4 bg-neutral-800 hover:bg-neutral-700 disabled:opacity-50 rounded-2xl text-[11px] font-black uppercase tracking-widest transition-all text-neutral-300" title="Manage Exclusions">
                     <ListFilter className="w-4 h-4" />
                 </button>
               </div>
 
-              {/* Filters Section */}
-              <div className="space-y-4 pt-4 border-t border-white/5">
-                <button 
-                    onClick={() => setShowFilters(!showFilters)}
-                    className="flex items-center justify-between w-full min-h-[44px] px-4 py-2.5 bg-solid-element border border-white/5 hover:bg-solid-active rounded-xl text-[10px] font-black uppercase tracking-widest text-neutral-300 transition-all"
-                >
-                    <span className="flex items-center gap-2">Exclusion Filters</span>
-                    {showFilters ? <ChevronUp className="w-4 h-4 text-neutral-400" /> : <ChevronDown className="w-4 h-4 text-neutral-400" />}
-                </button>
-                
-                {showFilters && (
-                    <div className="grid grid-cols-1 md:grid-cols-3 gap-4 animate-in fade-in zoom-in-95 duration-300">
-                        {[
-                            { id: 'partial_match', label: 'Partial Match', filename: 'default_partial_exclusion.txt', color: 'blue' },
-                            { id: 'exact_match', label: 'Exact Match', filename: 'default_exact_exclusion.txt', color: 'red' },
-                            { id: 'exceptions', label: 'Exceptions', filename: 'default_exception_exclusion.txt', color: 'green' },
-                        ].map(f => (
-                            <div key={f.id} className="space-y-3">
-                                <div className="flex items-center justify-between">
-                                    <span className="text-[9px] font-bold uppercase text-neutral-500">{f.label}</span>
-                                    <div className="flex gap-1">
-                                        <button onClick={() => setMergeTarget(f.id as any)} className="w-11 h-11 flex items-center justify-center hover:bg-white/5 rounded-xl transition-all" title="Merge from text/file">
-                                            <FileUp className="w-4 h-4 text-neutral-600 hover:text-blue-400" />
-                                        </button>
-                                        <button onClick={() => saveFilterList(f.id as any, f.filename)} className="w-11 h-11 flex items-center justify-center hover:bg-white/5 rounded-xl transition-all" title="Save as Default">
-                                            <Save className="w-4 h-4 text-neutral-600 hover:text-blue-400" />
-                                        </button>
-                                    </div>
-                                </div>
-                                <textarea 
-                                    value={filter[f.id as keyof FilterState] as string[]}
-                                    onChange={e => setFilter({...filter, [f.id]: e.target.value.split(',').map(s => s.trim())})}
-                                    className="w-full h-24 bg-neutral-950 border border-white/5 rounded-xl p-3 text-[10px] font-mono focus:outline-none focus:border-blue-500/50 resize-none scrollbar-thin"
-                                    placeholder="tag1, tag2..."
-                                />
-                            </div>
-                        ))}
-                    </div>
-                )}
-              </div>
+              <ExclusionFiltersSection
+                open={showFilters}
+                onToggle={() => setShowFilters(!showFilters)}
+                filter={filter}
+                onFilterChange={setFilter}
+                onMergeTarget={setMergeTarget}
+                onSaveFilterList={saveFilterList}
+              />
 
-              {/* Results Display */}
-              {results.length > 0 && (
-                <div className="pt-6 border-t border-white/5 space-y-4 animate-in slide-in-from-bottom-4 duration-300 pb-10">
-                  <div className="flex items-center justify-between">
-                    <span className="text-[10px] font-black uppercase text-neutral-500">Workshop Results ({results.length})</span>
-                    <div className="flex gap-2">
-                        <button onClick={copyToClipboard} className="flex items-center gap-2 px-3 py-1.5 bg-neutral-800 hover:bg-neutral-700 rounded-lg text-[9px] font-black uppercase text-neutral-400 hover:text-white transition-all">
-                            <Copy className="w-3.5 h-3.5" /> Copy
-                        </button>
-                        <button onClick={handleExport} className="flex items-center gap-2 px-3 py-1.5 bg-blue-600/20 hover:bg-blue-600/40 border border-blue-500/20 rounded-lg text-[9px] font-black uppercase text-blue-400 hover:text-blue-300 transition-all">
-                            <Download className="w-3.5 h-3.5" /> Export .txt
-                        </button>
-                    </div>
-                  </div>
-                  <div className="bg-neutral-950 border border-white/5 rounded-2xl p-4 max-h-[400px] overflow-y-auto space-y-2 scrollbar-thin shadow-inner">
-                    {results.map((res, i) => (
-                      <div key={i} className="group flex gap-3 p-3 bg-neutral-900/50 rounded-xl border border-white/5 hover:border-blue-500/30 transition-all shadow-sm">
-                        <div className="w-5 h-5 rounded-md bg-neutral-800 flex items-center justify-center text-[9px] font-black text-neutral-600 shrink-0">{i+1}</div>
-                        <code className="text-[11px] text-neutral-300 break-all select-all leading-relaxed">{res}</code>
-                      </div>
-                    ))}
-                  </div>
-                </div>
-              )}
+              <WorkshopResults results={results} onCopy={copyToClipboard} onExport={handleExport} />
             </div>
           </div>
         </div>
       </div>
 
       {showRefiner && (
-        <TagRefiner 
-            tagCounts={tagCounts} 
-            initialExcluded={filter.exact_match} 
+        <TagRefiner
+            tagCounts={tagCounts}
+            initialExcluded={filter.exact_match}
             partialMatch={filter.partial_match}
             onClose={() => setShowRefiner(false)}
             onApply={async (excluded) => {
                 const newFilter = {...filter, exact_match: excluded};
                 setFilter(newFilter);
                 setShowRefiner(false);
-                
+
                 // Auto-save exact match filter
                 try {
                     const content = excluded.join(', ');
@@ -742,7 +472,7 @@ export const WildcardTools = ({ onClose, images, currentIndex, batchRange }: Wil
       )}
 
       {mergeTarget && (
-        <MergeFilterModal 
+        <MergeFilterModal
             onMerge={handleMerge}
             onClose={() => setMergeTarget(null)}
         />

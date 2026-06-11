@@ -1,315 +1,21 @@
-import { useState, useMemo, useEffect, useRef } from 'react';
+import { useState, useMemo, useEffect } from 'react';
 import { 
   Plus, Trash2, Play, ChevronRight, ChevronLeft, 
   Database, Search, CheckCircle, XCircle, X, Settings2, 
   Download, Upload, ArrowUp, ArrowDown, RefreshCw, Save, Sparkles, MousePointer2,
   ListFilter, Terminal, ArrowRight, Box, Filter
 } from 'lucide-react';
-import { invoke } from "@tauri-apps/api/core";
-import { open, save, confirm } from "@tauri-apps/plugin-dialog";
-import { LazyStore } from "@tauri-apps/plugin-store";
-import { 
-  mkdir, exists, readDir, remove, 
-  readTextFile, writeTextFile, BaseDirectory 
-} from "@tauri-apps/plugin-fs";
+import { BaseDirectory } from "@tauri-apps/plugin-fs";
 import { useToast } from "./Toast";
 import { useAppStore } from "../store/useAppStore";
 import { api } from "../api";
-
-// Check if we are running inside the native Tauri container
-const isTauri = typeof window !== 'undefined' && (window as any).__TAURI__ !== undefined;
-
-// Mock Store for standard web browser environment (auditing/testing fallback)
-class BrowserStore {
-  private name: string;
-  constructor(name: string) {
-    this.name = name;
-  }
-  async get(key: string): Promise<any> {
-    try {
-      const data = localStorage.getItem(`${this.name}:${key}`);
-      return data ? JSON.parse(data) : null;
-    } catch {
-      return null;
-    }
-  }
-  async set(key: string, value: any): Promise<void> {
-    try {
-      localStorage.setItem(`${this.name}:${key}`, JSON.stringify(value));
-    } catch (e) {
-      console.error("[BrowserStore] Error setting key:", e);
-    }
-  }
-  async save(): Promise<void> {}
-}
-
-const classifierStore = isTauri 
-  ? new LazyStore(".tag_classifier.json") 
-  : new BrowserStore(".tag_classifier.json") as any;
-
-// Safe wrapper around Tauri dialogs
-const dialogOpen = async (options?: any): Promise<string | string[] | null> => {
-  if (isTauri) return await open(options);
-  
-  // Web fallback: trigger standard file upload
-  return new Promise((resolve) => {
-    const input = document.createElement("input");
-    input.type = "file";
-    input.accept = ".json";
-    input.onchange = (e: any) => {
-      const file = e.target.files?.[0];
-      if (!file) {
-        resolve(null);
-        return;
-      }
-      const reader = new FileReader();
-      reader.onload = (evt) => {
-        const text = evt.target?.result as string;
-        (window as any).__temp_imported_json__ = text;
-        resolve("browser_imported.json");
-      };
-      reader.readAsText(file);
-    };
-    input.click();
-  }) as Promise<string | string[] | null>;
-};
-
-const dialogSave = async (options?: any) => {
-  if (isTauri) return await save(options);
-  // Web fallback: return virtual path
-  return options?.defaultPath || "export.json";
-};
-
-const dialogConfirm = async (message: string) => {
-  if (isTauri) return await confirm(message);
-  return window.confirm(message);
-};
-
-// Safe wrapper around Tauri filesystem operations
-const fsExists = async (path: string, options?: any) => {
-  if (isTauri) return await exists(path, options);
-  return path.includes("classifier_presets");
-};
-
-const fsMkdir = async (path: string, options?: any) => {
-  if (isTauri) return await mkdir(path, options);
-  return;
-};
-
-const fsReadDir = async (path: string, options?: any) => {
-  if (isTauri) return await readDir(path, options);
-  
-  const keys = Object.keys(localStorage);
-  return keys
-    .filter(k => k.startsWith("browser_preset:"))
-    .map(k => ({ name: k.replace("browser_preset:", "") + ".json" }));
-};
-
-const fsReadTextFile = async (path: string, options?: any) => {
-  if (isTauri) return await readTextFile(path, options);
-  
-  if (path === "browser_imported.json") {
-    return (window as any).__temp_imported_json__ || "{}";
-  }
-  if (path.includes("classifier_presets")) {
-    const presetName = path.split("/").pop()?.replace(".json", "");
-    const content = localStorage.getItem(`browser_preset:${presetName}`);
-    if (content) return content;
-  }
-  throw new Error("File not found in browser storage");
-};
-
-const fsWriteTextFile = async (path: string, content: string, options?: any) => {
-  if (isTauri) return await writeTextFile(path, content, options);
-  
-  if (path.includes("classifier_presets")) {
-    const presetName = path.split("/").pop()?.replace(".json", "");
-    localStorage.setItem(`browser_preset:${presetName}`, content);
-    return;
-  }
-  
-  // Standard file download fallback for browser export
-  const blob = new Blob([content], { type: "application/json" });
-  const url = URL.createObjectURL(blob);
-  const a = document.createElement("a");
-  a.href = url;
-  a.download = path.split("/").pop() || "backup.json";
-  a.click();
-  URL.revokeObjectURL(url);
-};
-
-const fsRemove = async (path: string, options?: any) => {
-  if (isTauri) return await remove(path, options);
-  
-  if (path.includes("classifier_presets")) {
-    const presetName = path.split("/").pop()?.replace(".json", "");
-    localStorage.removeItem(`browser_preset:${presetName}`);
-    return;
-  }
-};
-
-// Safe wrapper around Tauri commands
-const tauriInvokeMock = async (cmd: string, args?: Record<string, any>): Promise<any> => {
-  if (isTauri) {
-    return await invoke(cmd, args);
-  }
-  
-  // Browser fallback mockup data
-  if (cmd === "get_all_prompts") {
-    return [
-      "1girl, masterpiece, cinematic lighting, purple eyes, long hair, beautiful face, standing, outdoors, sunset, glowing light, high detail",
-      "masterpiece, best quality, scenery, mountain, snow, forest, river, morning sun, hyperrealistic, detailed background, 8k resolution",
-      "1boy, solo, short black hair, blue jacket, neon city lights, night scene, rain, puddles, reflection, cinematic shot, hyper detailed",
-      "1girl, solo, holding umbrella, pink dress, cherry blossoms, falling leaves, spring breeze, watercolor style, soft colors, dreamlike",
-      "masterpiece, cosmic nebula, stars, galaxies, floating rocks, astronauts, space station, neon blue light, deep space exploration, cinematic"
-    ] as any;
-  }
-  if (cmd === "generate_wildcards") {
-    return [
-      "1girl, purple eyes, standing, outdoors, sunset, glowing light",
-      "scenery, mountain, snow, forest, river, morning sun",
-      "1boy, short black hair, blue jacket, neon city lights, night scene, rain",
-      "1girl, pink dress, cherry blossoms, falling leaves, spring breeze, watercolor style",
-      "cosmic nebula, stars, galaxies, floating rocks, astronauts"
-    ] as any;
-  }
-  throw new Error(`Command ${cmd} not mocked in browser`);
-};
-
-interface Subset {
-  id: number;
-  name: string;
-  keywords: string[];
-  excludeKeywords: string[];
-}
-
-interface WordGroup {
-  id: number;
-  name: string;
-  words: string[];
-}
-
-interface TagClassifierProps {
-  onClose: () => void;
-  initialData?: string;
-}
-
-const TagInput = ({ tags, onChange, placeholder, colorClass = "indigo", suggestions = [] }: { 
-    tags: string[], 
-    onChange: (tags: string[]) => void, 
-    placeholder: string,
-    colorClass?: "indigo" | "red" | "emerald",
-    suggestions?: string[]
-}) => {
-    const [inputValue, setInputValue] = useState("");
-    const [showSuggestions, setShowSuggestions] = useState(false);
-    const [isExpanded, setIsExpanded] = useState(true);
-    
-    const filteredSuggestions = useMemo(() => {
-        if (!inputValue.trim()) return [];
-        return suggestions
-            .filter(s => s.toLowerCase().includes(inputValue.toLowerCase()) && !tags.includes(s))
-            .slice(0, 10);
-    }, [inputValue, suggestions, tags]);
-
-    const addTags = (raw: string) => {
-        const newTags = raw.split(/[\n,]+/).map(t => t.trim()).filter(t => t && !tags.includes(t));
-        if (newTags.length > 0) onChange([...tags, ...newTags]);
-        setInputValue("");
-        setShowSuggestions(false);
-        setIsExpanded(true);
-    };
-
-    const removeTag = (tag: string) => onChange(tags.filter(t => t !== tag));
-
-    // Custom design tokens matching the Wildcard tools look-and-feel (blue, red, amber)
-    const colorMap = {
-        indigo: "bg-[#162235] text-blue-400 border-blue-500/20 hover:border-blue-400/50 hover:bg-[#1a2b42] shadow-sm",
-        red: "bg-[#2d1217] text-red-400 border-red-500/20 hover:border-red-400/50 hover:bg-[#3d1820] shadow-sm",
-        emerald: "bg-[#291e13] text-amber-400 border-amber-500/20 hover:border-amber-400/50 hover:bg-[#38281a] shadow-sm"
-    };
-
-    const headerColor = {
-        indigo: "text-blue-400 font-bold",
-        red: "text-red-400 font-bold",
-        emerald: "text-amber-400 font-bold"
-    };
-
-    return (
-        <div className="space-y-2">
-            <div className="flex items-center justify-between px-1">
-                <span className={`text-[10px] font-extrabold uppercase tracking-wider ${headerColor[colorClass]}`}>
-                    {colorClass === 'red' ? 'Excludes (-)' : colorClass === 'emerald' ? 'Variables ({})' : 'Includes (+)'}
-                </span>
-                {tags.length > 0 && (
-                    <button 
-                        onClick={() => setIsExpanded(!isExpanded)}
-                        className="text-[9.5px] font-black text-neutral-300 hover:text-white uppercase tracking-wide transition-colors py-2 px-3 min-h-[44px] flex items-center"
-                        aria-label={isExpanded ? "Hide tags" : "Show tags"}
-                    >
-                        {isExpanded ? 'Hide' : `Show (${tags.length})`}
-                    </button>
-                )}
-            </div>
-
-            {isExpanded && tags.length > 0 && (
-                <div className="flex flex-wrap gap-1.5 mb-2 animate-in fade-in slide-in-from-top-1 duration-200">
-                    {tags.map(tag => (
-                        <span key={tag} className={`flex items-center gap-1.5 px-3 py-2 rounded-xl border text-[10px] font-semibold transition-all min-h-[36px] ${colorMap[colorClass]}`}>
-                            {tag}
-                            <button 
-                              onClick={() => removeTag(tag)} 
-                              className="hover:text-white transition-colors p-2 -mr-1"
-                              aria-label={`Remove tag ${tag}`}
-                            >
-                              <X className="w-3.5 h-3.5" />
-                            </button>
-                        </span>
-                    ))}
-                </div>
-            )}
-            
-            <div className="relative">
-                <input 
-                    className="w-full bg-neutral-955 border border-white/10 focus:border-blue-500/50 focus:ring-1 focus:ring-blue-500/10 rounded-2xl px-4 py-3.5 text-xs font-mono text-neutral-100 placeholder-neutral-600 focus:outline-none shadow-inner min-h-[44px]"
-                    value={inputValue}
-                    onChange={e => { setInputValue(e.target.value); setShowSuggestions(true); }}
-                    onKeyDown={e => {
-                        if (e.key === 'Enter' || e.key === ',') {
-                            e.preventDefault();
-                            if (inputValue.trim()) addTags(inputValue);
-                        }
-                    }}
-                    onPaste={e => {
-                        const paste = e.clipboardData.getData('text');
-                        if (paste.includes(',') || paste.includes('\n')) {
-                            e.preventDefault();
-                            addTags(paste);
-                        }
-                    }}
-                    onFocus={() => setShowSuggestions(true)}
-                    onBlur={() => setTimeout(() => setShowSuggestions(false), 200)}
-                    placeholder={placeholder}
-                    aria-label={placeholder}
-                />
-                {showSuggestions && filteredSuggestions.length > 0 && (
-                    <div className="absolute z-[110] left-0 right-0 mt-2 bg-neutral-900 border border-white/10 rounded-2xl shadow-[0_15px_35px_rgba(0,0,0,0.8)] overflow-hidden animate-in fade-in zoom-in-95 duration-200 max-h-56 overflow-y-auto scrollbar-thin">
-                        {filteredSuggestions.map(s => (
-                            <button 
-                              key={s} 
-                              onMouseDown={(e) => { e.preventDefault(); addTags(s); }} 
-                              className="w-full text-left px-4 py-3.5 min-h-[44px] text-[10px] font-extrabold uppercase text-neutral-200 hover:text-white hover:bg-neutral-800/40 transition-all border-b border-white/[0.05] last:border-0"
-                              aria-label={`Add suggestion tag ${s}`}
-                            >
-                              {s}
-                            </button>
-                        ))}
-                    </div>
-                )}
-            </div>
-        </div>
-    );
-};
+import { Subset, WordGroup, TagClassifierProps } from "./tagclassifier/types";
+import { TagInput } from "./tagclassifier/TagInput";
+import { getMergedTag, parseLine } from "./tagclassifier/classify";
+import {
+  isTauri, classifierStore, dialogOpen, dialogSave, dialogConfirm,
+  fsExists, fsMkdir, fsReadDir, fsReadTextFile, fsWriteTextFile, fsRemove, tauriInvokeMock,
+} from "./tagclassifier/browserFallback";
 
 export const TagClassifier = ({ onClose, initialData = "" }: TagClassifierProps) => {
   const [activeMobileSection, setActiveMobileSection] = useState('editor' as 'rules' | 'editor' | 'output');
@@ -333,8 +39,6 @@ export const TagClassifier = ({ onClose, initialData = "" }: TagClassifierProps)
   // UI States
   const [isRightSidebarOpen, setIsRightSidebarOpen] = useState(true);
   const [collapsedSubsets, setCollapsedSubsets] = useState(new Set() as any);
-  
-  const workerRef = useRef(null as Worker | null);
 
   const { showToast } = useToast();
   const folderPath = useAppStore(state => state.folderPath);
@@ -441,41 +145,6 @@ export const TagClassifier = ({ onClose, initialData = "" }: TagClassifierProps)
     }
   };
 
-  // --- Logic Helpers ---
-  const getMergedTag = (tag: string, groups: WordGroup[]) => {
-    let merged = tag;
-    groups.forEach(wg => {
-      if (!wg.name || !wg.words.length) return;
-      const sortedWords = [...wg.words].sort((a, b) => b.length - a.length);
-      sortedWords.forEach(word => {
-        const regex = new RegExp(`(^|\\s)${word.replace(/[.*+?^${}()|[\]\\/]/g, '\\$&')}(?=\\s|$)`, 'gi');
-        merged = merged.replace(regex, `$1{${wg.name}}`);
-      });
-    });
-    return merged;
-  };
-
-  const parseLine = (lineStr: string) => {
-    if (!lineStr.trim()) return [];
-    let remainingTags = lineStr.split(',').map(t => t.trim()).filter(t => t);
-    const parsedSubsets = subsets.map(sub => {
-      const matched: string[] = [];
-      const nextRemaining: string[] = [];
-      remainingTags.forEach(tag => {
-        const lower = tag.toLowerCase();
-        const merged = getMergedTag(lower, wordGroups).toLowerCase();
-        const isInc = sub.keywords.some(k => lower.includes(k.toLowerCase()) || merged.includes(k.toLowerCase()));
-        const isExactInc = sub.keywords.some(k => lower === k.toLowerCase() || merged === k.toLowerCase());
-        const isExc = !isExactInc && sub.excludeKeywords.some(k => lower.includes(k.toLowerCase()) || merged.includes(k.toLowerCase()));
-        if (isInc && !isExc) matched.push(tag); else nextRemaining.push(tag);
-      });
-      remainingTags = nextRemaining;
-      return { id: sub.id, name: sub.name, matches: matched };
-    });
-    parsedSubsets.push({ id: 0, name: 'Unclassified', matches: remainingTags });
-    return parsedSubsets;
-  };
-
   // --- Initialization ---
   useEffect(() => {
     const init = async () => {
@@ -492,7 +161,6 @@ export const TagClassifier = ({ onClose, initialData = "" }: TagClassifierProps)
       setIsLoading(false);
     };
     init();
-    return () => { if (workerRef.current) (workerRef.current as any).terminate(); };
   }, []);
 
   useEffect(() => {
@@ -583,7 +251,7 @@ export const TagClassifier = ({ onClose, initialData = "" }: TagClassifierProps)
         results = lines.map((line, idx) => {
           return {
             lineIndex: idx + 1,
-            data: parseLine(line)
+            data: parseLine(line, subsets, wordGroups)
           };
         });
         await new Promise(r => setTimeout(r, 650));
@@ -898,7 +566,7 @@ export const TagClassifier = ({ onClose, initialData = "" }: TagClassifierProps)
                       </div>
                     </div>
                     <div className="flex-1 overflow-y-auto space-y-4 pr-3 scrollbar-thin text-white">
-                      {parseLine(lines[currentIndex] || "").map((sub: any) => (
+                      {parseLine(lines[currentIndex] || "", subsets, wordGroups).map((sub: any) => (
                         <div key={sub.id} className="flex items-start gap-4 group">
                           <div className="w-32 shrink-0 flex items-center gap-2">
                             <span className={`text-[10px] font-black uppercase px-3 py-2 rounded-xl w-full text-center border transition-all truncate ${sub.id === 0 ? 'text-neutral-300 border-white/5 bg-solid-nested' : 'text-blue-400 border-blue-500/20 bg-blue-955/20'}`}>{sub.name}</span>

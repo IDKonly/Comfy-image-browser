@@ -6,15 +6,20 @@
 
 ## 진행 상황 (2026-06-06)
 - **P2-5 (1단계 Slices) — ✅ 완료.** `store/types.ts` + `store/slices/{session,navigation,settings,workshop}Slice.ts`로 분리, 단일 `create()/persist`로 합성(스토리지 키/버전 유지 → 마이그레이션 위험 0). 기존 테스트 통과.
-- **P2-6 — 부분 완료.**
+- **P2-6 — 대부분 완료.**
   - ✅ 공통 UI 키트 `src/components/ui/`(`ModalLayout`, `IconButton`, `ProgressBar`) 신설.
   - ✅ 추상화 검증: `TagRefiner`→`ModalLayout`, `AppFooter`→`ProgressBar`(0-division 가드 포함), `DebugPanel`→`IconButton`.
-  - ✅ **전체 `invoke`→`api` 마이그레이션 완료**(App/Inspector/Sidebar/SettingsModal/Thumbnail/ZoomPanViewer/FilterPanel/DebugPanel/WildcardTools/TagClassifier). 유일한 raw invoke는 TagClassifier의 제네릭 mock 디스패처(`tauriInvokeMock`).
+  - ✅ **전체 `invoke`→`api` 마이그레이션 완료**. 유일한 raw invoke는 TagClassifier의 제네릭 mock 디스패처(`browserFallback.tauriInvokeMock`).
   - ✅ 위험한 deprecated `apiClient.ts`(+테스트) 제거.
-  - ⏳ **남은 작업**: 대형 컴포넌트(TagClassifier ~51KB, WildcardTools ~40KB, BatchCropModule ~20KB) 구조 분해 + 인라인 Web Worker를 `?worker` 모듈로 추출.
+  - ✅ **모놀리식 컴포넌트 구조 분해** (다중 에이전트 분석 청사진 기반, 행동 보존 + tsc/테스트/프로덕션 빌드 검증):
+    - `BatchCropModule` 345→~190줄: `batchcrop/`(types, utils, CropBox, CropToolbar, SelectionActionBar, CropHints).
+    - `WildcardTools` 753→~480줄: `wildcardtools/`(utils, MergeFilterModal, TargetImagesPanel, TextPromptsPanel, CleaningBaseCard, WorkshopSettings, ExclusionFiltersSection, WorkshopResults).
+    - `TagClassifier` 1225→~935줄: `tagclassifier/`(types, classify, browserFallback, TagInput) + **죽은 `workerRef` 제거**.
+  - ℹ️ **"인라인 Web Worker" 항목은 무효**: 분석 결과 TagClassifier에 문자열 Worker는 존재하지 않았고, 할당된 적 없는 `workerRef`(dead code)만 있었음 → 제거로 갈음. 진짜 off-main-thread 분류가 필요하면 별도 신규 기능.
+  - ⏳ **남은 작업(상태 스레딩 高위험 → 런타임 검증 필요)**: TagClassifier의 뷰 서브컴포넌트(`SubsetCard`, `SingleEditorView`, `LibraryView`, `OutputPanel`, `WorkstationToolbar`, `PresetBar`/`BulkSourceView`/`MobileSectionNav`/`WordGroupEditor`)와 각 모놀리식의 커스텀 훅(`useWorkshopSettings`/`useWorkshopEvents` 등). 수십 개의 `setX(x.map(...))` 콜백 스레딩이라 회귀 위험이 커 `npm run tauri dev` 검증과 함께 진행 권장.
 - **P2-8 / P2-7 — 미착수.** 백엔드 parity·데이터 마이그레이션을 수반하므로 런타임 검증과 함께 별도 진행 권장.
 
-> 남은 P2-6(구조 분해)·P2-8·P2-7은 런타임 검증(`npm run tauri dev`)이 필요한 큰 단위이며 각각 독립 진행을 권장한다.
+> 남은 P2-6(뷰/훅 분해)·P2-8·P2-7은 런타임 검증(`npm run tauri dev`)이 필요한 큰 단위이며 각각 독립 진행을 권장한다.
 
 ---
 
