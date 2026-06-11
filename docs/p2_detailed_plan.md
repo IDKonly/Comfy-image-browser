@@ -14,9 +14,9 @@
   - ✅ **모놀리식 컴포넌트 구조 분해** (다중 에이전트 분석 청사진 기반, 행동 보존 + tsc/테스트/프로덕션 빌드 검증):
     - `BatchCropModule` 345→~190줄: `batchcrop/`(types, utils, CropBox, CropToolbar, SelectionActionBar, CropHints).
     - `WildcardTools` 753→~480줄: `wildcardtools/`(utils, MergeFilterModal, TargetImagesPanel, TextPromptsPanel, CleaningBaseCard, WorkshopSettings, ExclusionFiltersSection, WorkshopResults).
-    - `TagClassifier` 1225→~935줄: `tagclassifier/`(types, classify, browserFallback, TagInput) + **죽은 `workerRef` 제거**.
+    - `TagClassifier` 1225→**508줄**: `tagclassifier/` 13개 모듈 — types, classify, browserFallback, TagInput, **+뷰 서브컴포넌트 9개**(PresetBar, SubsetCard, WordGroupEditor, WorkstationToolbar, SingleEditorView, BulkSourceView, LibraryView, OutputPanel, MobileSectionNav) + **죽은 `workerRef` 제거**. 상태/핸들러는 부모에 유지하고 prop으로 전달(행동 바이트 보존). 런타임 검증 완료.
   - ℹ️ **"인라인 Web Worker" 항목은 무효**: 분석 결과 TagClassifier에 문자열 Worker는 존재하지 않았고, 할당된 적 없는 `workerRef`(dead code)만 있었음 → 제거로 갈음. 진짜 off-main-thread 분류가 필요하면 별도 신규 기능.
-  - ⏳ **남은 작업(상태 스레딩 高위험 → 런타임 검증 필요)**: TagClassifier의 뷰 서브컴포넌트(`SubsetCard`, `SingleEditorView`, `LibraryView`, `OutputPanel`, `WorkstationToolbar`, `PresetBar`/`BulkSourceView`/`MobileSectionNav`/`WordGroupEditor`)와 각 모놀리식의 커스텀 훅(`useWorkshopSettings`/`useWorkshopEvents` 등). 수십 개의 `setX(x.map(...))` 콜백 스레딩이라 회귀 위험이 커 `npm run tauri dev` 검증과 함께 진행 권장.
+  - ⏳ **남은 작업(선택, 高위험)**: 각 모놀리식의 커스텀 훅 추출(`useWorkshopSettings`/`useWorkshopEvents`, `usePresets`/`useClassifierPersistence`/`useTagAnalysis`). 이펙트 실행 순서·LazyStore 싱글톤·ref-mirror 패턴을 건드리므로 구조적 이득 대비 회귀 위험이 큼 → 별도 런타임 검증과 함께 진행 권장. (뷰 분해가 끝나 메인 파일은 이미 충분히 작아짐.)
 - **P2-8 / P2-7 — 미착수.** 백엔드 parity·데이터 마이그레이션을 수반하므로 런타임 검증과 함께 별도 진행 권장.
 
 > 남은 P2-6(뷰/훅 분해)·P2-8·P2-7은 런타임 검증(`npm run tauri dev`)이 필요한 큰 단위이며 각각 독립 진행을 권장한다.
