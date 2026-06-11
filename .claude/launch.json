@@ -1,0 +1,11 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "mobile-mock",
+      "runtimeExecutable": "node",
+      "runtimeArgs": ["test/mobile_mock_server.cjs"],
+      "port": 4399
+    }
+  ]
+}

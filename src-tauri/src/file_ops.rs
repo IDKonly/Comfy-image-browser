@@ -152,31 +152,38 @@ pub fn move_files_to_folder(
     Ok(())
 }
 
-#[tauri::command]
-pub fn undo_move(
-    db_state: tauri::State<'_, DbState>, 
-    watcher_state: tauri::State<'_, WatcherState>,
-    original_path: String, 
-    current_path: String
+pub fn undo_move_impl(
+    db_state: &DbState,
+    original_path: &str,
+    current_path: &str,
 ) -> Result<(), String> {
-    validate_paths(&vec![original_path.clone(), current_path.clone()], &watcher_state)?;
-    
-    let src = Path::new(&current_path);
-    let dst = Path::new(&original_path);
-    
+    let src = Path::new(current_path);
+    let dst = Path::new(original_path);
+
     if !src.exists() { return Err("Source file for undo does not exist".to_string()); }
-    
+
     if let Some(parent) = dst.parent() {
         if !parent.exists() { fs::create_dir_all(parent).map_err(|e| e.to_string())?; }
     }
-    
+
     fs::rename(src, dst).map_err(|e| e.to_string())?;
 
     let state = db_state.0.lock().unwrap();
     let db = state.as_ref().ok_or("Database not initialized")?;
-    let _ = db.update_image_path(&current_path, &original_path);
-    
+    let _ = db.update_image_path(current_path, original_path);
+
     Ok(())
+}
+
+#[tauri::command]
+pub fn undo_move(
+    db_state: tauri::State<'_, DbState>,
+    watcher_state: tauri::State<'_, WatcherState>,
+    original_path: String,
+    current_path: String
+) -> Result<(), String> {
+    validate_paths(&vec![original_path.clone(), current_path.clone()], &watcher_state)?;
+    undo_move_impl(&db_state, &original_path, &current_path)
 }
 
 #[tauri::command]

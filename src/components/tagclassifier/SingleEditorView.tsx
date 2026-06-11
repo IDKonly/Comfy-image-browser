@@ -1,12 +1,10 @@
 import { ChevronLeft, ChevronRight, Plus, Trash2, Terminal, RefreshCw, Sparkles, ArrowRight } from "lucide-react";
-import { Subset, WordGroup } from "./types";
-import { parseLine } from "./classify";
 
 interface SingleEditorViewProps {
   lines: string[];
   currentIndex: number;
-  subsets: Subset[];
-  wordGroups: WordGroup[];
+  /** Pre-classified result for the current line (computed by the backend classifier). */
+  previewData: any[];
   onPrev: () => void;
   onNext: () => void;
   onInsertLine: () => void;
@@ -16,7 +14,7 @@ interface SingleEditorViewProps {
 
 /** "Editor" view: prompt navigator, active-line textarea, and live Flow Result preview. */
 export const SingleEditorView = ({
-  lines, currentIndex, subsets, wordGroups, onPrev, onNext, onInsertLine, onDeleteLine, onActiveLineChange,
+  lines, currentIndex, previewData, onPrev, onNext, onInsertLine, onDeleteLine, onActiveLineChange,
 }: SingleEditorViewProps) => (
   <div className="flex-1 flex flex-col gap-6 overflow-hidden animate-in slide-in-from-bottom-2 duration-500">
     {/* Editor Card Navigator */}
@@ -93,7 +91,7 @@ export const SingleEditorView = ({
         </div>
       </div>
       <div className="flex-1 overflow-y-auto space-y-4 pr-3 scrollbar-thin text-white">
-        {parseLine(lines[currentIndex] || "", subsets, wordGroups).map((sub: any) => (
+        {previewData.map((sub: any) => (
           <div key={sub.id} className="flex items-start gap-4 group">
             <div className="w-32 shrink-0 flex items-center gap-2">
               <span className={`text-[10px] font-black uppercase px-3 py-2 rounded-xl w-full text-center border transition-all truncate ${sub.id === 0 ? 'text-neutral-300 border-white/5 bg-solid-nested' : 'text-blue-400 border-blue-500/20 bg-blue-955/20'}`}>{sub.name}</span>

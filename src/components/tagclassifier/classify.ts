@@ -1,14 +1,19 @@
 import { Subset, WordGroup } from "./types";
 
-/** Replace wordgroup member words in a tag with their {groupName} variable (length-sorted). */
+/**
+ * Replace wordgroup member words in a tag with their {groupName} variable (length-sorted).
+ * Mirrors the Rust `get_merged_tag_optimized` exactly: the trailing boundary `(\s|$)` is
+ * captured and restored (`$2`) — NOT a lookahead — so consecutive matches behave identically
+ * to the backend classifier used at compile time.
+ */
 export const getMergedTag = (tag: string, groups: WordGroup[]) => {
   let merged = tag;
   groups.forEach(wg => {
     if (!wg.name || !wg.words.length) return;
     const sortedWords = [...wg.words].sort((a, b) => b.length - a.length);
     sortedWords.forEach(word => {
-      const regex = new RegExp(`(^|\\s)${word.replace(/[.*+?^${}()|[\]\\/]/g, '\\$&')}(?=\\s|$)`, 'gi');
-      merged = merged.replace(regex, `$1{${wg.name}}`);
+      const regex = new RegExp(`(^|\\s)${word.replace(/[.*+?^${}()|[\]\\/]/g, '\\$&')}(\\s|$)`, 'gi');
+      merged = merged.replace(regex, `$1{${wg.name}}$2`);
     });
   });
   return merged;

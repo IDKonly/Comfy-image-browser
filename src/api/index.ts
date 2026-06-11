@@ -122,6 +122,9 @@ export const api = {
   getTagSuggestions: (folder: string, currentInput: string, recursive: boolean) =>
     invoke<[string, number][]>("get_tag_suggestions", { folder: toBackendPath(folder), currentInput, recursive }),
 
+  getAllPrompts: (folder: string, recursive: boolean) =>
+    invoke<string[]>("get_all_prompts", { folder: toBackendPath(folder), recursive }),
+
   // Metadata
   getMetadata: (path: string) =>
     invoke<ImageMetadata>("get_metadata", { path: toBackendPath(path) }),

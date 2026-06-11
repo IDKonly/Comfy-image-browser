@@ -60,9 +60,13 @@ pub struct ImageQuery {
 }
 
 #[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct ActionRequest {
     pub path: String,
     pub action: String,
+    /// For the `undo` action: which bucket the file was moved into ("keep" | "trash").
+    #[serde(default)]
+    pub prev_action: Option<String>,
 }
 
 /// Helper to check if a path is within approved roots
@@ -241,14 +245,32 @@ async fn post_action_handler(
     Json(payload): Json<ActionRequest>,
 ) -> impl IntoResponse {
     use crate::file_ops;
-    
+
     let path_str = payload.path.clone();
-    let path = Path::new(&path_str);
-    
+    let original = PathBuf::from(&path_str);
+
+    // For `undo`, the file currently lives in the _Keep/_Trash bucket, so that is the
+    // path that exists on disk and must be authorized (the original does not exist yet).
+    let undo_current: Option<PathBuf> = if payload.action == "undo" {
+        let subdir = match payload.prev_action.as_deref() {
+            Some("keep") => "_Keep",
+            Some("trash") => "_Trash",
+            _ => return (StatusCode::BAD_REQUEST, "Missing or invalid prevAction for undo").into_response(),
+        };
+        match (original.parent(), original.file_name()) {
+            (Some(parent), Some(name)) => Some(parent.join(subdir).join(name)),
+            _ => return (StatusCode::BAD_REQUEST, "Invalid path for undo").into_response(),
+        }
+    } else {
+        None
+    };
+
+    let auth_path: &Path = undo_current.as_deref().unwrap_or(&original);
+
     let app_handle = {
         let gs = state.lock().unwrap();
-        if !is_path_authorized(path, &gs) {
-            log::warn!("Access denied for action: {:?} with path: {:?}", payload.action, path);
+        if !is_path_authorized(auth_path, &gs) {
+            log::warn!("Access denied for action: {:?} with path: {:?}", payload.action, auth_path);
             return (StatusCode::FORBIDDEN, "Access denied").into_response();
         }
         gs.app_handle.clone()
@@ -257,12 +279,16 @@ async fn post_action_handler(
     if let Some(app) = app_handle {
         let db_state = app.state::<DbState>();
 
-        log::info!("Executing mobile action: {} on {:?}", payload.action, path);
+        log::info!("Executing mobile action: {} on {:?}", payload.action, original);
 
         let result = match payload.action.as_str() {
             "keep" => file_ops::move_to_keep_impl(db_state.inner(), vec![path_str]),
             "trash" => file_ops::delete_to_trash_impl(db_state.inner(), vec![path_str]),
             "skip" => Ok(()),
+            "undo" => {
+                let current = undo_current.expect("undo_current set for undo action");
+                file_ops::undo_move_impl(db_state.inner(), &path_str, &current.to_string_lossy())
+            }
             _ => Err("Invalid action".to_string()),
         };
 

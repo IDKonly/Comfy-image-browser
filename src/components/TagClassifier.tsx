@@ -42,6 +42,7 @@ export const TagClassifier = ({ onClose, initialData = "" }: TagClassifierProps)
   // UI States
   const [isRightSidebarOpen, setIsRightSidebarOpen] = useState(true);
   const [collapsedSubsets, setCollapsedSubsets] = useState(new Set() as any);
+  const [previewData, setPreviewData] = useState([] as any[]);
 
   const { showToast } = useToast();
   const folderPath = useAppStore(state => state.folderPath);
@@ -184,6 +185,22 @@ export const TagClassifier = ({ onClose, initialData = "" }: TagClassifierProps)
     return Array.from(tags).sort() as string[];
   }, [lines, wordGroups]);
 
+  // Live "Flow Result" preview of the current line. Uses the SAME backend classifier as
+  // Compile (debounced) so the preview always matches the compiled output; the browser
+  // audit fallback uses the JS port (kept in sync with the Rust logic).
+  useEffect(() => {
+    const line = lines[currentIndex] || "";
+    if (!line.trim()) { setPreviewData([]); return; }
+    if (!isTauri) { setPreviewData(parseLine(line, subsets, wordGroups)); return; }
+    let active = true;
+    const timer = setTimeout(() => {
+      api.classifyPromptsCommand([line], subsets, wordGroups)
+        .then(res => { if (active) setPreviewData(res?.[0]?.data ?? []); })
+        .catch(() => {});
+    }, 150);
+    return () => { active = false; clearTimeout(timer); };
+  }, [lines, currentIndex, subsets, wordGroups]);
+
   // Import folder prompts
   const importDirect = async () => {
     if (isTauri && !folderPath) { 
@@ -192,7 +209,9 @@ export const TagClassifier = ({ onClose, initialData = "" }: TagClassifierProps)
     }
     setIsRunning(true);
     try {
-        const results: string[] = await tauriInvokeMock("get_all_prompts", { folder: folderPath, recursive });
+        const results: string[] = isTauri
+          ? await api.getAllPrompts(folderPath ?? "", recursive)
+          : await tauriInvokeMock("get_all_prompts", { folder: folderPath, recursive });
         if (!results || results.length === 0) { 
           showToast("No prompts found in selected directory", "info"); 
         } else {
@@ -218,12 +237,9 @@ export const TagClassifier = ({ onClose, initialData = "" }: TagClassifierProps)
         const targetPaths = rawImages.map(img => img.path);
         showToast(`Processing images through workshop engine...`, "info");
         
-        const results: string[] = await tauriInvokeMock("generate_wildcards", { 
-            paths: targetPaths, 
-            prompts: [],
-            threshold: 0.95,
-            filter: workshopFilter 
-        });
+        const results: string[] = isTauri
+          ? await api.generateWildcards({ paths: targetPaths, prompts: [], threshold: 0.95, filter: workshopFilter })
+          : await tauriInvokeMock("generate_wildcards", { paths: targetPaths, prompts: [], threshold: 0.95, filter: workshopFilter });
         
         if (!results || results.length === 0) { 
             showToast("No prompts match current workshop filters", "info"); 
@@ -388,8 +404,7 @@ export const TagClassifier = ({ onClose, initialData = "" }: TagClassifierProps)
                 <SingleEditorView
                   lines={lines}
                   currentIndex={currentIndex}
-                  subsets={subsets}
-                  wordGroups={wordGroups}
+                  previewData={previewData}
                   onPrev={() => setCurrentIndex(p => Math.max(0, p - 1))}
                   onNext={() => setCurrentIndex(p => Math.min(lines.length - 1, p + 1))}
                   onInsertLine={() => { const nl = [...lines]; nl.splice(currentIndex+1, 0, ""); setLines(nl); setCurrentIndex(currentIndex+1); }}
