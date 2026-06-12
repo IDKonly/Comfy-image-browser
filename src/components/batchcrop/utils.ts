@@ -1,4 +1,5 @@
 import { Rect } from "./types";
+import { settingsStore } from "../../api/settings";
 
 /** "#RRGGBB" -> [r, g, b]. */
 export const hexToRgb = (hex: string): [number, number, number] => [
@@ -22,23 +23,36 @@ export const snapValue = (v: number, targets: number[], sensitivity: number): nu
   return v;
 };
 
-/** Load a recent "[a,b]" pair list from localStorage, falling back on missing/invalid data. */
-export const loadRecentPairs = (storageKey: string, fallback: [number, number][]): [number, number][] => {
-  try {
-    return JSON.parse(localStorage.getItem(storageKey) || JSON.stringify(fallback));
-  } catch {
-    return fallback;
-  }
-};
-
-/** Prepend a pair to a recent list (dedup, max 3), persist it, and return the new list. */
-export const pushRecentPair = (
+/** Prepend a pair to a recent list (dedup, max 3). Pure — persistence is handled separately. */
+export const prependRecentPair = (
   list: [number, number][],
   a: number,
-  b: number,
-  storageKey: string
-): [number, number][] => {
-  const next = [[a, b], ...list.filter(g => g[0] !== a || g[1] !== b)].slice(0, 3) as [number, number][];
-  localStorage.setItem(storageKey, JSON.stringify(next));
-  return next;
+  b: number
+): [number, number][] =>
+  [[a, b], ...list.filter(g => g[0] !== a || g[1] !== b)].slice(0, 3) as [number, number][];
+
+/** Load a recent "[a,b]" list from the shared settings store, migrating once from legacy localStorage. */
+export const loadRecents = async (key: string, fallback: [number, number][]): Promise<[number, number][]> => {
+  try {
+    const fromStore = await settingsStore.get<[number, number][]>(key);
+    if (fromStore != null) return fromStore;
+    const legacy = localStorage.getItem(key);
+    if (legacy) {
+      const parsed = JSON.parse(legacy) as [number, number][];
+      await settingsStore.set(key, parsed);
+      await settingsStore.save();
+      return parsed;
+    }
+  } catch { /* fall through to default */ }
+  return fallback;
+};
+
+/** Persist a recent "[a,b]" list to the shared settings store. */
+export const saveRecents = async (key: string, list: [number, number][]): Promise<void> => {
+  try {
+    await settingsStore.set(key, list);
+    await settingsStore.save();
+  } catch (e) {
+    console.error("[batchcrop] failed to save recents", e);
+  }
 };

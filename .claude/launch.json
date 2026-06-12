@@ -6,6 +6,12 @@
       "runtimeExecutable": "node",
       "runtimeArgs": ["test/mobile_mock_server.cjs"],
       "port": 4399
+    },
+    {
+      "name": "dev",
+      "runtimeExecutable": "npm",
+      "runtimeArgs": ["run", "dev"],
+      "port": 1420
     }
   ]
 }

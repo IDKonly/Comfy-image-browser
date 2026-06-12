@@ -2,6 +2,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { open, save, confirm } from "@tauri-apps/plugin-dialog";
 import { LazyStore } from "@tauri-apps/plugin-store";
 import { mkdir, exists, readDir, remove, readTextFile, writeTextFile } from "@tauri-apps/plugin-fs";
+import { settingsStore } from "../../api/settings";
 
 // Browser/Tauri compatibility layer for the Tag Classifier. When running inside the
 // native Tauri container these wrappers delegate to the real plugins; in a plain browser
@@ -36,9 +37,36 @@ class BrowserStore {
   async save(): Promise<void> {}
 }
 
+// Classifier config (last_preset / subsets / wordGroups) lives in the shared .settings.json.
 export const classifierStore = isTauri
+  ? settingsStore
+  : new BrowserStore(".settings.json") as any;
+
+// Legacy pre-consolidation store, read once for migration only.
+const legacyClassifierStore = isTauri
   ? new LazyStore(".tag_classifier.json")
   : new BrowserStore(".tag_classifier.json") as any;
+
+/**
+ * One-time, non-destructive migration of classifier config from the legacy
+ * `.tag_classifier.json` into the shared `.settings.json`. Runs only when the new
+ * store has no classifier data yet; the legacy file is left intact for safety.
+ */
+export async function migrateClassifierSettings(): Promise<void> {
+  try {
+    if ((await classifierStore.get("subsets")) != null || (await classifierStore.get("wordGroups")) != null) return;
+    const subsets = await legacyClassifierStore.get("subsets");
+    const wordGroups = await legacyClassifierStore.get("wordGroups");
+    const lastPreset = await legacyClassifierStore.get("last_preset");
+    let migrated = false;
+    if (subsets != null) { await classifierStore.set("subsets", subsets); migrated = true; }
+    if (wordGroups != null) { await classifierStore.set("wordGroups", wordGroups); migrated = true; }
+    if (lastPreset != null) { await classifierStore.set("last_preset", lastPreset); migrated = true; }
+    if (migrated) await classifierStore.save();
+  } catch (e) {
+    console.error("[classifier] settings migration failed", e);
+  }
+}
 
 // Safe wrapper around Tauri dialogs
 export const dialogOpen = async (options?: any): Promise<string | string[] | null> => {

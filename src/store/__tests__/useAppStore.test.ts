@@ -27,9 +27,10 @@ describe('useAppStore Settings Persistence', () => {
     // Zustand's persist middleware handles this.
   });
 
-  it('should handle classifier settings (newly unified)', () => {
-    // This is the "Red" part: classifierSettings doesn't exist yet in the store
-    // @ts-ignore
-    expect(useAppStore.getState().classifierSettings).toBeDefined();
+  it('no longer carries classifier settings in the global store (moved to .settings.json)', () => {
+    // Classifier config (subsets/wordGroups/last_preset) now lives in the shared
+    // tauri-plugin-store file (.settings.json), not the zustand store.
+    // @ts-ignore - field intentionally removed
+    expect(useAppStore.getState().classifierSettings).toBeUndefined();
   });
 });

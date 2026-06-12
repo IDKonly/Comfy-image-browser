@@ -88,7 +88,6 @@ export const useAppStore = create<AppState>()(
         recursive: state.recursive,
         sortMethod: state.sortMethod,
         workshopFilter: state.workshopFilter,
-        classifierSettings: state.classifierSettings,
         imageCacheSize: state.imageCacheSize,
         sidebarWidth: state.sidebarWidth,
         similaritySearchNumTags: state.similaritySearchNumTags,

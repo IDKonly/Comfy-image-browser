@@ -1,8 +1,8 @@
 import { useState, useEffect, useRef } from "react";
 import { api } from "../api";
+import { settingsStore } from "../api/settings";
 import { listen } from "@tauri-apps/api/event";
 import { open, save } from "@tauri-apps/plugin-dialog";
-import { LazyStore } from "@tauri-apps/plugin-store";
 import { X, Wand2, ListFilter } from "lucide-react";
 import { useToast } from "./Toast";
 import { TagRefiner } from "./TagRefiner";
@@ -15,8 +15,6 @@ import { CleaningBaseCard } from "./wildcardtools/CleaningBaseCard";
 import { WorkshopSettings } from "./wildcardtools/WorkshopSettings";
 import { ExclusionFiltersSection } from "./wildcardtools/ExclusionFiltersSection";
 import { WorkshopResults } from "./wildcardtools/WorkshopResults";
-
-const settingsStore = new LazyStore(".settings.json");
 
 interface WildcardToolsProps {
   onClose: () => void;

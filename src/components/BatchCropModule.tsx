@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef, useCallback } from "react";
 import { Rect } from "./batchcrop/types";
-import { hexToRgb, roundRect, snapValue, loadRecentPairs, pushRecentPair } from "./batchcrop/utils";
+import { hexToRgb, roundRect, snapValue, prependRecentPair, loadRecents, saveRecents } from "./batchcrop/utils";
 import { CropBox } from "./batchcrop/CropBox";
 import { CropToolbar } from "./batchcrop/CropToolbar";
 import { SelectionActionBar } from "./batchcrop/SelectionActionBar";
@@ -36,8 +36,16 @@ export const BatchCropModule = ({ src, onClose, onSave }: BatchCropModuleProps) 
   const [gridCols, setGridCols] = useState(2);
   const [customRatioW, setCustomRatioW] = useState(1);
   const [customRatioH, setCustomRatioH] = useState(1);
-  const [recentGrids, setRecentGrids] = useState<[number, number][]>(() => loadRecentPairs('recent_crop_grids', [[2,2],[3,3],[4,4]]));
-  const [recentRatios, setRecentRatios] = useState<[number, number][]>(() => loadRecentPairs('recent_crop_ratios', [[1,1],[3,2],[16,9]]));
+  const [recentGrids, setRecentGrids] = useState<[number, number][]>([[2,2],[3,3],[4,4]]);
+  const [recentRatios, setRecentRatios] = useState<[number, number][]>([[1,1],[3,2],[16,9]]);
+
+  // Load persisted recents from the shared settings store (migrating legacy localStorage once).
+  useEffect(() => {
+    let active = true;
+    loadRecents('recent_crop_grids', [[2,2],[3,3],[4,4]]).then(v => { if (active) setRecentGrids(v); });
+    loadRecents('recent_crop_ratios', [[1,1],[3,2],[16,9]]).then(v => { if (active) setRecentRatios(v); });
+    return () => { active = false; };
+  }, []);
 
   const getScale = useCallback(() => {
     if (!imgRef.current) return 1;
@@ -54,7 +62,9 @@ export const BatchCropModule = ({ src, onClose, onSave }: BatchCropModuleProps) 
   const applyRatio = (w: number, h: number) => {
     setLockedRatio(w / h);
     setCustomRatioW(w); setCustomRatioH(h);
-    setRecentRatios(pushRecentPair(recentRatios, w, h, 'recent_crop_ratios'));
+    const next = prependRecentPair(recentRatios, w, h);
+    setRecentRatios(next);
+    saveRecents('recent_crop_ratios', next);
   };
 
   const handleMouseDown = (e: React.MouseEvent, rectId?: string, handle?: string) => {
@@ -209,7 +219,9 @@ export const BatchCropModule = ({ src, onClose, onSave }: BatchCropModuleProps) 
     const news: Rect[] = [];
     for(let i=0; i<r; i++) for(let j=0; j<c; j++) news.push({ id: crypto.randomUUID(), x: j*w, y: i*h, width: w, height: h });
     setRects(p => [...p, ...news]);
-    setRecentGrids(pushRecentPair(recentGrids, r, c, 'recent_crop_grids'));
+    const next = prependRecentPair(recentGrids, r, c);
+    setRecentGrids(next);
+    saveRecents('recent_crop_grids', next);
   };
 
   return (

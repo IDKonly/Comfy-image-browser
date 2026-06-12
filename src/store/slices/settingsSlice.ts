@@ -6,7 +6,6 @@ export const createSettingsSlice: AppSliceCreator<SettingsSlice> = (set) => ({
   sortMethod: 'NameAsc',
   imageCacheSize: 5,
   sidebarWidth: 288,
-  classifierSettings: {},
   twitterSettings: {
     template: "{hashtags}\n\n{phrases}\n\n#AIArt #StableDiffusion #ComfyUI",
     phrasesToPick: ["1girl", "masterpiece", "solo", "ultra detailed"],
@@ -35,5 +34,4 @@ export const createSettingsSlice: AppSliceCreator<SettingsSlice> = (set) => ({
   setSortMethod: (sortMethod) => set({ sortMethod }),
   setImageCacheSize: (imageCacheSize) => set({ imageCacheSize }),
   setSidebarWidth: (sidebarWidth) => set({ sidebarWidth }),
-  setClassifierSettings: (classifierSettings) => set({ classifierSettings }),
 });

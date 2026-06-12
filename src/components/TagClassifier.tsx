@@ -9,6 +9,7 @@ import { getMergedTag, parseLine } from "./tagclassifier/classify";
 import {
   isTauri, classifierStore, dialogOpen, dialogSave, dialogConfirm,
   fsExists, fsMkdir, fsReadDir, fsReadTextFile, fsWriteTextFile, fsRemove, tauriInvokeMock,
+  migrateClassifierSettings,
 } from "./tagclassifier/browserFallback";
 import { PresetBar } from "./tagclassifier/PresetBar";
 import { SubsetCard } from "./tagclassifier/SubsetCard";
@@ -152,6 +153,7 @@ export const TagClassifier = ({ onClose, initialData = "" }: TagClassifierProps)
   // --- Initialization ---
   useEffect(() => {
     const init = async () => {
+      await migrateClassifierSettings();
       await refreshPresets();
       const lastPreset = (await classifierStore.get("last_preset")) as string | null;
       const s = (await classifierStore.get("subsets")) as Subset[] | null;

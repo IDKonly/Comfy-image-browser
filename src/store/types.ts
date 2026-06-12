@@ -141,7 +141,6 @@ export interface SettingsSlice {
   sortMethod: SortMethod;
   imageCacheSize: number;
   sidebarWidth: number;
-  classifierSettings?: any;
   setShortcuts: (shortcuts: Shortcuts) => void;
   setTwitterSettings: (settings: TwitterSettings) => void;
   setMobileServerSettings: (settings: MobileServerSettings) => void;
@@ -149,7 +148,6 @@ export interface SettingsSlice {
   setSortMethod: (method: SortMethod) => void;
   setImageCacheSize: (size: number) => void;
   setSidebarWidth: (width: number) => void;
-  setClassifierSettings: (settings: any) => void;
 }
 
 export interface WorkshopSlice {
