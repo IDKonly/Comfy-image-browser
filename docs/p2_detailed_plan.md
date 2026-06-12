@@ -17,9 +17,11 @@
     - `TagClassifier` 1225→**508줄**: `tagclassifier/` 13개 모듈 — types, classify, browserFallback, TagInput, **+뷰 서브컴포넌트 9개**(PresetBar, SubsetCard, WordGroupEditor, WorkstationToolbar, SingleEditorView, BulkSourceView, LibraryView, OutputPanel, MobileSectionNav) + **죽은 `workerRef` 제거**. 상태/핸들러는 부모에 유지하고 prop으로 전달(행동 바이트 보존). 런타임 검증 완료.
   - ℹ️ **"인라인 Web Worker" 항목은 무효**: 분석 결과 TagClassifier에 문자열 Worker는 존재하지 않았고, 할당된 적 없는 `workerRef`(dead code)만 있었음 → 제거로 갈음. 진짜 off-main-thread 분류가 필요하면 별도 신규 기능.
   - ⏳ **남은 작업(선택, 高위험)**: 각 모놀리식의 커스텀 훅 추출(`useWorkshopSettings`/`useWorkshopEvents`, `usePresets`/`useClassifierPersistence`/`useTagAnalysis`). 이펙트 실행 순서·LazyStore 싱글톤·ref-mirror 패턴을 건드리므로 구조적 이득 대비 회귀 위험이 큼 → 별도 런타임 검증과 함께 진행 권장. (뷰 분해가 끝나 메인 파일은 이미 충분히 작아짐.)
-- **P2-8 / P2-7 — 미착수.** 백엔드 parity·데이터 마이그레이션을 수반하므로 런타임 검증과 함께 별도 진행 권장.
+- **P2-8 (태그 로직 백엔드 이관) — ✅ 완료.** TagClassifier 라이브 프리뷰가 Compile과 **동일한 백엔드 분류기**(`api.classifyPromptsCommand`, 디바운스)를 사용 → 프리뷰=컴파일 보장(이전엔 JS 정규식 lookahead 차이로 어긋날 수 있었음). `api.getAllPrompts` 추가, importDirect/importFiltered를 Tauri에서 api로 라우팅. JS `getMergedTag`도 Rust 정규식과 동일하게 포팅(브라우저 폴백 일치). 파리티 테스트 추가.
+- **P2-7 (영속성 통합 → .settings.json) — ✅ 완료.** `src/api/settings.ts`의 공유 `settingsStore`(단일 `.settings.json`)로 통합. Classifier 설정을 `.tag_classifier.json`→`.settings.json`으로 **비파괴 1회성 마이그레이션**(레거시 파일 보존), BatchCrop recents를 localStorage→공유 스토어로 이전(비동기 로드 + 마이그레이션), 잔재 `classifierSettings`(zustand) 제거. `workshopFilter`는 앱 시작 시 유사도 검색에 필요한 공유 런타임 상태라 zustand에 유지(의도적).
+- **남은 작업(선택, 高위험)**: 각 모놀리식 커스텀 훅 추출(C). 이펙트 순서/싱글톤/ref-mirror 위험 대비 이득이 작아 보류 권장.
 
-> 남은 P2-6(뷰/훅 분해)·P2-8·P2-7은 런타임 검증(`npm run tauri dev`)이 필요한 큰 단위이며 각각 독립 진행을 권장한다.
+> 모든 변경은 tsc/테스트/프로덕션 빌드로 검증. Tauri 전용 경로(.settings.json plugin-store, 백엔드 분류)는 실제 앱 런타임 검증 권장.
 
 ---
 
