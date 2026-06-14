@@ -500,7 +500,7 @@ function App() {
       const state = useAppStore.getState();
       if (state.similaritySearchActive) return; // Do not overwrite similarity search results
       
-      if (payload.folder === state.folderPath || recursive) {
+      if (payload.folder === state.folderPath || state.recursive) {
         // [Differential Update] 이미지 목록이 실제로 변경되었는지 확인
         const isSameCount = payload.images.length === state.images.length;
         const isSameContent = isSameCount && payload.images.every((img: any, idx: number) => 

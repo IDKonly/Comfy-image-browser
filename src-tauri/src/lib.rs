@@ -73,6 +73,8 @@ pub fn run() {
         .manage(scanner::WatcherState(Mutex::new(scanner::FolderWatcher {
             watcher: None,
             current_path: None,
+            current_recursive: None,
+            current_sort: None,
         })))
         .manage(db::DbState(Mutex::new(None)))
         .manage(mobile_shared_state)

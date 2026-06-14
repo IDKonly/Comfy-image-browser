@@ -25,6 +25,11 @@ pub fn update_scan_focus(index: usize) {
 pub struct FolderWatcher {
     pub watcher: Option<notify::RecommendedWatcher>,
     pub current_path: Option<String>,
+    // The recursive/sort settings the active watcher was created with. The watcher captures
+    // these (scan depth + emit order), so it must be re-created when either changes — not just
+    // when the path changes — otherwise e.g. turning recursive off keeps emitting subfolder files.
+    pub current_recursive: Option<bool>,
+    pub current_sort: Option<SortMethod>,
 }
 
 pub struct WatcherState(pub Mutex<FolderWatcher>);
@@ -211,12 +216,17 @@ pub async fn scan_directory(
 
     {
         let mut ws = watcher_state.0.lock().unwrap();
-        if ws.current_path.as_ref() != Some(&root_str) {
-            ws.watcher = None; 
+        if ws.current_path.as_ref() != Some(&root_str)
+            || ws.current_recursive != Some(is_recursive)
+            || ws.current_sort != Some(method)
+        {
+            ws.watcher = None;
             match setup_watcher(app_handle.clone(), &root, is_recursive, method) {
                 Ok(w) => {
                     ws.watcher = Some(w);
                     ws.current_path = Some(root_str.clone());
+                    ws.current_recursive = Some(is_recursive);
+                    ws.current_sort = Some(method);
                 },
                 Err(e) => log::error!("Failed to start watcher: {}", e),
             }
