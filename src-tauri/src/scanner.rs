@@ -103,7 +103,7 @@ fn sort_images(images: &mut Vec<ImageInfo>, method: SortMethod) {
     }
 }
 
-fn setup_watcher(app_handle: tauri::AppHandle, path: &Path, is_recursive: bool, sort_method: SortMethod) -> notify::Result<notify::RecommendedWatcher> {
+fn setup_watcher(app_handle: tauri::AppHandle, path: &Path, is_recursive: bool) -> notify::Result<notify::RecommendedWatcher> {
     let app_handle_clone = app_handle.clone();
     let path_buf = path.to_path_buf();
     let last_event = Arc::new(Mutex::new(std::time::Instant::now()));
@@ -117,8 +117,22 @@ fn setup_watcher(app_handle: tauri::AppHandle, path: &Path, is_recursive: bool, 
                         *last = std::time::Instant::now();
                         let app = app_handle_clone.clone();
                         let p = path_buf.to_string_lossy().to_string();
-                        
+                        let folder_str = p.replace("\\", "/");
+
                         let _ = std::thread::spawn(move || {
+                             // Use the CURRENT recursive/sort (not the values captured when this watcher was
+                             // created). An event still in flight after the user toggled recursive / changed
+                             // sort then re-scans with the right depth+order, and an event from a watcher that
+                             // has since been replaced (path changed) is dropped. This prevents subfolder files
+                             // reappearing after recursive is turned off, and the resulting list oscillation
+                             // that makes the whole thumbnail grid appear to refresh.
+                             let (is_recursive, sort_method) = {
+                                 let ws_state = app.state::<WatcherState>();
+                                 let ws = match ws_state.0.lock() { Ok(g) => g, Err(_) => return };
+                                 if ws.current_path.as_deref() != Some(folder_str.as_str()) { return; }
+                                 (ws.current_recursive.unwrap_or(false), ws.current_sort.unwrap_or(SortMethod::NameAsc))
+                             };
+
                              let extensions = ["png", "jpg", "jpeg", "webp"];
                              let depth = if is_recursive { 99 } else { 1 };
                              let disk_entries: Vec<ImageInfo> = WalkDir::new(&p)
@@ -147,8 +161,7 @@ fn setup_watcher(app_handle: tauri::AppHandle, path: &Path, is_recursive: bool, 
 
                             let mut images = disk_entries.clone();
                             sort_images(&mut images, sort_method);
-                            
-                            let folder_str = p.replace("\\", "/");
+
                             let _ = app.emit("folder-updated", ScanResult {
                                 images: images.clone(),
                                 initial_index: 0,
@@ -221,7 +234,7 @@ pub async fn scan_directory(
             || ws.current_sort != Some(method)
         {
             ws.watcher = None;
-            match setup_watcher(app_handle.clone(), &root, is_recursive, method) {
+            match setup_watcher(app_handle.clone(), &root, is_recursive) {
                 Ok(w) => {
                     ws.watcher = Some(w);
                     ws.current_path = Some(root_str.clone());
