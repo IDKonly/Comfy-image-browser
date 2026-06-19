@@ -8,6 +8,7 @@ mod twitter;
 mod crop;
 mod mobile_server;
 mod secrets;
+mod nsfw;
 #[cfg(test)]
 mod benchmarks;
 
@@ -60,6 +61,7 @@ pub fn run() {
             port: 4882,
             local_only: true,
             authorized_folders: Vec::new(),
+            nsfw_tags: nsfw::default_nsfw_tags(),
         },
         state: mobile_server::MobileState {
             recent_folders: Vec::new(),
@@ -120,6 +122,7 @@ pub fn run() {
             file_ops::move_files_to_folder,
             file_ops::undo_move,
             file_ops::auto_classify,
+            file_ops::classify_nsfw,
             thumbnails::get_thumbnail,
             wildcard::generate_wildcards,
             wildcard::expand_wildcards,

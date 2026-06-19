@@ -91,7 +91,19 @@ export interface MobileServerSettings {
   port: number;
   localOnly: boolean;
   authorizedFolders: string[];
+  // NSFW keywords: drive both the viewer's "Move NSFW" action and the mobile feed's SFW mode.
+  // Kept here so the existing persist + backend-sync plumbing carries them automatically.
+  nsfwTags: string[];
 }
+
+// Base-form NSFW keywords. The Rust matcher handles plural/`-es` variants, so "nipple"
+// already covers "nipples". Keep in sync with `nsfw::default_nsfw_tags()` in the backend.
+export const DEFAULT_NSFW_TAGS: string[] = [
+  "sex", "nsfw", "nude", "nudity", "naked", "topless", "bottomless",
+  "nipple", "areola", "penis", "pussy", "vagina", "vaginal", "anus",
+  "clitoris", "testicle", "cum", "ejaculation", "penetration",
+  "fellatio", "cunnilingus", "masturbation", "pubic", "ahegao", "cameltoe",
+];
 
 // --- Store slices ---------------------------------------------------------
 // The store is composed from these slices via a single create()/persist call,

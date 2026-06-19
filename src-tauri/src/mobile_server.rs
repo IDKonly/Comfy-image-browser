@@ -22,6 +22,10 @@ pub struct MobileServerSettings {
     pub port: u16,
     pub local_only: bool,
     pub authorized_folders: Vec<String>,
+    /// NSFW keywords used to hide images from the feed when SFW mode is on. `serde(default)`
+    /// keeps older front-ends (that don't send this field) deserializing cleanly.
+    #[serde(default)]
+    pub nsfw_tags: Vec<String>,
 }
 
 #[derive(Clone, Serialize, Deserialize, Debug)]
@@ -52,6 +56,10 @@ pub struct SubfoldersQuery {
 #[derive(Deserialize)]
 pub struct ImagesQuery {
     pub folder: String,
+    /// "1"/"true" enables SFW mode: images whose prompt/filename match an NSFW keyword
+    /// are excluded from the feed.
+    #[serde(default)]
+    pub sfw: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -189,13 +197,55 @@ async fn get_images_handler(
     Query(query): Query<ImagesQuery>,
 ) -> impl IntoResponse {
     let path = Path::new(&query.folder);
-    {
+
+    let sfw_mode = matches!(query.sfw.as_deref(), Some("1") | Some("true"));
+
+    // Pull what we need from shared state (auth, NSFW keywords, app handle) under one lock.
+    let (nsfw_tags, app_handle) = {
         let gs = state.lock().unwrap();
         if !is_path_authorized(path, &gs) {
             log::warn!("Access denied for images: {:?}", path);
             return (StatusCode::FORBIDDEN, "Access denied").into_response();
         }
-    }
+        (gs.settings.nsfw_tags.clone(), gs.app_handle.clone())
+    };
+
+    // Build a filename -> NSFW lookup only when SFW mode is requested. Keyed by lowercase
+    // basename (filenames are unique within a folder) to sidestep path-separator/normalization
+    // differences between disk paths and DB-stored paths. Images not found in the index are
+    // treated as SFW (shown) so a stale/partial index never blanks the feed.
+    let nsfw_names: Option<std::collections::HashSet<String>> = if sfw_mode {
+        let matcher = crate::nsfw::NsfwMatcher::new(&nsfw_tags);
+        if matcher.is_empty() {
+            None
+        } else if let Some(app) = app_handle {
+            let db_state = app.state::<DbState>();
+            let guard = db_state.0.lock().unwrap();
+            match guard.as_ref().map(|db| db.get_folder_prompts(&query.folder)) {
+                Some(Ok(prompts)) => {
+                    let mut set = std::collections::HashSet::new();
+                    for (p, prompt) in prompts {
+                        let base = Path::new(&p)
+                            .file_name()
+                            .map(|n| n.to_string_lossy().to_lowercase())
+                            .unwrap_or_default();
+                        if base.is_empty() {
+                            continue;
+                        }
+                        if matcher.is_nsfw(prompt.as_deref(), Some(&base)) {
+                            set.insert(base);
+                        }
+                    }
+                    Some(set)
+                }
+                _ => None,
+            }
+        } else {
+            None
+        }
+    } else {
+        None
+    };
 
     let mut images = Vec::new();
     if let Ok(entries) = std::fs::read_dir(path) {
@@ -204,15 +254,21 @@ async fn get_images_handler(
             if let Some(ext) = p.extension() {
                 let ext = ext.to_string_lossy().to_lowercase();
                 if ext == "png" || ext == "jpg" || ext == "jpeg" || ext == "webp" {
+                    let name = p.file_name().unwrap().to_string_lossy().to_string();
+                    if let Some(blocked) = &nsfw_names {
+                        if blocked.contains(&name.to_lowercase()) {
+                            continue;
+                        }
+                    }
                     images.push(serde_json::json!({
                         "path": p.to_string_lossy(),
-                        "name": p.file_name().unwrap().to_string_lossy()
+                        "name": name
                     }));
                 }
             }
         }
     }
-    
+
     images.sort_by(|a, b| a["name"].as_str().unwrap().cmp(b["name"].as_str().unwrap()));
     Json(images).into_response()
 }

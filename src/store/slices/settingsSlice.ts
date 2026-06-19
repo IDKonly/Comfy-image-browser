@@ -1,4 +1,4 @@
-import { AppSliceCreator, SettingsSlice, DEFAULT_SHORTCUTS } from '../types';
+import { AppSliceCreator, SettingsSlice, DEFAULT_SHORTCUTS, DEFAULT_NSFW_TAGS } from '../types';
 
 export const createSettingsSlice: AppSliceCreator<SettingsSlice> = (set) => ({
   shortcuts: DEFAULT_SHORTCUTS,
@@ -20,6 +20,7 @@ export const createSettingsSlice: AppSliceCreator<SettingsSlice> = (set) => ({
     port: 4882,
     localOnly: true,
     authorizedFolders: [],
+    nsfwTags: DEFAULT_NSFW_TAGS,
   },
 
   setShortcuts: (shortcuts) => set({ shortcuts }),
@@ -27,7 +28,8 @@ export const createSettingsSlice: AppSliceCreator<SettingsSlice> = (set) => ({
   setMobileServerSettings: (mobileServerSettings) => set({
     mobileServerSettings: {
       ...mobileServerSettings,
-      authorizedFolders: mobileServerSettings.authorizedFolders || []
+      authorizedFolders: mobileServerSettings.authorizedFolders || [],
+      nsfwTags: mobileServerSettings.nsfwTags || DEFAULT_NSFW_TAGS,
     }
   }),
   setRecursive: (recursive) => set({ recursive }),

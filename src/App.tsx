@@ -250,6 +250,10 @@ function App() {
   // Local UI States
   const [searchQuery, setSearchQuery] = useState("");
   const [isSearching, setIsSearching] = useState(false);
+  // Live refs for the folder-updated listener (whose effect deps are stable setters and would
+  // otherwise capture a stale isSearching/handleSearch from mount, clearing an active search).
+  const isSearchingRef = useRef(isSearching);
+  const handleSearchRef = useRef<(...args: any[]) => any>(() => {});
   const [_imageSrc, setImageSrc] = useState<string | null>(null);
   const [showSettings, setShowSettings] = useState(false);
   const [showFilters, setShowFilters] = useState(false);
@@ -285,16 +289,24 @@ function App() {
     }
   }, [images, currentIndex, twitterSettings, showToast]);
 
-  const handleOpenFolder = async () => {
-    const selected = await open({ directory: true, multiple: false });
-    if (selected && typeof selected === 'string') {
-      const result = await api.scanDirectory(selected, sortMethod, recursive);
+  const loadFolder = useCallback(async (path: string) => {
+    try {
+      const result = await api.scanDirectory(path, sortMethod, recursive);
       setFolderPath(result.folder);
       setImages(result.images);
       setCurrentIndex(result.initial_index);
       showToast(`Loaded ${ result.images.length } images`, 'success');
+    } catch (e) {
+      showToast(`Failed to open folder: ${ e }`, 'error');
     }
-  };
+  }, [sortMethod, recursive, setFolderPath, setImages, setCurrentIndex, showToast]);
+
+  const handleOpenFolder = useCallback(async () => {
+    const selected = await open({ directory: true, multiple: false });
+    if (selected && typeof selected === 'string') {
+      await loadFolder(selected);
+    }
+  }, [loadFolder]);
 
   const handleReload = useCallback(async () => {
     if (!folderPath) return;
@@ -345,6 +357,10 @@ function App() {
     showToast(`Found ${results.length} matches`, 'info');
   };
 
+  // Keep refs in sync so the folder-updated listener always sees the live search state.
+  isSearchingRef.current = isSearching;
+  handleSearchRef.current = handleSearch;
+
   const handleSimilaritySearch = useCallback(async (numTags: number) => {
     if (images.length === 0 || !images[currentIndex]) return;
     try {
@@ -394,6 +410,27 @@ function App() {
                 handleReload();
             } else { showToast("No matching images found", "info"); }
         } catch (e: any) { showToast(`Failed: ${e}`, "error"); }
+    }
+  };
+
+  const handleClassifyNsfw = async () => {
+    if (!folderPath) return;
+    const tags = mobileServerSettings.nsfwTags || [];
+    if (tags.length === 0) {
+      showToast("No NSFW keywords configured (set them in Settings).", "info");
+      return;
+    }
+    const scope = recursive ? "this folder and its subfolders" : "this folder";
+    if (await confirm(`Move NSFW-tagged images in ${scope} into an "nsfw" subfolder?`)) {
+      try {
+        const result = await api.classifyNsfw(folderPath, recursive, tags);
+        if (result.moved > 0) {
+          showToast(`Moved ${result.moved} NSFW image(s) to /nsfw (scanned ${result.scanned}).`, "success");
+          handleReload();
+        } else {
+          showToast(`No NSFW images found (scanned ${result.scanned}).`, "info");
+        }
+      } catch (e: any) { showToast(`Failed: ${e}`, "error"); }
     }
   };
 
@@ -509,8 +546,8 @@ function App() {
         
         if (isSameContent) return;
 
-        if (isSearching) {
-            await handleSearch();
+        if (isSearchingRef.current) {
+            await handleSearchRef.current();
         } else {
             const currentImages = state.images;
             const currentIdx = state.currentIndex;
@@ -677,13 +714,14 @@ function App() {
       <AppHeader
         viewMode={viewMode} setViewMode={setViewMode} setShowWildcards={setShowWildcards}
         recursive={recursive} setRecursive={setRecursive} 
-        handleRandom={handleRandom} images={images}
+        handleRandom={handleRandom} handleClassifyNsfw={handleClassifyNsfw} images={images}
         handleKeep={handleKeep} handleDelete={handleDelete} isTrashFolder={isTrashFolder}
         setShowSettings={setShowSettings} handleOpenFolder={handleOpenFolder} shortcuts={shortcuts}
         setWorkshopTargetPaths={setWorkshopTargetPaths} setShowTagClassifier={setShowTagClassifier}
+        recentFolders={recentFolders} folderPath={folderPath} handleOpenRecent={loadFolder}
       />
 
-      <main className="flex-1 overflow-hidden flex relative">
+      <main className="flex-1 overflow-hidden flex relative z-0">
         <Sidebar 
           searchQuery={searchQuery} setSearchQuery={setSearchQuery} handleSearch={handleSearch}
           handleAutoClassify={handleAutoClassify} showFilters={showFilters} setShowFilters={setShowFilters}

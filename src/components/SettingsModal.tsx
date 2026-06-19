@@ -1,5 +1,5 @@
-import { X, Keyboard, History, Zap, Smartphone, Link, Plus, Trash2 } from "lucide-react";
-import { Shortcuts, DEFAULT_SHORTCUTS, SortMethod, useAppStore } from "../store/useAppStore";
+import { X, Keyboard, History, Zap, Smartphone, Link, Plus, Trash2, ShieldAlert } from "lucide-react";
+import { Shortcuts, DEFAULT_SHORTCUTS, DEFAULT_NSFW_TAGS, SortMethod, useAppStore } from "../store/useAppStore";
 import { api } from "../api";
 import { open, confirm } from "@tauri-apps/plugin-dialog";
 import { useState, useEffect } from "react";
@@ -110,6 +110,28 @@ export const SettingsModal = ({
                 <span className="text-[11px] font-mono text-blue-400 w-4 text-center">{imageCacheSize}</span>
               </div>
             </div>
+          </div>
+
+          <div className="space-y-4 pt-6 border-t border-white/5">
+            <h4 className="text-[10px] font-black uppercase tracking-[0.2em] text-red-500 flex items-center gap-2"><ShieldAlert className="w-3 h-3" /> Content Filter (NSFW)</h4>
+            <p className="text-[8px] text-neutral-500 italic leading-relaxed uppercase">
+              Keywords used by the viewer's "Move NSFW" action and the mobile SFW mode. Matched as whole words (plurals included) against each image's positive prompt and filename.
+            </p>
+            <textarea
+              value={(mobileServerSettings.nsfwTags || []).join(', ')}
+              onChange={e => setMobileServerSettings({
+                ...mobileServerSettings,
+                nsfwTags: e.target.value.split(',').map(s => s.trim().toLowerCase()).filter(Boolean),
+              })}
+              className="w-full h-24 bg-neutral-950 border border-white/5 rounded-xl p-3 text-[11px] font-mono focus:outline-none focus:border-red-500/50 resize-none scrollbar-thin"
+              placeholder="sex, nipple, penis, pussy, ..."
+            />
+            <button
+              onClick={() => setMobileServerSettings({ ...mobileServerSettings, nsfwTags: DEFAULT_NSFW_TAGS })}
+              className="text-[8px] font-black uppercase text-neutral-500 hover:text-neutral-300 underline underline-offset-4"
+            >
+              Reset to default list
+            </button>
           </div>
 
           <div className="space-y-4 pt-6 border-t border-white/5">
