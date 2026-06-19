@@ -6,6 +6,18 @@ export default {
   ],
   theme: {
     extend: {
+      colors: {
+        solid: {
+          base: 'var(--bg-solid-base)',
+          surface: 'var(--bg-solid-surface)',
+          'surface-elevated': 'var(--bg-solid-surface-elevated)',
+          panel: 'var(--bg-solid-panel)',
+          card: 'var(--bg-solid-card)',
+          element: 'var(--bg-solid-element)',
+          active: 'var(--bg-solid-active)',
+          nested: 'var(--bg-solid-nested)'
+        }
+      },
       animation: {
         'image-change': 'image-fade 0.3s ease-out',
       },

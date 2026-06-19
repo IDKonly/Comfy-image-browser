@@ -44,6 +44,7 @@ hmac = "0.12.1"
 sha1 = "0.10.6"
 regex = "1.11.1"
 notify = "8.2.0"
+keyring = "2"
 axum = { version = "0.7", features = ["macros"] }
 tokio = { version = "1", features = ["full"] }
 tower-http = { version = "0.5", features = ["cors", "fs"] }

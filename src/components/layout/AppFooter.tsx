@@ -1,3 +1,5 @@
+import { ProgressBar } from "../ui";
+
 interface AppFooterProps {
   folderPath: string | null;
   indexProgress: { is_indexing: boolean, current: number, total: number } | null;
@@ -21,12 +23,7 @@ export const AppFooter = ({
         {indexProgress?.is_indexing && (
           <div className="flex items-center gap-3 w-full max-w-xs animate-in slide-in-from-bottom-2 duration-300">
             <span className="shrink-0 animate-pulse text-blue-500 font-black uppercase text-[8px] tracking-widest">Indexing</span>
-            <div className="flex-1 h-1 bg-neutral-900 rounded-full overflow-hidden border border-white/5">
-              <div 
-                className="h-full bg-blue-600 transition-all duration-300 shadow-[0_0_10px_rgba(37,99,235,0.4)]" 
-                style={{ width: `${(indexProgress.current / indexProgress.total) * 100}%` }}
-              />
-            </div>
+            <ProgressBar current={indexProgress.current} total={indexProgress.total} className="flex-1" />
             <span className="shrink-0 font-mono text-[9px] text-neutral-400 w-16 text-right">
               {indexProgress.current} / {indexProgress.total}
             </span>

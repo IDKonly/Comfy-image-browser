@@ -1,5 +1,6 @@
 import { useState, useMemo } from "react";
-import { X, Search, CheckSquare, Square, EyeOff, Filter } from "lucide-react";
+import { Search, CheckSquare, Square, EyeOff, Filter } from "lucide-react";
+import { ModalLayout } from "./ui";
 
 interface TagRefinerProps {
   tagCounts: Record<string, number>;
@@ -57,24 +58,31 @@ export const TagRefiner = ({ tagCounts, initialExcluded, partialMatch = [], onAp
   };
 
   return (
-    <div className="fixed inset-0 z-[60] bg-black/80 backdrop-blur-xl flex items-center justify-center p-4 animate-in fade-in duration-300">
-      <div className="bg-neutral-900 border border-white/10 rounded-3xl w-full max-w-lg h-[80vh] shadow-2xl overflow-hidden flex flex-col">
-        {/* Header */}
-        <div className="p-6 border-b border-white/5 flex items-center justify-between shrink-0">
-          <div className="flex items-center gap-3">
-            <div className="w-10 h-10 bg-blue-600/20 rounded-xl flex items-center justify-center">
-              <Filter className="w-5 h-5 text-blue-500" />
-            </div>
-            <div>
-              <h2 className="text-sm font-black uppercase tracking-widest">Refine Tags</h2>
-              <p className="text-[10px] text-neutral-500 font-bold uppercase">Select tags to exclude</p>
-            </div>
-          </div>
-          <button onClick={onClose} className="p-2 hover:bg-white/5 rounded-full transition-colors">
-            <X className="w-5 h-5" />
+    <ModalLayout
+      onClose={onClose}
+      title="Refine Tags"
+      subtitle="Select tags to exclude"
+      icon={<Filter className="w-5 h-5 text-blue-500" />}
+      maxWidthClass="max-w-lg"
+      heightClass="h-[80vh]"
+      zClass="z-[60]"
+      footer={
+        <div className="p-6 border-t border-white/5 bg-neutral-950/30 flex gap-3">
+          <button
+            onClick={onClose}
+            className="flex-1 py-3 bg-neutral-800 hover:bg-neutral-700 rounded-2xl text-[10px] font-black uppercase tracking-widest transition-all"
+          >
+            Cancel
+          </button>
+          <button
+            onClick={() => onApply(Array.from(excludedTags))}
+            className="flex-1 py-3 bg-blue-600 hover:bg-blue-500 rounded-2xl text-[10px] font-black uppercase tracking-widest transition-all shadow-xl shadow-blue-900/20"
+          >
+            Apply Filters ({excludedTags.size})
           </button>
         </div>
-
+      }
+    >
         {/* Search & Controls */}
         <div className="p-6 space-y-4 border-b border-white/5 bg-neutral-950/30">
           <div className="relative">
@@ -146,23 +154,6 @@ export const TagRefiner = ({ tagCounts, initialExcluded, partialMatch = [], onAp
             </div>
           )}
         </div>
-
-        {/* Footer */}
-        <div className="p-6 border-t border-white/5 bg-neutral-950/30 flex gap-3">
-          <button 
-            onClick={onClose}
-            className="flex-1 py-3 bg-neutral-800 hover:bg-neutral-700 rounded-2xl text-[10px] font-black uppercase tracking-widest transition-all"
-          >
-            Cancel
-          </button>
-          <button 
-            onClick={() => onApply(Array.from(excludedTags))}
-            className="flex-1 py-3 bg-blue-600 hover:bg-blue-500 rounded-2xl text-[10px] font-black uppercase tracking-widest transition-all shadow-xl shadow-blue-900/20"
-          >
-            Apply Filters ({excludedTags.size})
-          </button>
-        </div>
-      </div>
-    </div>
+    </ModalLayout>
   );
 };

@@ -1,5 +1,6 @@
 use rusqlite::{params, Connection, Result};
 use std::path::Path;
+use std::collections::HashMap;
 use crate::metadata::ImageMetadata;
 use crate::scanner::{ImageInfo, SortMethod};
 use serde::{Serialize, Deserialize};
@@ -53,6 +54,7 @@ pub fn clear_database(db_state: tauri::State<'_, DbState>) -> Result<(), String>
     let db = state.as_ref().ok_or("Database not initialized")?;
     
     db.conn.execute("DELETE FROM images", []).map_err(|e| e.to_string())?;
+    db.conn.execute("DELETE FROM tag_counts", []).map_err(|e| e.to_string())?;
     db.conn.execute("VACUUM", []).map_err(|e| e.to_string())?; 
     Ok(())
 }
@@ -121,7 +123,7 @@ pub fn get_folder_prompts_map(db_state: tauri::State<'_, DbState>, folder: Strin
 }
 
 pub struct DB {
-    conn: Connection,
+    pub conn: Connection,
 }
 
 impl DB {
@@ -155,11 +157,130 @@ impl DB {
         conn.execute("CREATE INDEX IF NOT EXISTS idx_folder ON images (folder)", [])?;
         conn.execute("CREATE INDEX IF NOT EXISTS idx_mtime ON images (mtime)", [])?;
 
-        Ok(DB { conn })
+        conn.execute(
+            "CREATE TABLE IF NOT EXISTS tag_counts (
+                tag TEXT PRIMARY KEY,
+                count INTEGER NOT NULL DEFAULT 0
+            )",
+            [],
+        )?;
+
+        let db = DB { conn };
+        // Rebuild tag_counts if the table is empty (first launch / schema migration)
+        {
+            let existing: i64 = db.conn
+                .query_row("SELECT COUNT(*) FROM tag_counts", [], |r| r.get(0))
+                .unwrap_or(0);
+            if existing == 0 {
+                let _ = db.rebuild_tag_counts();
+            }
+        }
+        Ok(db)
     }
+
+    // ---- tag_counts helpers ----
+
+    /// Full rebuild of tag_counts from all prompts. O(N) but only on first launch or clear.
+    pub fn rebuild_tag_counts(&self) -> Result<()> {
+        let mut stmt = self.conn.prepare("SELECT prompt FROM images WHERE prompt IS NOT NULL")?;
+        let rows = stmt.query_map([], |row| row.get::<_, String>(0))?;
+
+        let mut counts: HashMap<String, i64> = HashMap::new();
+        for prompt_res in rows {
+            if let Ok(p) = prompt_res {
+                for tag in p.split(',') {
+                    let cleaned = crate::wildcard::utils::remove_unbalanced_braces(tag);
+                    let trimmed = cleaned.trim().to_lowercase();
+                    if !trimmed.is_empty() {
+                        *counts.entry(trimmed).or_insert(0) += 1;
+                    }
+                }
+            }
+        }
+
+        let tx = self.conn.unchecked_transaction()?;
+        tx.execute("DELETE FROM tag_counts", [])?;
+        let mut ins = tx.prepare(
+            "INSERT OR REPLACE INTO tag_counts (tag, count) VALUES (?1, ?2)"
+        )?;
+        for (tag, count) in &counts {
+            ins.execute(params![tag, count])?;
+        }
+        drop(ins);
+        tx.commit()?;
+        Ok(())
+    }
+
+    /// Increment counts for each tag parsed from the given prompts (+1 per occurrence).
+    fn increment_tag_counts(&self, prompts: &[Option<String>]) -> Result<()> {
+        let tx = self.conn.unchecked_transaction()?;
+        let mut stmt = tx.prepare(
+            "INSERT INTO tag_counts (tag, count) VALUES (?1, 1)
+             ON CONFLICT(tag) DO UPDATE SET count = count + 1"
+        )?;
+        for prompt_opt in prompts {
+            if let Some(p) = prompt_opt {
+                for tag in p.split(',') {
+                    let cleaned = crate::wildcard::utils::remove_unbalanced_braces(tag);
+                    let trimmed = cleaned.trim().to_lowercase();
+                    if !trimmed.is_empty() {
+                        stmt.execute(params![trimmed])?;
+                    }
+                }
+            }
+        }
+        drop(stmt);
+        tx.commit()?;
+        Ok(())
+    }
+
+    /// Decrement counts for each tag parsed from the given prompts; remove rows that reach 0.
+    fn decrement_tag_counts(&self, prompts: &[Option<String>]) -> Result<()> {
+        let tx = self.conn.unchecked_transaction()?;
+        let mut dec = tx.prepare(
+            "UPDATE tag_counts SET count = count - 1 WHERE tag = ?1"
+        )?;
+        let mut del = tx.prepare(
+            "DELETE FROM tag_counts WHERE tag = ?1 AND count <= 0"
+        )?;
+        for prompt_opt in prompts {
+            if let Some(p) = prompt_opt {
+                for tag in p.split(',') {
+                    let cleaned = crate::wildcard::utils::remove_unbalanced_braces(tag);
+                    let trimmed = cleaned.trim().to_lowercase();
+                    if !trimmed.is_empty() {
+                        dec.execute(params![trimmed])?;
+                        del.execute(params![trimmed])?;
+                    }
+                }
+            }
+        }
+        drop(dec);
+        drop(del);
+        tx.commit()?;
+        Ok(())
+    }
+
+    /// Read all tag counts as a HashMap (used by similarity search).
+    pub fn get_tag_counts(&self) -> Result<HashMap<String, u32>> {
+        let mut stmt = self.conn.prepare("SELECT tag, count FROM tag_counts")?;
+        let rows = stmt.query_map([], |row| {
+            Ok((row.get::<_, String>(0)?, row.get::<_, i64>(1)?))
+        })?;
+        let mut map = HashMap::new();
+        for row in rows {
+            if let Ok((tag, count)) = row {
+                map.insert(tag, count.max(0) as u32);
+            }
+        }
+        Ok(map)
+    }
+
+    // ---- image CRUD ----
 
     pub fn insert_images_batch(&mut self, data: Vec<(&ImageInfo, ImageMetadata)>) -> Result<()> {
         let tx = self.conn.transaction()?;
+        let mut new_prompts: Vec<Option<String>> = Vec::with_capacity(data.len());
         {
             let mut stmt = tx.prepare(
                 "INSERT OR REPLACE INTO images 
@@ -167,7 +288,7 @@ impl DB {
                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13)"
             )?;
 
-            for (info, meta) in data {
+            for (info, meta) in &data {
                 let normalized_path = info.path.replace("\\", "/");
                 let folder = Path::new(&normalized_path).parent()
                     .map(|p| p.to_string_lossy().to_string())
@@ -188,9 +309,12 @@ impl DB {
                     meta.model,
                     meta.raw,
                 ])?;
+                new_prompts.push(meta.prompt.clone());
             }
         }
         tx.commit()?;
+        // Incrementally update tag_counts after the main transaction succeeds.
+        let _ = self.increment_tag_counts(&new_prompts);
         Ok(())
     }
 
@@ -225,16 +349,35 @@ impl DB {
     }
 
     pub fn delete_image(&self, path: &str) -> Result<()> {
+        // Fetch prompt before deletion so we can decrement tag_counts.
+        let prompt: Option<String> = self.conn
+            .query_row("SELECT prompt FROM images WHERE path = ?1", params![path], |r| r.get(0))
+            .ok()
+            .flatten();
         self.conn.execute("DELETE FROM images WHERE path = ?1", params![path])?;
+        let _ = self.decrement_tag_counts(&[prompt]);
         Ok(())
     }
 
     pub fn delete_images(&self, paths: &[String]) -> Result<()> {
         if paths.is_empty() { return Ok(()); }
+        // Fetch all prompts first, then bulk delete, then bulk decrement.
+        let mut prompts: Vec<Option<String>> = Vec::with_capacity(paths.len());
+        {
+            let mut sel = self.conn.prepare("SELECT prompt FROM images WHERE path = ?1")?;
+            for path in paths {
+                let p: Option<String> = sel
+                    .query_row(params![path], |r| r.get(0))
+                    .ok()
+                    .flatten();
+                prompts.push(p);
+            }
+        }
         let mut stmt = self.conn.prepare("DELETE FROM images WHERE path = ?1")?;
         for path in paths {
             let _ = stmt.execute(params![path]);
         }
+        let _ = self.decrement_tag_counts(&prompts);
         Ok(())
     }
 
@@ -430,8 +573,17 @@ impl DB {
         })?;
 
         let mut results = Vec::new();
+        let mut stale_paths = Vec::new();
         for img in rows {
-            results.push(img?);
+            let img = img?;
+            if std::path::Path::new(&img.path).exists() {
+                results.push(img);
+            } else {
+                stale_paths.push(img.path.clone());
+            }
+        }
+        if !stale_paths.is_empty() {
+            let _ = self.delete_images(&stale_paths);
         }
         Ok(results)
     }
@@ -570,7 +722,99 @@ impl DB {
         })?;
 
         let mut results = Vec::new();
-        for img in rows { results.push(img?); }
+        let mut stale_paths = Vec::new();
+        for img in rows {
+            let img = img?;
+            if std::path::Path::new(&img.path).exists() {
+                results.push(img);
+            } else {
+                stale_paths.push(img.path.clone());
+            }
+        }
+        if !stale_paths.is_empty() {
+            let _ = self.delete_images(&stale_paths);
+        }
+        Ok(results)
+    }
+
+    pub fn search_advanced_multi(
+        &self,
+        folders: &[String],
+        query: &str,
+        model: &str,
+        sampler: &str,
+        sort_method: SortMethod,
+    ) -> Result<Vec<ImageInfo>> {
+        if folders.is_empty() {
+            return Ok(Vec::new());
+        }
+
+        let mut sql = "SELECT path, name, mtime, size FROM images WHERE (".to_string();
+        let mut params: Vec<String> = Vec::new();
+
+        for (i, folder) in folders.iter().enumerate() {
+            if i > 0 {
+                sql.push_str(" OR ");
+            }
+            let normalized = folder.replace("\\", "/").trim_end_matches('/').to_string();
+            let param_idx = params.len() + 1;
+            sql.push_str(&format!("(path LIKE ?{} || '/%' COLLATE NOCASE OR path = ?{} COLLATE NOCASE)", param_idx, param_idx));
+            params.push(normalized);
+        }
+        sql.push_str(")");
+
+        if !query.trim().is_empty() {
+            let tags: Vec<&str> = query.split(',').map(|s| s.trim()).filter(|s| !s.is_empty()).collect();
+            for tag in tags {
+                let param_idx = params.len() + 1;
+                sql.push_str(&format!(" AND (prompt LIKE ?{} COLLATE NOCASE OR negative_prompt LIKE ?{} COLLATE NOCASE OR name LIKE ?{} COLLATE NOCASE)", param_idx, param_idx, param_idx));
+                params.push(format!("%{}%", tag));
+            }
+        }
+
+        if !model.is_empty() {
+            let param_idx = params.len() + 1;
+            sql.push_str(&format!(" AND model = ?{} COLLATE NOCASE", param_idx));
+            params.push(model.to_string());
+        }
+
+        if !sampler.is_empty() {
+            let param_idx = params.len() + 1;
+            sql.push_str(&format!(" AND sampler = ?{} COLLATE NOCASE", param_idx));
+            params.push(sampler.to_string());
+        }
+
+        let order_by = match sort_method {
+            SortMethod::Newest => "ORDER BY mtime DESC",
+            SortMethod::Oldest => "ORDER BY mtime ASC",
+            SortMethod::NameAsc => "ORDER BY name COLLATE NOCASE ASC",
+            SortMethod::NameDesc => "ORDER BY name COLLATE NOCASE DESC",
+        };
+        sql.push_str(&format!(" {}", order_by));
+
+        let mut stmt = self.conn.prepare(&sql)?;
+        let rows = stmt.query_map(rusqlite::params_from_iter(params.iter()), |row| {
+             Ok(ImageInfo {
+                path: row.get(0)?,
+                name: row.get(1)?,
+                mtime: row.get::<_, i64>(2)? as u64,
+                size: row.get::<_, i64>(3)? as u64,
+            })
+        })?;
+
+        let mut results = Vec::new();
+        let mut stale_paths = Vec::new();
+        for img in rows {
+            let img = img?;
+            if std::path::Path::new(&img.path).exists() {
+                results.push(img);
+            } else {
+                stale_paths.push(img.path.clone());
+            }
+        }
+        if !stale_paths.is_empty() {
+            let _ = self.delete_images(&stale_paths);
+        }
         Ok(results)
     }
 

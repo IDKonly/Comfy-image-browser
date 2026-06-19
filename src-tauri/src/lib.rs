@@ -7,6 +7,8 @@ mod wildcard;
 mod twitter;
 mod crop;
 mod mobile_server;
+mod secrets;
+mod nsfw;
 #[cfg(test)]
 mod benchmarks;
 
@@ -59,6 +61,7 @@ pub fn run() {
             port: 4882,
             local_only: true,
             authorized_folders: Vec::new(),
+            nsfw_tags: nsfw::default_nsfw_tags(),
         },
         state: mobile_server::MobileState {
             recent_folders: Vec::new(),
@@ -72,6 +75,8 @@ pub fn run() {
         .manage(scanner::WatcherState(Mutex::new(scanner::FolderWatcher {
             watcher: None,
             current_path: None,
+            current_recursive: None,
+            current_sort: None,
         })))
         .manage(db::DbState(Mutex::new(None)))
         .manage(mobile_shared_state)
@@ -102,6 +107,7 @@ pub fn run() {
             scanner::get_batch_range,
             scanner::search_images,
             scanner::search_advanced_images,
+            scanner::search_similar_images,
             scanner::get_tag_suggestions,
             scanner::get_filter_options,
             db::get_db_status,
@@ -116,6 +122,7 @@ pub fn run() {
             file_ops::move_files_to_folder,
             file_ops::undo_move,
             file_ops::auto_classify,
+            file_ops::classify_nsfw,
             thumbnails::get_thumbnail,
             wildcard::generate_wildcards,
             wildcard::expand_wildcards,
@@ -126,6 +133,10 @@ pub fn run() {
             wildcard::save_to_file,
             wildcard::classify_prompts_command,
             twitter::twitter_upload,
+            secrets::save_twitter_secrets,
+            secrets::load_twitter_secrets,
+            secrets::has_twitter_secrets,
+            secrets::delete_twitter_secrets,
             crop::process_batch_crop,
             mobile_server::update_mobile_server,
             mobile_server::get_local_ip

@@ -22,6 +22,10 @@ pub struct MobileServerSettings {
     pub port: u16,
     pub local_only: bool,
     pub authorized_folders: Vec<String>,
+    /// NSFW keywords used to hide images from the feed when SFW mode is on. `serde(default)`
+    /// keeps older front-ends (that don't send this field) deserializing cleanly.
+    #[serde(default)]
+    pub nsfw_tags: Vec<String>,
 }
 
 #[derive(Clone, Serialize, Deserialize, Debug)]
@@ -52,6 +56,10 @@ pub struct SubfoldersQuery {
 #[derive(Deserialize)]
 pub struct ImagesQuery {
     pub folder: String,
+    /// "1"/"true" enables SFW mode: images whose prompt/filename match an NSFW keyword
+    /// are excluded from the feed.
+    #[serde(default)]
+    pub sfw: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -60,9 +68,13 @@ pub struct ImageQuery {
 }
 
 #[derive(Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct ActionRequest {
     pub path: String,
     pub action: String,
+    /// For the `undo` action: which bucket the file was moved into ("keep" | "trash").
+    #[serde(default)]
+    pub prev_action: Option<String>,
 }
 
 /// Helper to check if a path is within approved roots
@@ -70,6 +82,7 @@ fn is_path_authorized(path: &Path, gs: &GlobalMobileState) -> bool {
     let mut roots: Vec<PathBuf> = gs.settings.authorized_folders.iter().map(PathBuf::from).collect();
     roots.extend(gs.state.recent_folders.iter().map(PathBuf::from));
 
+    // Normalize target path: handle Windows prefix and case
     let target = match path.canonicalize() {
         Ok(p) => p,
         Err(_) => return false,
@@ -77,7 +90,8 @@ fn is_path_authorized(path: &Path, gs: &GlobalMobileState) -> bool {
 
     for root in roots {
         if let Ok(abs_root) = root.canonicalize() {
-            if target.starts_with(abs_root) {
+            // Check if target is equal to or a subpath of root
+            if target.starts_with(&abs_root) {
                 return true;
             }
         }
@@ -154,6 +168,7 @@ async fn get_subfolders_handler(
     {
         let gs = state.lock().unwrap();
         if !is_path_authorized(path, &gs) {
+            log::warn!("Access denied for subfolders: {:?}", path);
             return (StatusCode::FORBIDDEN, "Access denied").into_response();
         }
     }
@@ -182,12 +197,55 @@ async fn get_images_handler(
     Query(query): Query<ImagesQuery>,
 ) -> impl IntoResponse {
     let path = Path::new(&query.folder);
-    {
+
+    let sfw_mode = matches!(query.sfw.as_deref(), Some("1") | Some("true"));
+
+    // Pull what we need from shared state (auth, NSFW keywords, app handle) under one lock.
+    let (nsfw_tags, app_handle) = {
         let gs = state.lock().unwrap();
         if !is_path_authorized(path, &gs) {
+            log::warn!("Access denied for images: {:?}", path);
             return (StatusCode::FORBIDDEN, "Access denied").into_response();
         }
-    }
+        (gs.settings.nsfw_tags.clone(), gs.app_handle.clone())
+    };
+
+    // Build a filename -> NSFW lookup only when SFW mode is requested. Keyed by lowercase
+    // basename (filenames are unique within a folder) to sidestep path-separator/normalization
+    // differences between disk paths and DB-stored paths. Images not found in the index are
+    // treated as SFW (shown) so a stale/partial index never blanks the feed.
+    let nsfw_names: Option<std::collections::HashSet<String>> = if sfw_mode {
+        let matcher = crate::nsfw::NsfwMatcher::new(&nsfw_tags);
+        if matcher.is_empty() {
+            None
+        } else if let Some(app) = app_handle {
+            let db_state = app.state::<DbState>();
+            let guard = db_state.0.lock().unwrap();
+            match guard.as_ref().map(|db| db.get_folder_prompts(&query.folder)) {
+                Some(Ok(prompts)) => {
+                    let mut set = std::collections::HashSet::new();
+                    for (p, prompt) in prompts {
+                        let base = Path::new(&p)
+                            .file_name()
+                            .map(|n| n.to_string_lossy().to_lowercase())
+                            .unwrap_or_default();
+                        if base.is_empty() {
+                            continue;
+                        }
+                        if matcher.is_nsfw(prompt.as_deref(), Some(&base)) {
+                            set.insert(base);
+                        }
+                    }
+                    Some(set)
+                }
+                _ => None,
+            }
+        } else {
+            None
+        }
+    } else {
+        None
+    };
 
     let mut images = Vec::new();
     if let Ok(entries) = std::fs::read_dir(path) {
@@ -196,15 +254,21 @@ async fn get_images_handler(
             if let Some(ext) = p.extension() {
                 let ext = ext.to_string_lossy().to_lowercase();
                 if ext == "png" || ext == "jpg" || ext == "jpeg" || ext == "webp" {
+                    let name = p.file_name().unwrap().to_string_lossy().to_string();
+                    if let Some(blocked) = &nsfw_names {
+                        if blocked.contains(&name.to_lowercase()) {
+                            continue;
+                        }
+                    }
                     images.push(serde_json::json!({
                         "path": p.to_string_lossy(),
-                        "name": p.file_name().unwrap().to_string_lossy()
+                        "name": name
                     }));
                 }
             }
         }
     }
-    
+
     images.sort_by(|a, b| a["name"].as_str().unwrap().cmp(b["name"].as_str().unwrap()));
     Json(images).into_response()
 }
@@ -237,13 +301,32 @@ async fn post_action_handler(
     Json(payload): Json<ActionRequest>,
 ) -> impl IntoResponse {
     use crate::file_ops;
-    
+
     let path_str = payload.path.clone();
-    let path = Path::new(&path_str);
-    
+    let original = PathBuf::from(&path_str);
+
+    // For `undo`, the file currently lives in the _Keep/_Trash bucket, so that is the
+    // path that exists on disk and must be authorized (the original does not exist yet).
+    let undo_current: Option<PathBuf> = if payload.action == "undo" {
+        let subdir = match payload.prev_action.as_deref() {
+            Some("keep") => "_Keep",
+            Some("trash") => "_Trash",
+            _ => return (StatusCode::BAD_REQUEST, "Missing or invalid prevAction for undo").into_response(),
+        };
+        match (original.parent(), original.file_name()) {
+            (Some(parent), Some(name)) => Some(parent.join(subdir).join(name)),
+            _ => return (StatusCode::BAD_REQUEST, "Invalid path for undo").into_response(),
+        }
+    } else {
+        None
+    };
+
+    let auth_path: &Path = undo_current.as_deref().unwrap_or(&original);
+
     let app_handle = {
         let gs = state.lock().unwrap();
-        if !is_path_authorized(path, &gs) {
+        if !is_path_authorized(auth_path, &gs) {
+            log::warn!("Access denied for action: {:?} with path: {:?}", payload.action, auth_path);
             return (StatusCode::FORBIDDEN, "Access denied").into_response();
         }
         gs.app_handle.clone()
@@ -251,18 +334,26 @@ async fn post_action_handler(
 
     if let Some(app) = app_handle {
         let db_state = app.state::<DbState>();
-        let watcher_state = app.state::<WatcherState>();
+
+        log::info!("Executing mobile action: {} on {:?}", payload.action, original);
 
         let result = match payload.action.as_str() {
-            "keep" => file_ops::move_to_keep(db_state, watcher_state, vec![path_str]).map_err(|e| e.to_string()),
-            "trash" => file_ops::delete_to_trash(db_state, watcher_state, vec![path_str]).map_err(|e| e.to_string()),
+            "keep" => file_ops::move_to_keep_impl(db_state.inner(), vec![path_str]),
+            "trash" => file_ops::delete_to_trash_impl(db_state.inner(), vec![path_str]),
             "skip" => Ok(()),
+            "undo" => {
+                let current = undo_current.expect("undo_current set for undo action");
+                file_ops::undo_move_impl(db_state.inner(), &path_str, &current.to_string_lossy())
+            }
             _ => Err("Invalid action".to_string()),
         };
 
         match result {
             Ok(_) => (StatusCode::OK, "Action processed").into_response(),
-            Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e).into_response(),
+            Err(e) => {
+                log::error!("Action failed: {}", e);
+                (StatusCode::INTERNAL_SERVER_ERROR, e).into_response()
+            }
         }
     } else {
         (StatusCode::INTERNAL_SERVER_ERROR, "App handle not available").into_response()

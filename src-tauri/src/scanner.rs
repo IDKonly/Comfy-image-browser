@@ -25,6 +25,11 @@ pub fn update_scan_focus(index: usize) {
 pub struct FolderWatcher {
     pub watcher: Option<notify::RecommendedWatcher>,
     pub current_path: Option<String>,
+    // The recursive/sort settings the active watcher was created with. The watcher captures
+    // these (scan depth + emit order), so it must be re-created when either changes — not just
+    // when the path changes — otherwise e.g. turning recursive off keeps emitting subfolder files.
+    pub current_recursive: Option<bool>,
+    pub current_sort: Option<SortMethod>,
 }
 
 pub struct WatcherState(pub Mutex<FolderWatcher>);
@@ -83,6 +88,12 @@ pub struct ScanResult {
     pub folder: String,
 }
 
+#[derive(Serialize, Deserialize, Debug, Clone)]
+pub struct SimilarityResult {
+    pub images: Vec<ImageInfo>,
+    pub matched_tags: Vec<String>,
+}
+
 fn sort_images(images: &mut Vec<ImageInfo>, method: SortMethod) {
     match method {
         SortMethod::Newest => images.sort_by(|a, b| b.mtime.cmp(&a.mtime)),
@@ -92,7 +103,7 @@ fn sort_images(images: &mut Vec<ImageInfo>, method: SortMethod) {
     }
 }
 
-fn setup_watcher(app_handle: tauri::AppHandle, path: &Path, is_recursive: bool, sort_method: SortMethod) -> notify::Result<notify::RecommendedWatcher> {
+fn setup_watcher(app_handle: tauri::AppHandle, path: &Path, is_recursive: bool) -> notify::Result<notify::RecommendedWatcher> {
     let app_handle_clone = app_handle.clone();
     let path_buf = path.to_path_buf();
     let last_event = Arc::new(Mutex::new(std::time::Instant::now()));
@@ -106,8 +117,22 @@ fn setup_watcher(app_handle: tauri::AppHandle, path: &Path, is_recursive: bool, 
                         *last = std::time::Instant::now();
                         let app = app_handle_clone.clone();
                         let p = path_buf.to_string_lossy().to_string();
-                        
+                        let folder_str = p.replace("\\", "/");
+
                         let _ = std::thread::spawn(move || {
+                             // Use the CURRENT recursive/sort (not the values captured when this watcher was
+                             // created). An event still in flight after the user toggled recursive / changed
+                             // sort then re-scans with the right depth+order, and an event from a watcher that
+                             // has since been replaced (path changed) is dropped. This prevents subfolder files
+                             // reappearing after recursive is turned off, and the resulting list oscillation
+                             // that makes the whole thumbnail grid appear to refresh.
+                             let (is_recursive, sort_method) = {
+                                 let ws_state = app.state::<WatcherState>();
+                                 let ws = match ws_state.0.lock() { Ok(g) => g, Err(_) => return };
+                                 if ws.current_path.as_deref() != Some(folder_str.as_str()) { return; }
+                                 (ws.current_recursive.unwrap_or(false), ws.current_sort.unwrap_or(SortMethod::NameAsc))
+                             };
+
                              let extensions = ["png", "jpg", "jpeg", "webp"];
                              let depth = if is_recursive { 99 } else { 1 };
                              let disk_entries: Vec<ImageInfo> = WalkDir::new(&p)
@@ -136,8 +161,7 @@ fn setup_watcher(app_handle: tauri::AppHandle, path: &Path, is_recursive: bool, 
 
                             let mut images = disk_entries.clone();
                             sort_images(&mut images, sort_method);
-                            
-                            let folder_str = p.replace("\\", "/");
+
                             let _ = app.emit("folder-updated", ScanResult {
                                 images: images.clone(),
                                 initial_index: 0,
@@ -205,12 +229,17 @@ pub async fn scan_directory(
 
     {
         let mut ws = watcher_state.0.lock().unwrap();
-        if ws.current_path.as_ref() != Some(&root_str) {
-            ws.watcher = None; 
-            match setup_watcher(app_handle.clone(), &root, is_recursive, method) {
+        if ws.current_path.as_ref() != Some(&root_str)
+            || ws.current_recursive != Some(is_recursive)
+            || ws.current_sort != Some(method)
+        {
+            ws.watcher = None;
+            match setup_watcher(app_handle.clone(), &root, is_recursive) {
                 Ok(w) => {
                     ws.watcher = Some(w);
                     ws.current_path = Some(root_str.clone());
+                    ws.current_recursive = Some(is_recursive);
+                    ws.current_sort = Some(method);
                 },
                 Err(e) => log::error!("Failed to start watcher: {}", e),
             }
@@ -420,14 +449,190 @@ pub fn get_filter_options(db_state: tauri::State<'_, DbState>, folder: String) -
 }
 
 #[tauri::command]
-pub fn search_advanced_images(db_state: tauri::State<'_, DbState>, folder: String, query: String, model: String, sampler: String, sort_method: SortMethod, recursive: bool) -> Result<Vec<ImageInfo>, String> {
+pub fn search_advanced_images(
+    db_state: tauri::State<'_, DbState>, 
+    folder: String, 
+    query: String, 
+    model: String, 
+    sampler: String, 
+    sort_method: SortMethod, 
+    recursive: bool,
+    auth_folders: Option<Vec<String>>
+) -> Result<Vec<ImageInfo>, String> {
     let state = db_state.0.lock().unwrap();
     let db = state.as_ref().ok_or("Database not initialized")?;
+    
+    if let Some(folders) = auth_folders {
+        if !folders.is_empty() {
+            return db.search_advanced_multi(&folders, &query, &model, &sampler, sort_method).map_err(|e| e.to_string());
+        }
+    }
+    
     db.search_advanced(&folder, &query, &model, &sampler, sort_method, recursive).map_err(|e| e.to_string())
 }
 
 #[tauri::command]
-pub fn get_tag_suggestions(db_state: tauri::State<'_, DbState>, folder: String, current_input: String, recursive: bool) -> Result<Vec<String>, String> {
+pub fn search_similar_images(
+    db_state: tauri::State<'_, DbState>,
+    auth_folders: Vec<String>,
+    current_image_path: String,
+    num_tags: usize,
+    filter: crate::wildcard::types::WildcardFilter,
+    active_folder: Option<String>,
+) -> Result<SimilarityResult, String> {
+    let state = db_state.0.lock().unwrap();
+    let db = state.as_ref().ok_or("Database not initialized")?;
+
+    log::info!(
+        "[Similarity Search] START: active_folder={:?}, current_image='{}', num_tags={}, auth_folders={:?}",
+        active_folder, current_image_path, num_tags, auth_folders
+    );
+
+    if auth_folders.is_empty() {
+        log::warn!("[Similarity Search] END: auth_folders is empty!");
+        return Ok(SimilarityResult { images: Vec::new(), matched_tags: Vec::new() });
+    }
+
+    // 1. Get current image metadata/prompt
+    let current_meta = db.get_metadata(&current_image_path)
+        .map_err(|e| e.to_string())?
+        .ok_or_else(|| "Current image metadata not found in database".to_string())?;
+
+    let prompt = current_meta.prompt.ok_or_else(|| "Current image has no prompt/tags".to_string())?;
+    if prompt.trim().is_empty() {
+        log::warn!("[Similarity Search] END: Current image prompt/tags is empty!");
+        return Err("Current image has empty prompt/tags".to_string());
+    }
+
+    // 2. Parse current image tags
+    let current_tags: std::collections::HashSet<String> = prompt.split(',')
+        .map(|s| crate::wildcard::utils::remove_unbalanced_braces(s))
+        .filter(|s| !s.trim().is_empty())
+        .collect();
+    log::info!("[Similarity Search] Parsed tags ({} total): {:?}", current_tags.len(), current_tags);
+
+    // 3. Filter current tags using WildcardFilter
+    let filtered_tags = crate::wildcard::filter::apply_filters(current_tags, &filter);
+    log::info!("[Similarity Search] Filtered tags (after wildcard filters, {} remaining): {:?}", filtered_tags.len(), filtered_tags);
+    if filtered_tags.is_empty() {
+        log::warn!("[Similarity Search] END: No tags remaining after applying wildcard filters!");
+        return Ok(SimilarityResult { images: Vec::new(), matched_tags: Vec::new() });
+    }
+
+    // 4. Read pre-computed tag frequencies from the tag_counts table (O(1) index lookup).
+    let global_counts: HashMap<String, u32> = db.get_tag_counts()
+        .map_err(|e: rusqlite::Error| e.to_string())?;
+
+    // 5. Select the rarest tags
+    let mut tag_freqs: Vec<(String, u32)> = filtered_tags.into_iter()
+        .map(|tag| {
+            let key = tag.trim().to_lowercase();
+            let count = global_counts.get(&key).copied().unwrap_or(1);
+            (tag, count)
+        })
+        .collect();
+
+    // Sort by frequency ascending (rarest first)
+    tag_freqs.sort_by_key(|&(_, count)| count);
+    log::info!("[Similarity Search] Filtered tag frequencies (global db counts): {:?}", tag_freqs);
+
+    // Take the top `num_tags` rarest tags
+    let selected_tags: Vec<String> = tag_freqs.into_iter()
+        .take(num_tags)
+        .map(|(tag, _)| tag)
+        .collect();
+    log::info!("[Similarity Search] Selected rarest tags: {:?}", selected_tags);
+
+    if selected_tags.is_empty() {
+        log::warn!("[Similarity Search] END: selected_tags is empty!");
+        return Ok(SimilarityResult { images: Vec::new(), matched_tags: Vec::new() });
+    }
+
+    // 6. Search for images under auth_folders containing all selected tags
+    let mut sql = "SELECT path, name, mtime, size, prompt FROM images WHERE (".to_string();
+    let mut params: Vec<String> = Vec::new();
+
+    // Folder condition
+    for (i, folder) in auth_folders.iter().enumerate() {
+        if i > 0 {
+            sql.push_str(" OR ");
+        }
+        let normalized = folder.replace("\\", "/").trim_end_matches('/').to_string();
+        let param_idx = params.len() + 1;
+        sql.push_str(&format!("(path LIKE ?{} || '/%' COLLATE NOCASE OR path = ?{} COLLATE NOCASE)", param_idx, param_idx));
+        params.push(normalized);
+    }
+    sql.push_str(")");
+
+    // Tag condition using LIKE for initial SQLite filtering
+    for tag in &selected_tags {
+        let param_idx = params.len() + 1;
+        sql.push_str(&format!(" AND (prompt LIKE ?{} COLLATE NOCASE)", param_idx));
+        params.push(format!("%{}%", tag));
+    }
+
+    sql.push_str(" ORDER BY mtime DESC");
+
+    let mut stmt = db.conn.prepare(&sql).map_err(|e: rusqlite::Error| e.to_string())?;
+    let rows = stmt.query_map(rusqlite::params_from_iter(params.iter()), |row: &rusqlite::Row| {
+         Ok((
+             row.get::<_, String>(0)?,
+             row.get::<_, String>(1)?,
+             row.get::<_, i64>(2)? as u64,
+             row.get::<_, i64>(3)? as u64,
+             row.get::<_, Option<String>>(4)?,
+         ))
+    }).map_err(|e: rusqlite::Error| e.to_string())?;
+
+    let candidates: Vec<_> = rows.into_iter().filter_map(|r| r.ok()).collect();
+    let candidates_count = candidates.len();
+    log::info!("[Similarity Search] SQLite candidates found: {}", candidates_count);
+
+    // 7. Verify candidates in Rust (exact match for all selected tags)
+    let mut matched_images = Vec::new();
+    let mut stale_paths = Vec::new();
+    let lower_selected: Vec<String> = selected_tags.iter().map(|t: &String| t.trim().to_lowercase()).collect();
+
+    for (path, name, mtime, size, prompt_opt) in candidates {
+        // Check if it exists on disk!
+        if !std::path::Path::new(&path).exists() {
+            stale_paths.push(path);
+            continue;
+        }
+        
+        if let Some(p) = prompt_opt {
+            // Parse this candidate's tags
+            let candidate_tags: std::collections::HashSet<String> = p.split(',')
+                .map(|s: &str| crate::wildcard::utils::remove_unbalanced_braces(s).trim().to_lowercase())
+                .filter(|s: &String| !s.is_empty())
+                .collect();
+
+            // Check if candidate contains all selected rarest tags
+            let contains_all = lower_selected.iter().all(|t| candidate_tags.contains(t));
+            if contains_all {
+                matched_images.push(ImageInfo { path, name, mtime, size });
+            }
+        }
+    }
+
+    if !stale_paths.is_empty() {
+        log::info!("[Similarity Search] Cleaning up {} stale/deleted paths from database.", stale_paths.len());
+        let _ = db.delete_images(&stale_paths);
+    }
+
+    log::info!(
+        "[Similarity Search] END: matched {} similar images from {} candidates.",
+        matched_images.len(), candidates_count
+    );
+
+    Ok(SimilarityResult {
+        images: matched_images,
+        matched_tags: selected_tags,
+    })
+}
+
+#[tauri::command]
+pub fn get_tag_suggestions(db_state: tauri::State<'_, DbState>, folder: String, current_input: String, recursive: bool) -> Result<Vec<(String, usize)>, String> {
     if current_input.trim().is_empty() { return Ok(Vec::new()); }
     let state = db_state.0.lock().unwrap();
     let db = state.as_ref().ok_or("Database not initialized")?;
@@ -443,7 +648,7 @@ pub fn get_tag_suggestions(db_state: tauri::State<'_, DbState>, folder: String, 
     }
     let mut sorted_tags: Vec<_> = tag_counts.into_iter().collect();
     sorted_tags.sort_by(|a, b| b.1.cmp(&a.1));
-    Ok(sorted_tags.into_iter().take(5).map(|(tag, _)| tag).collect())
+    Ok(sorted_tags.into_iter().take(5).collect())
 }
 
 #[tauri::command]

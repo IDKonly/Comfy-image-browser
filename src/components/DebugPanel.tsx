@@ -1,6 +1,7 @@
 import { useState, useEffect } from "react";
-import { invoke } from "@tauri-apps/api/core";
+import { api } from "../api";
 import { Bug, X, RefreshCw, Database } from "lucide-react";
+import { IconButton } from "./ui";
 
 export const DebugPanel = ({ folderPath, onClose }: { folderPath: string | null, onClose: () => void }) => {
   const [status, setStatus] = useState<any>(null);
@@ -11,9 +12,9 @@ export const DebugPanel = ({ folderPath, onClose }: { folderPath: string | null,
     if (!folderPath) return;
     setLoading(true);
     try {
-      const res = await invoke("get_db_status", { folder: folderPath });
+      const res = await api.getDbStatus(folderPath);
       setStatus(res);
-      const logRes = await invoke("get_logs") as string;
+      const logRes = await api.getLogs();
       setLogs(logRes);
     } catch (e) {
       console.error(e);
@@ -26,7 +27,7 @@ export const DebugPanel = ({ folderPath, onClose }: { folderPath: string | null,
     if (confirm("Are you sure you want to CLEAR the entire image database? This cannot be undone and will trigger full re-indexing of all folders.")) {
       setLoading(true);
       try {
-        await invoke("clear_database");
+        await api.clearDatabase();
         await refreshStatus();
       } catch (e) {
         console.error(e);
@@ -41,7 +42,7 @@ export const DebugPanel = ({ folderPath, onClose }: { folderPath: string | null,
     // Auto-refresh logs every 2 seconds when open
     const interval = setInterval(async () => {
       try {
-        const logRes = await invoke("get_logs") as string;
+        const logRes = await api.getLogs();
         setLogs(logRes);
       } catch (e) {}
     }, 2000);
@@ -55,12 +56,12 @@ export const DebugPanel = ({ folderPath, onClose }: { folderPath: string | null,
           <Bug className="w-3.5 h-3.5" /> Backend Debugger
         </div>
         <div className="flex gap-1">
-            <button onClick={refreshStatus} className={`p-1.5 hover:bg-white/5 rounded-lg transition-all ${loading ? 'animate-spin' : ''}`}>
+            <IconButton label="Refresh" onClick={refreshStatus} className={`p-1.5 ${loading ? 'animate-spin' : ''}`}>
                 <RefreshCw className="w-3.5 h-3.5" />
-            </button>
-            <button onClick={onClose} className="p-1.5 hover:bg-white/5 rounded-lg transition-all">
+            </IconButton>
+            <IconButton label="Close" onClick={onClose} className="p-1.5">
                 <X className="w-3.5 h-3.5" />
-            </button>
+            </IconButton>
         </div>
       </div>
 

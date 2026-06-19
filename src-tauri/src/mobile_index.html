@@ -2,162 +2,337 @@
 <html lang="en">
 <head>
     <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <!-- Pinch-zoom is handled in-app; page zoom left enabled for accessibility -->
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
     <title>ComfyView Mobile Feed</title>
-    <script src="https://cdn.tailwindcss.com"></script>
     <style>
-        body { background-color: #0a0a0a; color: #e5e5e5; -webkit-tap-highlight-color: transparent; overscroll-behavior-y: none; }
-        
+        :root {
+            --bg: #0a0a0a;
+            --bg-elev: #141414;
+            --bg-header: rgba(23, 23, 23, 0.9);
+            --fg: #e5e5e5;
+            --fg-dim: #a3a3a3;
+            --fg-faint: #737373;
+            --fg-ghost: #525252;
+            --border: rgba(255, 255, 255, 0.08);
+            --border-strong: rgba(255, 255, 255, 0.14);
+            --blue: #3b82f6;
+            --blue-600: #2563eb;
+            --red: #ef4444;
+            --green: #22c55e;
+            --safe-b: env(safe-area-inset-bottom, 0px);
+            --safe-t: env(safe-area-inset-top, 0px);
+        }
+
+        * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+
+        html, body {
+            margin: 0; padding: 0;
+            height: 100%;
+            background: var(--bg);
+            color: var(--fg);
+            font-family: ui-sans-serif, system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+            overscroll-behavior-y: none;
+        }
+        body { position: fixed; inset: 0; display: flex; flex-direction: column; overflow: hidden; }
+
+        button { font-family: inherit; cursor: pointer; border: none; background: none; color: inherit; }
+        .hidden { display: none !important; }
+
+        /* ---------- Header ---------- */
+        #header {
+            height: 3.5rem;
+            padding-top: var(--safe-t);
+            box-sizing: content-box;
+            display: flex; align-items: center; justify-content: space-between;
+            padding-left: 1rem; padding-right: 1rem;
+            border-bottom: 1px solid var(--border);
+            background: var(--bg-header);
+            backdrop-filter: blur(12px);
+            z-index: 40; flex-shrink: 0;
+        }
+        .brand { display: flex; align-items: center; gap: 0.5rem; }
+        .brand-badge {
+            width: 1.5rem; height: 1.5rem; background: var(--blue-600);
+            border-radius: 0.35rem; display: flex; align-items: center; justify-content: center;
+            color: #fff; font-size: 10px; font-weight: 900; font-style: italic;
+        }
+        .brand-title {
+            font-size: 0.7rem; font-weight: 900; text-transform: uppercase;
+            letter-spacing: 0.18em; font-style: italic; color: var(--fg-dim); margin: 0;
+        }
+
+        #indexDisplay {
+            position: absolute; left: 50%; transform: translateX(-50%);
+            display: flex; flex-direction: column; align-items: center;
+            padding: 0.25rem 1rem; transition: transform 0.1s ease;
+        }
+        #indexDisplay:active { transform: translateX(-50%) scale(0.95); }
+        #counter { font-size: 0.7rem; font-family: ui-monospace, monospace; font-weight: 900; color: var(--blue); letter-spacing: -0.02em; }
+        .progress-track { width: 3rem; height: 2px; background: var(--border); border-radius: 999px; overflow: hidden; margin-top: 2px; }
+        #progressBar { height: 100%; background: var(--blue-600); transition: width 0.3s ease; width: 0%; }
+
+        .header-actions { display: flex; align-items: center; gap: 0.6rem; }
+        .header-btn {
+            font-size: 0.6rem; font-weight: 900; text-transform: uppercase;
+            color: var(--fg-faint); border: 1px solid var(--border-strong);
+            padding: 0.3rem 0.55rem; border-radius: 0.5rem; letter-spacing: 0.05em;
+        }
+        .header-btn.accent { color: var(--blue); border-color: rgba(59,130,246,0.3); background: rgba(59,130,246,0.1); }
+
+        /* ---------- Main / list views ---------- */
+        #content { flex: 1; min-height: 0; position: relative; overflow: hidden; display: flex; flex-direction: column; }
+        .scroll-view { padding: 1rem; overflow-y: auto; flex: 1; -webkit-overflow-scrolling: touch; }
+        .section { margin-bottom: 1.5rem; }
+        .section-title { font-size: 0.65rem; font-weight: 900; text-transform: uppercase; letter-spacing: 0.2em; margin: 0 0 0.75rem; }
+        .section-title.blue { color: var(--blue); }
+        .section-title.dim { color: var(--fg-faint); }
+        .empty-note { font-size: 0.7rem; color: var(--fg-ghost); font-style: italic; }
+
+        .list { display: flex; flex-direction: column; gap: 0.75rem; }
+        .folder-card {
+            width: 100%; padding: 1rem; border-radius: 1rem; text-align: left;
+            background: rgba(255,255,255,0.04); border: 1px solid var(--border);
+            transition: transform 0.12s ease;
+        }
+        .folder-card:active { transform: scale(0.98); }
+        .folder-card.permanent { background: rgba(37,99,235,0.06); border-color: rgba(59,130,246,0.18); }
+        .folder-kicker { font-size: 0.6rem; font-weight: 900; text-transform: uppercase; margin: 0 0 0.25rem; }
+        .folder-kicker.blue { color: var(--blue); }
+        .folder-kicker.dim { color: var(--fg-faint); }
+        .folder-path { font-size: 0.75rem; color: var(--fg); margin: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+        .browse-head { display: flex; align-items: center; justify-content: space-between; margin-bottom: 1rem; }
+        #browseTitle { font-size: 0.65rem; font-weight: 900; text-transform: uppercase; letter-spacing: 0.2em; color: var(--fg-dim); margin: 0; flex: 1; margin-right: 1rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+        #upBtn { font-size: 0.6rem; font-weight: 900; text-transform: uppercase; color: var(--blue); background: rgba(59,130,246,0.1); padding: 0.3rem 0.75rem; border-radius: 999px; }
+
+        .subfolder {
+            width: 100%; padding: 0.75rem; border-radius: 0.75rem; text-align: left;
+            background: rgba(255,255,255,0.04); border: 1px solid var(--border);
+            display: flex; align-items: center; gap: 0.75rem;
+        }
+        .subfolder:active { transform: scale(0.98); }
+        .subfolder-name { font-size: 0.75rem; color: var(--fg); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+        #browseImageList { display: flex; flex-direction: column; gap: 0.75rem; padding-top: 1rem; margin-top: 0.5rem; border-top: 1px solid var(--border); }
+        .cta {
+            padding: 1rem; border-radius: 1rem; font-weight: 900; text-transform: uppercase;
+            letter-spacing: 0.15em; font-size: 0.75rem; transition: transform 0.12s ease;
+        }
+        .cta:active { transform: scale(0.96); }
+        .cta-primary { background: var(--blue-600); color: #fff; box-shadow: 0 10px 25px rgba(37,99,235,0.25); }
+        .cta-secondary { background: var(--bg-elev); border: 1px solid var(--border-strong); color: #60a5fa; }
+
+        /* ---------- Viewer feed ---------- */
+        #viewerView { flex: 1; min-height: 0; position: relative; background: #000; }
         #feedContainer {
             scroll-snap-type: y mandatory;
             overflow-y: scroll;
-            height: calc(100dvh - 3.5rem);
+            height: 100%;
             scroll-behavior: smooth;
             -webkit-overflow-scrolling: touch;
-            display: block;
         }
-
         .feed-post {
             scroll-snap-align: start;
-            height: calc(100dvh - 3.5rem);
-            width: 100%;
-            position: relative;
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            background-color: #000;
-            overflow: hidden;
-            transition: opacity 0.3s ease, height 0.3s ease, transform 0.3s ease;
-            flex-shrink: 0;
+            height: 100%; width: 100%;
+            position: relative; flex-shrink: 0;
+            display: flex; align-items: center; justify-content: center;
+            background: #000; overflow: hidden;
+            touch-action: pan-y;
+            transition: transform 0.28s ease, opacity 0.28s ease;
         }
-
         .post-image {
-            max-width: 100%;
-            max-height: 100%;
-            object-fit: contain;
-            opacity: 0;
-            transition: opacity 0.3s ease;
+            max-width: 100%; max-height: 100%; object-fit: contain;
+            opacity: 0; transition: opacity 0.3s ease;
+            pointer-events: none; user-select: none;
         }
         .post-image.loaded { opacity: 1; }
-
-        .action-sidebar {
-            position: absolute;
-            bottom: 4rem;
-            display: flex;
-            flex-direction: column;
-            gap: 1.5rem;
-            z-index: 10;
-            transition: all 0.3s ease;
+        .post-error {
+            position: absolute; inset: 0; display: flex; flex-direction: column;
+            align-items: center; justify-content: center; gap: 0.5rem;
+            color: var(--fg-faint); font-size: 0.75rem;
         }
-        
-        .sidebar-right { right: 1rem; }
-        .sidebar-left { left: 1rem; }
-
-        .action-btn {
-            width: 3.5rem;
-            height: 3.5rem;
-            border-radius: 50%;
-            display: flex;
-            flex-direction: column;
-            align-items: center;
-            justify-content: center;
-            background: rgba(20, 20, 20, 0.8);
-            backdrop-filter: blur(10px);
-            border: 1px solid rgba(255, 255, 255, 0.1);
-            color: white;
-            box-shadow: 0 10px 25px rgba(0,0,0,0.5);
-        }
-
-        .btn-keep { color: #3b82f6; border-color: rgba(59, 130, 246, 0.3); }
-        .btn-trash { color: #ef4444; border-color: rgba(239, 68, 68, 0.3); }
-        .btn-icon { font-size: 1.25rem; }
-        .btn-label { font-size: 0.5rem; font-weight: 900; text-transform: uppercase; margin-top: 2px; }
+        .post-error .ico { font-size: 2rem; }
 
         .post-info {
-            position: absolute;
-            bottom: 1.5rem;
-            max-width: 60%;
-            z-index: 10;
-            pointer-events: none;
-            transition: all 0.3s ease;
+            position: absolute; bottom: calc(1.5rem + var(--safe-b)); max-width: 60%;
+            z-index: 10; pointer-events: none;
         }
-        .info-left { left: 1rem; text-align: left; }
-        .info-right { right: 1rem; text-align: right; }
+        .post-info.info-left { left: 1rem; text-align: left; }
+        .post-info.info-right { right: 1rem; text-align: right; }
+        .post-name { color: #fff; font-size: 0.7rem; font-weight: 700; opacity: 0.8; margin: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+        .action-sidebar {
+            position: absolute; bottom: calc(4rem + var(--safe-b));
+            display: flex; flex-direction: column; gap: 1.25rem; z-index: 10;
+        }
+        .action-sidebar.sidebar-right { right: 1rem; }
+        .action-sidebar.sidebar-left { left: 1rem; }
+        .action-btn {
+            width: 3.5rem; height: 3.5rem; border-radius: 50%;
+            display: flex; flex-direction: column; align-items: center; justify-content: center;
+            background: rgba(20,20,20,0.8); backdrop-filter: blur(10px);
+            border: 1px solid var(--border-strong); color: #fff;
+            box-shadow: 0 10px 25px rgba(0,0,0,0.5); transition: transform 0.1s ease;
+        }
+        .action-btn:active { transform: scale(0.9); }
+        .action-btn.keep { color: var(--blue); border-color: rgba(59,130,246,0.35); }
+        .action-btn.trash { color: var(--red); border-color: rgba(239,68,68,0.35); }
+        .action-btn.skip { color: var(--fg-dim); width: 3rem; height: 3rem; }
+        .btn-icon { font-size: 1.25rem; }
+        .btn-label { font-size: 0.5rem; font-weight: 900; text-transform: uppercase; margin-top: 2px; }
+        .action-btn.skip .btn-icon { font-size: 1rem; }
+
+        /* Swipe affordance + commit overlay */
+        .swipe-hint {
+            position: absolute; top: 50%; transform: translateY(-50%) scale(0.85);
+            display: flex; flex-direction: column; align-items: center; gap: 2px;
+            font-size: 2.25rem; font-weight: 900; opacity: 0.28; z-index: 15;
+            pointer-events: none; transition: opacity 0.12s ease, transform 0.12s ease;
+            text-shadow: 0 2px 10px rgba(0,0,0,0.7);
+        }
+        .swipe-hint .hint-label { font-size: 0.6rem; letter-spacing: 0.14em; text-transform: uppercase; }
+        .swipe-hint.left { left: 1.25rem; color: var(--red); }
+        .swipe-hint.right { right: 1.25rem; color: var(--blue); }
+        .swipe-hint.active { opacity: 1; transform: translateY(-50%) scale(1.15); }
 
         .status-overlay {
-            position: absolute;
-            inset: 0;
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            font-size: 4rem;
-            font-weight: 900;
-            opacity: 0;
-            pointer-events: none;
-            transition: all 0.2s ease;
-            transform: scale(0.8);
-            z-index: 20;
+            position: absolute; inset: 0; display: flex; align-items: center; justify-content: center;
+            font-size: 4rem; font-weight: 900; opacity: 0; pointer-events: none;
+            transition: opacity 0.2s ease, transform 0.2s ease; transform: scale(0.8); z-index: 20;
         }
         .status-overlay.show { opacity: 1; transform: scale(1); }
-        .status-keep { color: #3b82f6; text-shadow: 0 0 20px rgba(59, 130, 246, 0.5); }
-        .status-trash { color: #ef4444; text-shadow: 0 0 20px rgba(239, 68, 68, 0.5); }
+        .status-overlay.keep { color: var(--blue); text-shadow: 0 0 20px rgba(59,130,246,0.5); }
+        .status-overlay.trash { color: var(--red); text-shadow: 0 0 20px rgba(239,68,68,0.5); }
 
-        #indexDisplay:active { transform: scale(0.95) translateX(-50%); }
+        #feedEndMarker { height: 10rem; display: flex; align-items: center; justify-content: center; color: var(--fg-faint); font-size: 0.65rem; font-weight: 900; text-transform: uppercase; letter-spacing: 0.2em; }
+
+        /* ---------- Toasts ---------- */
+        #toastLayer {
+            position: fixed; left: 0; right: 0;
+            bottom: calc(1.25rem + var(--safe-b));
+            display: flex; flex-direction: column; align-items: center; gap: 0.5rem;
+            z-index: 60; pointer-events: none; padding: 0 1rem;
+        }
+        .toast {
+            pointer-events: auto; max-width: 28rem; width: 100%;
+            display: flex; align-items: center; gap: 0.75rem;
+            padding: 0.75rem 1rem; border-radius: 0.9rem;
+            background: rgba(28,28,28,0.96); border: 1px solid var(--border-strong);
+            box-shadow: 0 10px 30px rgba(0,0,0,0.6); backdrop-filter: blur(10px);
+            font-size: 0.78rem; color: var(--fg);
+            transform: translateY(1rem); opacity: 0; transition: transform 0.2s ease, opacity 0.2s ease;
+        }
+        .toast.show { transform: translateY(0); opacity: 1; }
+        .toast.error { border-color: rgba(239,68,68,0.4); }
+        .toast .toast-msg { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+        .toast .toast-action {
+            font-weight: 900; text-transform: uppercase; font-size: 0.65rem; letter-spacing: 0.05em;
+            color: var(--blue); padding: 0.35rem 0.6rem; border-radius: 0.5rem;
+            background: rgba(59,130,246,0.12); white-space: nowrap;
+        }
+        .toast .toast-count { font-variant-numeric: tabular-nums; color: var(--fg-faint); font-size: 0.7rem; min-width: 1.2rem; text-align: center; }
+
+        /* ---------- Zoom overlay ---------- */
+        #zoomOverlay {
+            position: fixed; inset: 0; z-index: 80; background: #000;
+            display: flex; align-items: center; justify-content: center;
+            touch-action: none; overflow: hidden;
+        }
+        #zoomImg {
+            max-width: 100%; max-height: 100%; object-fit: contain;
+            transform-origin: center center; will-change: transform;
+            user-select: none; -webkit-user-drag: none;
+        }
+        #zoomClose {
+            position: absolute; top: calc(0.75rem + var(--safe-t)); right: 0.75rem;
+            width: 2.5rem; height: 2.5rem; border-radius: 50%;
+            background: rgba(20,20,20,0.7); border: 1px solid var(--border-strong);
+            color: #fff; font-size: 1.1rem; display: flex; align-items: center; justify-content: center;
+            z-index: 81;
+        }
+        #zoomHint {
+            position: absolute; bottom: calc(1rem + var(--safe-b)); left: 50%; transform: translateX(-50%);
+            font-size: 0.65rem; color: var(--fg-faint); text-transform: uppercase; letter-spacing: 0.1em;
+            pointer-events: none;
+        }
+
+        /* ---------- Input modal (jump) ---------- */
+        #modalOverlay {
+            position: fixed; inset: 0; z-index: 70; background: rgba(0,0,0,0.7);
+            display: flex; align-items: center; justify-content: center; padding: 1.5rem;
+        }
+        .modal-card {
+            width: 100%; max-width: 20rem; background: var(--bg-elev);
+            border: 1px solid var(--border-strong); border-radius: 1.25rem; padding: 1.25rem;
+        }
+        .modal-title { font-size: 0.7rem; font-weight: 900; text-transform: uppercase; letter-spacing: 0.1em; color: var(--fg-dim); margin: 0 0 0.75rem; }
+        #modalInput {
+            width: 100%; padding: 0.75rem; border-radius: 0.75rem; font-size: 1rem;
+            background: rgba(255,255,255,0.05); border: 1px solid var(--border-strong); color: var(--fg);
+            text-align: center; font-variant-numeric: tabular-nums;
+        }
+        #modalInput:focus { outline: none; border-color: var(--blue); }
+        .modal-actions { display: flex; gap: 0.5rem; margin-top: 1rem; }
+        .modal-btn { flex: 1; padding: 0.7rem; border-radius: 0.75rem; font-weight: 900; text-transform: uppercase; font-size: 0.7rem; }
+        .modal-btn.cancel { background: rgba(255,255,255,0.05); color: var(--fg-dim); }
+        .modal-btn.confirm { background: var(--blue-600); color: #fff; }
     </style>
 </head>
-<body class="overflow-x-hidden fixed inset-0 flex flex-col">
-    
-    <header class="h-14 border-b border-white/5 flex items-center justify-between px-4 bg-neutral-900/90 backdrop-blur-md z-40 shrink-0">
-        <div class="flex items-center gap-2">
-            <div class="w-6 h-6 bg-blue-600 rounded flex items-center justify-center text-white text-[10px] font-black italic">CV</div>
-            <h1 id="title" class="text-xs font-black uppercase tracking-widest italic text-neutral-300">ComfyView</h1>
+<body>
+    <header id="header">
+        <div class="brand">
+            <div class="brand-badge">CV</div>
+            <h1 id="title" class="brand-title">ComfyView</h1>
         </div>
 
-        <div id="indexDisplay" onclick="jumpToIndex()" class="hidden absolute left-1/2 -translate-x-1/2 flex flex-col items-center cursor-pointer transition-transform px-4 py-1">
-            <span id="counter" class="text-[10px] font-mono font-black text-blue-500 tracking-tighter">0 / 0</span>
-            <div class="w-12 h-0.5 bg-white/5 rounded-full overflow-hidden mt-0.5">
-                <div id="progressBar" class="h-full bg-blue-600 transition-all duration-300" style="width: 0%"></div>
-            </div>
+        <div id="indexDisplay" class="hidden">
+            <span id="counter">0 / 0</span>
+            <div class="progress-track"><div id="progressBar"></div></div>
         </div>
 
-        <div class="flex items-center gap-3">
-            <button id="swapBtn" class="text-[8px] font-black uppercase text-neutral-500 border border-white/10 px-2 py-1 rounded-lg">Side</button>
-            <button id="backBtn" class="hidden text-[10px] font-black uppercase text-blue-500 px-2 py-1 bg-blue-500/10 rounded-lg">Back</button>
+        <div class="header-actions">
+            <button id="sfwBtn" class="header-btn" title="Toggle SFW mode (hide NSFW images)">SFW</button>
+            <button id="swapBtn" class="header-btn">Side</button>
+            <button id="backBtn" class="header-btn accent hidden">Back</button>
         </div>
     </header>
 
-    <main id="content" class="flex-1 relative overflow-hidden flex flex-col">
-        <div id="rootView" class="p-4 space-y-6 overflow-y-auto flex-1">
-            <div class="space-y-4">
-                <h2 class="text-[10px] font-black uppercase tracking-[0.2em] text-blue-500">Authorized Folders</h2>
-                <div id="authList" class="space-y-3"></div>
+    <main id="content">
+        <div id="rootView" class="scroll-view">
+            <div class="section">
+                <h2 class="section-title blue">Authorized Folders</h2>
+                <div id="authList" class="list"></div>
             </div>
-            <div class="space-y-4">
-                <h2 class="text-[10px] font-black uppercase tracking-[0.2em] text-neutral-500">Recent Folders</h2>
-                <div id="recentList" class="space-y-3"></div>
-            </div>
-        </div>
-
-        <div id="browseView" class="hidden p-4 space-y-4 overflow-y-auto flex-1">
-            <div class="flex items-center justify-between">
-                <h2 id="browseTitle" class="text-[10px] font-black uppercase tracking-[0.2em] text-neutral-400 truncate flex-1 mr-4">Folder</h2>
-                <button id="upBtn" class="text-[8px] font-black uppercase text-blue-500 bg-blue-500/10 px-3 py-1 rounded-full">Up ⬆️</button>
-            </div>
-            <div id="browseList" class="space-y-3"></div>
-            <div id="browseImageList" class="flex flex-col gap-3 pt-4 border-t border-white/5">
-                <button id="resumeBtn" class="hidden py-4 bg-neutral-800 border border-white/10 text-blue-400 rounded-2xl font-black uppercase tracking-widest text-xs active:scale-95 transition-all">Resume Session</button>
-                <button id="startGradingBtn" class="py-4 bg-blue-600 text-white rounded-2xl font-black uppercase tracking-widest text-xs shadow-lg shadow-blue-600/20 active:scale-95 transition-all">Start Feed</button>
+            <div class="section">
+                <h2 class="section-title dim">Recent Folders</h2>
+                <div id="recentList" class="list"></div>
             </div>
         </div>
 
-        <div id="viewerView" class="hidden flex-1 relative bg-black">
+        <div id="browseView" class="scroll-view hidden">
+            <div class="browse-head">
+                <h2 id="browseTitle">Folder</h2>
+                <button id="upBtn">Up ⬆️</button>
+            </div>
+            <div id="browseList" class="list"></div>
+            <div id="browseImageList">
+                <button id="resumeBtn" class="cta cta-secondary hidden">Resume Session</button>
+                <button id="startGradingBtn" class="cta cta-primary">Start Feed</button>
+            </div>
+        </div>
+
+        <div id="viewerView" class="hidden">
             <div id="feedContainer"></div>
         </div>
     </main>
 
-    <div id="preloadContainer" style="display:none"></div>
+    <div id="toastLayer"></div>
 
     <script>
+    (function () {
+        "use strict";
+
         const state = {
             view: 'root',
             pathStack: [],
@@ -167,29 +342,129 @@
             chunkSize: 5,
             visibleIndex: 0,
             btnSide: localStorage.getItem('cv_btn_side') || 'right',
+            sfw: localStorage.getItem('cv_sfw') === '1',
             visibilityObserver: null,
-            infiniteObserver: null
+            infiniteObserver: null,
+            pendingUndo: null
         };
 
-        const $ = id => document.getElementById(id);
+        const SWIPE_COMMIT = 90;   // px to commit a horizontal swipe
+        const UNDO_MS = 4500;
 
+        const $ = id => document.getElementById(id);
+        const el = (tag, cls) => { const e = document.createElement(tag); if (cls) e.className = cls; return e; };
+
+        function vibrate(ms) { if (navigator.vibrate) { try { navigator.vibrate(ms); } catch (e) {} } }
+
+        function formatPath(p) {
+            const parts = p.split(/[\\/]/).filter(Boolean);
+            return parts.length > 2 ? '.../' + parts.slice(-2).join('/') : parts.join('/');
+        }
+
+        /* ---------------- Toasts ---------------- */
+        function showToast(message, opts) {
+            opts = opts || {};
+            const toast = el('div', 'toast' + (opts.error ? ' error' : ''));
+            const msg = el('div', 'toast-msg');
+            msg.textContent = message;
+            toast.appendChild(msg);
+
+            let countEl = null;
+            if (opts.actionLabel && opts.onAction) {
+                if (typeof opts.countSeconds === 'number') {
+                    countEl = el('span', 'toast-count');
+                    countEl.textContent = opts.countSeconds;
+                    toast.appendChild(countEl);
+                }
+                const btn = el('button', 'toast-action');
+                btn.textContent = opts.actionLabel;
+                btn.addEventListener('click', () => { opts.onAction(); dismiss(); });
+                toast.appendChild(btn);
+            }
+
+            $('toastLayer').appendChild(toast);
+            requestAnimationFrame(() => toast.classList.add('show'));
+
+            let timer = null, countTimer = null, remaining = opts.countSeconds;
+            function dismiss() {
+                if (timer) clearTimeout(timer);
+                if (countTimer) clearInterval(countTimer);
+                toast.classList.remove('show');
+                setTimeout(() => toast.remove(), 220);
+            }
+            const duration = opts.duration || 2600;
+            timer = setTimeout(() => { if (opts.onTimeout) opts.onTimeout(); dismiss(); }, duration);
+            if (countEl) {
+                countTimer = setInterval(() => {
+                    remaining -= 1;
+                    if (remaining >= 0) countEl.textContent = remaining;
+                }, 1000);
+            }
+            return { dismiss };
+        }
+
+        /* ---------------- Input modal ---------------- */
+        function promptNumber(title, def, min, max) {
+            return new Promise(resolve => {
+                const overlay = el('div'); overlay.id = 'modalOverlay';
+                const card = el('div', 'modal-card');
+                const h = el('p', 'modal-title'); h.textContent = title;
+                const input = el('input'); input.id = 'modalInput';
+                input.type = 'number'; input.inputMode = 'numeric';
+                input.min = String(min); input.max = String(max); input.value = String(def);
+                const actions = el('div', 'modal-actions');
+                const cancel = el('button', 'modal-btn cancel'); cancel.textContent = 'Cancel';
+                const confirm = el('button', 'modal-btn confirm'); confirm.textContent = 'Go';
+                actions.appendChild(cancel); actions.appendChild(confirm);
+                card.appendChild(h); card.appendChild(input); card.appendChild(actions);
+                overlay.appendChild(card);
+                document.body.appendChild(overlay);
+                input.focus(); input.select();
+
+                function close(val) { overlay.remove(); resolve(val); }
+                cancel.addEventListener('click', () => close(null));
+                overlay.addEventListener('click', e => { if (e.target === overlay) close(null); });
+                confirm.addEventListener('click', () => close(input.value));
+                input.addEventListener('keydown', e => { if (e.key === 'Enter') close(input.value); });
+            });
+        }
+
+        /* ---------------- Root / browse ---------------- */
         async function init() {
             try {
                 const resp = await fetch('/api/state');
                 const data = await resp.json();
                 renderRoots(data.authorizedFolders || [], data.recentFolders || []);
-            } catch (e) { console.error("Init failed:", e); }
+            } catch (e) {
+                console.error("Init failed:", e);
+                showToast("Couldn't reach the desktop app.", { error: true });
+            }
+        }
+
+        function makeFolderCard(path, kicker, kickerCls, permanent) {
+            const card = el('button', 'folder-card' + (permanent ? ' permanent' : ''));
+            const k = el('p', 'folder-kicker ' + kickerCls); k.textContent = kicker;
+            const p = el('p', 'folder-path'); p.textContent = formatPath(path);
+            card.appendChild(k); card.appendChild(p);
+            card.addEventListener('click', () => enterFolder(path));
+            return card;
         }
 
         function renderRoots(auth, recent) {
-            const formatPath = p => {
-                const parts = p.split(/[\\/]/).filter(Boolean);
-                return parts.length > 2 ? '.../' + parts.slice(-2).join('/') : parts.join('/');
-            };
-            $('authList').innerHTML = auth.map(f => `<button onclick="enterFolder('${f.replace(/\\/g, '\\\\')}')" class="w-full p-4 bg-blue-600/5 border border-blue-500/10 rounded-2xl text-left active:scale-[0.98] transition-all"><p class="text-[10px] font-black uppercase text-blue-500 mb-1">Permanent Root</p><p class="text-xs font-medium text-neutral-300 truncate">${formatPath(f)}</p></button>`).join('');
-            if (auth.length === 0) $('authList').innerHTML = '<p class="text-[8px] text-neutral-600 italic">No authorized folders set in Settings.</p>';
-            $('recentList').innerHTML = recent.map(f => `<button onclick="enterFolder('${f.replace(/\\/g, '\\\\')}')" class="w-full p-4 bg-white/5 border border-white/5 rounded-2xl text-left active:scale-[0.98] transition-all"><p class="text-[10px] font-black uppercase text-neutral-500 mb-1">Recent Entry</p><p class="text-xs font-medium text-neutral-300 truncate">${formatPath(f)}</p></button>`).join('');
-            if (recent.length === 0) $('recentList').innerHTML = '<p class="text-[8px] text-neutral-600 italic">No recent history.</p>';
+            const authList = $('authList'); authList.replaceChildren();
+            if (auth.length === 0) {
+                const note = el('p', 'empty-note'); note.textContent = 'No authorized folders set in Settings.';
+                authList.appendChild(note);
+            } else {
+                auth.forEach(f => authList.appendChild(makeFolderCard(f, 'Permanent Root', 'blue', true)));
+            }
+            const recentList = $('recentList'); recentList.replaceChildren();
+            if (recent.length === 0) {
+                const note = el('p', 'empty-note'); note.textContent = 'No recent history.';
+                recentList.appendChild(note);
+            } else {
+                recent.forEach(f => recentList.appendChild(makeFolderCard(f, 'Recent Entry', 'dim', false)));
+            }
         }
 
         async function enterFolder(path) {
@@ -208,59 +483,82 @@
                 const path = state.currentFolderPath;
                 const parts = path.split(/[\\/]/).filter(Boolean);
                 $('browseTitle').textContent = parts.slice(-2).join(' / ') || path;
-                
+
                 const subfolders = await (await fetch('/api/subfolders?path=' + encodeURIComponent(path))).json();
-                state.images = await (await fetch('/api/images?folder=' + encodeURIComponent(path))).json();
-                
-                $('browseList').innerHTML = subfolders.map(f => `<button onclick="navigateInto('${f.path.replace(/\\/g, '\\\\')}')" class="w-full p-3 bg-white/5 border border-white/5 rounded-xl text-left flex items-center gap-3"><span class="text-lg">📁</span><span class="text-xs font-medium text-neutral-300 truncate">${f.name}</span></button>`).join('');
-                
+                const sfwParam = state.sfw ? '&sfw=1' : '';
+                state.images = await (await fetch('/api/images?folder=' + encodeURIComponent(path) + sfwParam)).json();
+
+                const browseList = $('browseList'); browseList.replaceChildren();
+                subfolders.forEach(f => {
+                    const card = el('button', 'subfolder');
+                    const ico = el('span'); ico.textContent = '📁'; ico.style.fontSize = '1.1rem';
+                    const name = el('span', 'subfolder-name'); name.textContent = f.name;
+                    card.appendChild(ico); card.appendChild(name);
+                    card.addEventListener('click', () => navigateInto(f.path));
+                    browseList.appendChild(card);
+                });
+
+                const startBtn = $('startGradingBtn'), resumeBtn = $('resumeBtn');
                 if (state.images && state.images.length > 0) {
-                    $('startGradingBtn').classList.remove('hidden');
-                    $('startGradingBtn').innerHTML = 'Start Feed (' + state.images.length + ' images)';
-                    const savedIndex = localStorage.getItem('cv_pos_' + path);
-                    if (savedIndex && parseInt(savedIndex) > 0 && parseInt(savedIndex) < state.images.length) {
-                        $('resumeBtn').classList.remove('hidden');
-                        $('resumeBtn').innerHTML = 'Resume from #' + (parseInt(savedIndex) + 1);
-                        $('resumeBtn').onclick = () => startSession(parseInt(savedIndex));
-                    } else { $('resumeBtn').classList.add('hidden'); }
-                } else { $('startGradingBtn').classList.add('hidden'); $('resumeBtn').classList.add('hidden'); }
-            } catch (e) { alert("Failed to load folder content"); }
+                    startBtn.classList.remove('hidden');
+                    startBtn.textContent = 'Start Feed (' + state.images.length + ' images)';
+                    const savedIndex = parseInt(localStorage.getItem('cv_pos_' + path) || '0', 10);
+                    if (savedIndex > 0 && savedIndex < state.images.length) {
+                        resumeBtn.classList.remove('hidden');
+                        resumeBtn.textContent = 'Resume from #' + (savedIndex + 1);
+                        resumeBtn.onclick = () => startSession(savedIndex);
+                    } else { resumeBtn.classList.add('hidden'); }
+                } else {
+                    startBtn.classList.add('hidden');
+                    resumeBtn.classList.add('hidden');
+                }
+            } catch (e) {
+                console.error(e);
+                showToast("Failed to load folder content.", { error: true });
+            }
         }
 
         function navigateInto(path) { state.currentFolderPath = path; state.pathStack.push(path); refreshBrowse(); }
-        $('upBtn').onclick = () => {
-            if (state.pathStack.length > 1) { state.pathStack.pop(); state.currentFolderPath = state.pathStack[state.pathStack.length - 1]; refreshBrowse(); }
-            else { goBack(); }
-        };
 
-        function startSession(startIndex = 0) {
-            if (!state.images || state.images.length === 0) { alert("No images to display"); return; }
-            
+        $('upBtn').addEventListener('click', () => {
+            if (state.pathStack.length > 1) {
+                state.pathStack.pop();
+                state.currentFolderPath = state.pathStack[state.pathStack.length - 1];
+                refreshBrowse();
+            } else { goBack(); }
+        });
+
+        /* ---------------- Feed session ---------------- */
+        function startSession(startIndex) {
+            startIndex = startIndex || 0;
+            if (!state.images || state.images.length === 0) { showToast("No images to display."); return; }
+            commitPendingUndo();
+
             state.view = 'viewer';
             $('browseView').classList.add('hidden');
             $('viewerView').classList.remove('hidden');
             $('indexDisplay').classList.remove('hidden');
-            $('indexDisplay').classList.add('flex');
-            
+
             const container = $('feedContainer');
-            container.innerHTML = '<div id="feedEndMarker" class="h-40 flex items-center justify-center text-neutral-500 text-[10px] font-black uppercase tracking-widest">End of folder</div>';
-            
+            container.replaceChildren();
+            const endMarker = el('div'); endMarker.id = 'feedEndMarker'; endMarker.textContent = 'End of folder';
+            container.appendChild(endMarker);
+
             state.renderedCount = startIndex;
             state.visibleIndex = startIndex;
             updateCounter();
-            
-            // Re-setup observers
+
             if (state.infiniteObserver) state.infiniteObserver.disconnect();
             if (state.visibilityObserver) state.visibilityObserver.disconnect();
 
-            state.infiniteObserver = new IntersectionObserver((entries) => {
+            state.infiniteObserver = new IntersectionObserver(entries => {
                 if (entries[0].isIntersecting) loadMorePosts();
             }, { root: container, rootMargin: '0px 0px 1000px 0px' });
 
-            state.visibilityObserver = new IntersectionObserver((entries) => {
+            state.visibilityObserver = new IntersectionObserver(entries => {
                 entries.forEach(entry => {
                     if (entry.isIntersecting && entry.intersectionRatio > 0.6) {
-                        const idx = parseInt(entry.target.dataset.index);
+                        const idx = parseInt(entry.target.dataset.index, 10);
                         if (!isNaN(idx)) {
                             state.visibleIndex = idx;
                             updateCounter();
@@ -271,9 +569,8 @@
             }, { root: container, threshold: 0.6 });
 
             loadMorePosts();
-            state.infiniteObserver.observe($('feedEndMarker'));
+            state.infiniteObserver.observe(endMarker);
 
-            // Scroll to the first post if not at 0
             if (startIndex > 0) {
                 setTimeout(() => {
                     const firstPost = container.querySelector('.feed-post');
@@ -282,34 +579,58 @@
             }
         }
 
-        $('startGradingBtn').onclick = () => startSession(0);
-
         function createPostElement(imgData, index) {
-            const div = document.createElement('div');
-            div.className = 'feed-post';
-            div.dataset.index = index;
-            div.dataset.path = imgData.path;
-            div.id = 'post-' + index;
+            const post = el('div', 'feed-post');
+            post.dataset.index = index;
+            post.dataset.path = imgData.path;
+            post.id = 'post-' + index;
 
-            const sideClass = state.btnSide === 'right' ? 'sidebar-right' : 'sidebar-left';
-            const infoClass = state.btnSide === 'right' ? 'info-left' : 'info-right';
+            const img = el('img', 'post-image');
+            img.src = '/api/image?path=' + encodeURIComponent(imgData.path);
+            img.alt = imgData.name;
+            img.decoding = 'async';
+            img.addEventListener('load', () => img.classList.add('loaded'));
+            img.addEventListener('error', () => {
+                if (post.querySelector('.post-error')) return;
+                const err = el('div', 'post-error');
+                const ico = el('div', 'ico'); ico.textContent = '⚠️';
+                const txt = el('div'); txt.textContent = 'Image failed to load';
+                err.appendChild(ico); err.appendChild(txt);
+                post.appendChild(err);
+            });
+            post.appendChild(img);
 
-            div.innerHTML = `
-                <img class="post-image" src="/api/image?path=${encodeURIComponent(imgData.path)}" onload="this.classList.add('loaded')">
-                <div class="status-overlay" id="status-${index}"><span id="statusText-${index}"></span></div>
-                <div class="post-info ${infoClass}">
-                    <p class="text-white text-[10px] font-bold truncate opacity-80">${imgData.name}</p>
-                </div>
-                <div class="action-sidebar ${sideClass}">
-                    <button onclick="handleFeedAction(${index}, 'keep')" class="action-btn btn-keep">
-                        <span class="btn-icon">⭐</span><span class="btn-label">Keep</span>
-                    </button>
-                    <button onclick="handleFeedAction(${index}, 'trash')" class="action-btn btn-trash">
-                        <span class="btn-icon">🗑️</span><span class="btn-label">Trash</span>
-                    </button>
-                </div>
-            `;
-            return div;
+            const status = el('div', 'status-overlay'); status.id = 'status-' + index;
+            const statusText = el('span'); statusText.id = 'statusText-' + index;
+            status.appendChild(statusText);
+            post.appendChild(status);
+
+            const hintL = el('div', 'swipe-hint left'); hintL.innerHTML = '<span>🗑️</span><span class="hint-label">Trash</span>';
+            const hintR = el('div', 'swipe-hint right'); hintR.innerHTML = '<span>⭐</span><span class="hint-label">Keep</span>';
+            post.appendChild(hintL); post.appendChild(hintR);
+
+            const info = el('div', 'post-info ' + (state.btnSide === 'right' ? 'info-left' : 'info-right'));
+            const name = el('p', 'post-name'); name.textContent = imgData.name;
+            info.appendChild(name);
+            post.appendChild(info);
+
+            const sidebar = el('div', 'action-sidebar ' + (state.btnSide === 'right' ? 'sidebar-right' : 'sidebar-left'));
+            sidebar.appendChild(makeActionBtn('keep', '⭐', 'Keep', () => handleFeedAction(index, 'keep')));
+            sidebar.appendChild(makeActionBtn('skip', '⏭', 'Skip', () => skipPost(index)));
+            sidebar.appendChild(makeActionBtn('trash', '🗑️', 'Trash', () => handleFeedAction(index, 'trash')));
+            post.appendChild(sidebar);
+
+            attachSwipe(post, img);
+            return post;
+        }
+
+        function makeActionBtn(kind, icon, label, onClick) {
+            const btn = el('button', 'action-btn ' + kind);
+            const i = el('span', 'btn-icon'); i.textContent = icon;
+            const l = el('span', 'btn-label'); l.textContent = label;
+            btn.appendChild(i); btn.appendChild(l);
+            btn.addEventListener('click', onClick);
+            return btn;
         }
 
         function loadMorePosts() {
@@ -327,75 +648,314 @@
         }
 
         function updateCounter() {
-            const current = state.visibleIndex + 1;
             const total = state.images.length;
+            const current = Math.min(state.visibleIndex + 1, total);
             $('counter').textContent = current + ' / ' + total;
-            $('progressBar').style.width = (current / total * 100) + '%';
+            $('progressBar').style.width = (total ? (current / total * 100) : 0) + '%';
+        }
+
+        function nextPostAfter(post) {
+            let n = post.nextElementSibling;
+            while (n && !n.classList.contains('feed-post')) n = n.nextElementSibling;
+            return n;
+        }
+
+        function skipPost(index) {
+            vibrate(8);
+            const post = $('post-' + index);
+            const next = post && nextPostAfter(post);
+            if (next) next.scrollIntoView({ behavior: 'smooth' });
+            else { const em = $('feedEndMarker'); if (em) em.scrollIntoView({ behavior: 'smooth' }); }
+        }
+
+        /* ---------------- Keep / Trash / Undo ---------------- */
+        function commitPendingUndo() {
+            const p = state.pendingUndo;
+            if (!p) return;
+            state.pendingUndo = null;
+            if (p.toast) p.toast.dismiss();
+            if (state.visibilityObserver) state.visibilityObserver.unobserve(p.post);
+            p.post.remove();
         }
 
         async function handleFeedAction(index, action) {
             const post = $('post-' + index);
-            if (!post) return;
+            if (!post || post.dataset.acting === '1') return;
+            commitPendingUndo();
+
             const path = post.dataset.path;
-            const statusOverlay = $('status-' + index);
+            const status = $('status-' + index);
             const statusText = $('statusText-' + index);
+            statusText.textContent = action === 'keep' ? 'KEEP' : 'TRASH';
+            status.className = 'status-overlay ' + action + ' show';
+            vibrate(action === 'keep' ? 12 : [10, 30, 10]);
 
-            if (action === 'keep') { statusText.textContent = 'KEEP'; statusOverlay.className = 'status-overlay status-keep show'; }
-            else { statusText.textContent = 'TRASH'; statusOverlay.className = 'status-overlay status-trash show'; }
+            post.dataset.acting = '1';
+            try {
+                const response = await fetch('/api/action', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ path, action })
+                });
+                if (!response.ok) {
+                    const errorText = await response.text();
+                    console.error("Action failed:", errorText);
+                    showToast("Action failed: " + errorText, { error: true });
+                    status.classList.remove('show');
+                    post.dataset.acting = '';
+                    return;
+                }
+            } catch (e) {
+                console.error("Network error:", e);
+                showToast("Network error. Check connection.", { error: true });
+                status.classList.remove('show');
+                post.dataset.acting = '';
+                return;
+            }
 
-            try { fetch('/api/action', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ path, action }) }); } catch (e) {}
-
+            // Fly out, then hide (keep in DOM so it can be restored on undo).
+            post.style.transform = 'scale(0.9) translateY(-50px)';
+            post.style.opacity = '0';
             setTimeout(() => {
-                post.style.opacity = '0';
-                post.style.transform = 'scale(0.9) translateY(-50px)';
-                setTimeout(() => {
-                    if (state.visibilityObserver) state.visibilityObserver.unobserve(post);
-                    post.remove();
-                    if ($('feedContainer').querySelectorAll('.feed-post').length < 3) loadMorePosts();
-                    
-                    // Recalculate visible index
-                    const posts = Array.from($('feedContainer').querySelectorAll('.feed-post'));
-                    if (posts.length > 0) {
-                        state.visibleIndex = parseInt(posts[0].dataset.index);
-                        updateCounter();
-                    }
-                }, 300);
-            }, 300);
+                // Bail if it was already undone (or finalized) — doUndo re-observes the post.
+                if (!state.pendingUndo || state.pendingUndo.post !== post) return;
+                post.style.display = 'none';
+                if (state.visibilityObserver) state.visibilityObserver.unobserve(post);
+                const visible = $('feedContainer').querySelectorAll('.feed-post:not([data-acting="1"])');
+                if (visible.length < 3) loadMorePosts();
+                recalcVisibleIndex();
+            }, 280);
+
+            const seconds = Math.round(UNDO_MS / 1000);
+            const toast = showToast(action === 'keep' ? 'Kept ⭐' : 'Trashed 🗑️', {
+                actionLabel: 'Undo',
+                countSeconds: seconds,
+                duration: UNDO_MS,
+                onAction: () => doUndo(post, path, action),
+                onTimeout: () => commitPendingUndo()
+            });
+            state.pendingUndo = { post, path, prevAction: action, toast };
         }
 
-        $('swapBtn').onclick = () => {
-            state.btnSide = state.btnSide === 'right' ? 'left' : 'right';
-            localStorage.setItem('cv_btn_side', state.btnSide);
-            document.querySelectorAll('.action-sidebar').forEach(s => { s.classList.toggle('sidebar-right'); s.classList.toggle('sidebar-left'); });
-            document.querySelectorAll('.post-info').forEach(i => { i.classList.toggle('info-left'); i.classList.toggle('info-right'); });
-        };
+        async function doUndo(post, path, prevAction) {
+            try {
+                const response = await fetch('/api/action', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ path, action: 'undo', prevAction })
+                });
+                if (!response.ok) {
+                    showToast("Undo failed: " + (await response.text()), { error: true });
+                    return;
+                }
+            } catch (e) {
+                showToast("Undo failed. Check connection.", { error: true });
+                return;
+            }
+            state.pendingUndo = null;
+            const status = $('status-' + post.dataset.index);
+            if (status) status.classList.remove('show');
+            post.style.display = '';
+            post.style.transform = '';
+            post.style.opacity = '';
+            post.dataset.acting = '';
+            if (state.visibilityObserver) state.visibilityObserver.observe(post);
+            post.scrollIntoView();
+            vibrate(8);
+            recalcVisibleIndex();
+        }
 
-        function jumpToIndex() {
-            if (state.view !== 'viewer') return;
-            const input = prompt('Jump to index (1 - ' + state.images.length + '):', state.visibleIndex + 1);
-            if (input) {
-                const newIdx = parseInt(input) - 1;
-                if (!isNaN(newIdx) && newIdx >= 0 && newIdx < state.images.length) startSession(newIdx);
+        function recalcVisibleIndex() {
+            const posts = Array.from($('feedContainer').querySelectorAll('.feed-post'))
+                .filter(p => p.style.display !== 'none');
+            if (posts.length > 0) {
+                const idx = parseInt(posts[0].dataset.index, 10);
+                if (!isNaN(idx)) { state.visibleIndex = idx; updateCounter(); }
             }
         }
 
-        $('backBtn').onclick = () => { if (state.view === 'viewer') goBackToBrowse(); else goBack(); };
+        /* ---------------- Swipe + double-tap ---------------- */
+        function attachSwipe(post, img) {
+            let startX = 0, startY = 0, dx = 0, dy = 0, swiping = false, decided = false;
+            let lastTap = 0;
+            const hintL = post.querySelector('.swipe-hint.left');
+            const hintR = post.querySelector('.swipe-hint.right');
+
+            post.addEventListener('touchstart', e => {
+                if (e.touches.length !== 1 || post.dataset.acting === '1') return;
+                startX = e.touches[0].clientX; startY = e.touches[0].clientY;
+                dx = 0; dy = 0; swiping = false; decided = false;
+            }, { passive: true });
+
+            post.addEventListener('touchmove', e => {
+                if (e.touches.length !== 1 || post.dataset.acting === '1') return;
+                dx = e.touches[0].clientX - startX;
+                dy = e.touches[0].clientY - startY;
+                if (!decided) {
+                    if (Math.abs(dx) > 12 && Math.abs(dx) > Math.abs(dy) * 1.3) { swiping = true; decided = true; }
+                    else if (Math.abs(dy) > 12) { decided = true; }
+                }
+                if (swiping) {
+                    e.preventDefault();
+                    const rot = dx / 25;
+                    post.style.transition = 'none';
+                    post.style.transform = 'translateX(' + dx + 'px) rotate(' + rot + 'deg)';
+                    const prog = Math.min(Math.abs(dx) / SWIPE_COMMIT, 1);
+                    hintR.style.opacity = dx > 0 ? (0.28 + prog * 0.72) : '';
+                    hintL.style.opacity = dx < 0 ? (0.28 + prog * 0.72) : '';
+                    hintR.classList.toggle('active', dx > 0 && prog >= 1);
+                    hintL.classList.toggle('active', dx < 0 && prog >= 1);
+                }
+            }, { passive: false });
+
+            post.addEventListener('touchend', () => {
+                if (post.dataset.acting === '1') return;
+                if (swiping) {
+                    hintL.style.opacity = ''; hintR.style.opacity = '';
+                    hintL.classList.remove('active'); hintR.classList.remove('active');
+                    post.style.transition = '';
+                    if (Math.abs(dx) >= SWIPE_COMMIT) {
+                        const index = parseInt(post.dataset.index, 10);
+                        handleFeedAction(index, dx > 0 ? 'keep' : 'trash');
+                    } else {
+                        post.style.transform = '';
+                    }
+                    return;
+                }
+                // Double-tap → zoom
+                if (!decided || (Math.abs(dx) < 10 && Math.abs(dy) < 10)) {
+                    const now = Date.now();
+                    if (now - lastTap < 300) { openZoom(post.dataset.path); lastTap = 0; }
+                    else { lastTap = now; }
+                }
+            });
+        }
+
+        $('startGradingBtn').addEventListener('click', () => startSession(0));
+
+        function syncSfwBtn() {
+            const btn = $('sfwBtn');
+            btn.classList.toggle('accent', state.sfw);
+            btn.textContent = state.sfw ? 'SFW ✓' : 'SFW';
+        }
+        $('sfwBtn').addEventListener('click', () => {
+            state.sfw = !state.sfw;
+            localStorage.setItem('cv_sfw', state.sfw ? '1' : '0');
+            syncSfwBtn();
+            // Re-fetch the current browse view so the feed list reflects the filter.
+            if (state.currentFolderPath && state.view === 'browse') refreshBrowse();
+        });
+        syncSfwBtn();
+
+        $('swapBtn').addEventListener('click', () => {
+            state.btnSide = state.btnSide === 'right' ? 'left' : 'right';
+            localStorage.setItem('cv_btn_side', state.btnSide);
+            document.querySelectorAll('.action-sidebar').forEach(s => {
+                s.classList.toggle('sidebar-right'); s.classList.toggle('sidebar-left');
+            });
+            document.querySelectorAll('.post-info').forEach(i => {
+                i.classList.toggle('info-left'); i.classList.toggle('info-right');
+            });
+        });
+
+        $('indexDisplay').addEventListener('click', async () => {
+            if (state.view !== 'viewer') return;
+            const val = await promptNumber('Jump to image (1 – ' + state.images.length + ')', state.visibleIndex + 1, 1, state.images.length);
+            if (val != null) {
+                const newIdx = parseInt(val, 10) - 1;
+                if (!isNaN(newIdx) && newIdx >= 0 && newIdx < state.images.length) startSession(newIdx);
+            }
+        });
+
+        /* ---------------- Zoom overlay (pinch + double-tap + pan) ---------------- */
+        let zoom = null;
+        function openZoom(path) {
+            const overlay = el('div'); overlay.id = 'zoomOverlay';
+            const img = el('img'); img.id = 'zoomImg';
+            img.src = '/api/image?path=' + encodeURIComponent(path);
+            const close = el('button'); close.id = 'zoomClose'; close.textContent = '✕';
+            const hint = el('div'); hint.id = 'zoomHint'; hint.textContent = 'Pinch / double-tap to zoom';
+            overlay.appendChild(img); overlay.appendChild(close); overlay.appendChild(hint);
+            document.body.appendChild(overlay);
+            vibrate(6);
+
+            zoom = { overlay, img, scale: 1, tx: 0, ty: 0, startDist: 0, startScale: 1, panX: 0, panY: 0, lastTap: 0, dragging: false };
+
+            function apply() { img.style.transform = 'translate(' + zoom.tx + 'px,' + zoom.ty + 'px) scale(' + zoom.scale + ')'; }
+            function reset() { zoom.scale = 1; zoom.tx = 0; zoom.ty = 0; apply(); }
+            function clampScale(s) { return Math.max(1, Math.min(5, s)); }
+
+            function dist(t) { const a = t[0], b = t[1]; return Math.hypot(a.clientX - b.clientX, a.clientY - b.clientY); }
+
+            overlay.addEventListener('touchstart', e => {
+                if (e.touches.length === 2) {
+                    zoom.startDist = dist(e.touches);
+                    zoom.startScale = zoom.scale;
+                } else if (e.touches.length === 1) {
+                    zoom.dragging = zoom.scale > 1;
+                    zoom.panX = e.touches[0].clientX - zoom.tx;
+                    zoom.panY = e.touches[0].clientY - zoom.ty;
+                }
+            }, { passive: false });
+
+            overlay.addEventListener('touchmove', e => {
+                if (e.touches.length === 2) {
+                    e.preventDefault();
+                    zoom.scale = clampScale(zoom.startScale * (dist(e.touches) / zoom.startDist));
+                    apply();
+                } else if (e.touches.length === 1 && zoom.dragging) {
+                    e.preventDefault();
+                    zoom.tx = e.touches[0].clientX - zoom.panX;
+                    zoom.ty = e.touches[0].clientY - zoom.panY;
+                    apply();
+                }
+            }, { passive: false });
+
+            overlay.addEventListener('touchend', e => {
+                if (e.touches.length === 0) {
+                    const now = Date.now();
+                    if (now - zoom.lastTap < 300) {
+                        if (zoom.scale > 1) reset();
+                        else { zoom.scale = 2.5; apply(); }
+                        zoom.lastTap = 0;
+                    } else { zoom.lastTap = now; }
+                }
+            });
+
+            function closeZoom() { overlay.remove(); zoom = null; }
+            close.addEventListener('click', closeZoom);
+            overlay.addEventListener('click', e => { if (e.target === overlay && zoom && zoom.scale <= 1) closeZoom(); });
+        }
+
+        /* ---------------- Navigation ---------------- */
+        $('backBtn').addEventListener('click', () => { if (state.view === 'viewer') goBackToBrowse(); else goBack(); });
+
         function goBackToBrowse() {
-            state.view = 'browse'; $('viewerView').classList.add('hidden'); $('browseView').classList.remove('hidden');
-            $('indexDisplay').classList.add('hidden'); $('indexDisplay').classList.remove('flex');
+            commitPendingUndo();
+            state.view = 'browse';
+            $('viewerView').classList.add('hidden');
+            $('browseView').classList.remove('hidden');
+            $('indexDisplay').classList.add('hidden');
             if (state.infiniteObserver) state.infiniteObserver.disconnect();
             if (state.visibilityObserver) state.visibilityObserver.disconnect();
             refreshBrowse();
         }
+
         function goBack() {
-            state.view = 'root'; state.pathStack = [];
-            $('rootView').classList.remove('hidden'); $('browseView').classList.add('hidden');
-            $('viewerView').classList.add('hidden'); $('backBtn').classList.add('hidden');
-            $('indexDisplay').classList.add('hidden'); $('indexDisplay').classList.remove('flex');
-            $('title').classList.remove('hidden'); init();
+            commitPendingUndo();
+            state.view = 'root';
+            state.pathStack = [];
+            $('rootView').classList.remove('hidden');
+            $('browseView').classList.add('hidden');
+            $('viewerView').classList.add('hidden');
+            $('backBtn').classList.add('hidden');
+            $('indexDisplay').classList.add('hidden');
+            $('title').classList.remove('hidden');
+            init();
         }
 
         init();
+    })();
     </script>
 </body>
 </html>

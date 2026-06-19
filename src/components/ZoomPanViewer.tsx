@@ -1,6 +1,6 @@
-import { useState, useRef, useEffect, useMemo } from "react";
+import { useState, useRef, useEffect, useMemo, memo } from "react";
 import { ZoomIn, ZoomOut, Maximize, Scan, RotateCcw, Scissors } from "lucide-react";
-import { convertFileSrc } from "@tauri-apps/api/core";
+import { assetSrc } from "../api";
 import { Thumbnail, scheduleThumbnailGeneration, notifyMainImageChange } from "./Thumbnail";
 
 interface ZoomPanViewerProps {
@@ -15,8 +15,43 @@ interface ZoomPanViewerProps {
   setCurrentIndex?: (index: number) => void;
 }
 
-export const ZoomPanViewer = ({ 
-  images, currentIndex, reloadTimestamp, batchMode, batchRange, batchMap, className, onBatchCrop, setCurrentIndex 
+/**
+ * Instant-paint base layer for the main viewer. Shows the (cheap, cached) 1024px
+ * thumbnail immediately so navigation never flashes a blank frame while the heavy
+ * full-resolution original decodes behind it. Fades out once the original is ready.
+ */
+const PreviewThumb = ({ path, reloadTimestamp, hidden, style }: {
+  path: string; reloadTimestamp: number; hidden: boolean; style?: React.CSSProperties;
+}) => {
+  const [src, setSrc] = useState<string | null>(null);
+  useEffect(() => {
+    let active = true;
+    setSrc(null);
+    // Priority request so it bypasses the main-image loading lock and paints ASAP.
+    scheduleThumbnailGeneration(path, true, 1024)
+      .then(res => {
+        if (!active) return;
+        setSrc(assetSrc(res, reloadTimestamp));
+      })
+      .catch(() => {});
+    return () => { active = false; };
+  }, [path, reloadTimestamp]);
+
+  if (!src) return null;
+  return (
+    <img
+      src={src}
+      alt=""
+      draggable={false}
+      decoding="async"
+      className={`absolute max-w-full max-h-full object-contain z-10 pointer-events-none select-none transition-opacity duration-200 ${hidden ? 'opacity-0' : 'opacity-100'}`}
+      style={style}
+    />
+  );
+};
+
+export const ZoomPanViewer = memo(({
+  images, currentIndex, reloadTimestamp, batchMode, batchRange, batchMap, className, onBatchCrop, setCurrentIndex
 }: ZoomPanViewerProps) => {
   const containerRef = useRef<HTMLDivElement>(null);
   const lastChangeTime = useRef(Date.now());
@@ -83,13 +118,8 @@ export const ZoomPanViewer = ({
     lastChangeTime.current = now;
     lastIndex.current = currentIndex;
 
-    const cooldown = setTimeout(() => {
-        // 평상시에는 버퍼를 최소화하여 메모리 확보
-    }, 1500);
-
     return () => {
         prefetchTimers.current.forEach(t => clearTimeout(t));
-        clearTimeout(cooldown);
     };
   }, [currentIndex, batchMode, batchRange, images, reloadTimestamp]);
 
@@ -103,10 +133,10 @@ export const ZoomPanViewer = ({
     for (let i = start; i <= end; i++) {
         const img = images[i];
         if (!img) continue;
-        range.push({ 
-            idx: i, 
-            path: img.path, 
-            src: `${convertFileSrc(img.path.replace(/\//g, '\\'))}${reloadTimestamp ? `?t=${reloadTimestamp}` : ''}`
+        range.push({
+            idx: i,
+            path: img.path,
+            src: assetSrc(img.path, reloadTimestamp)
         });
     }
     return range;
@@ -117,7 +147,22 @@ export const ZoomPanViewer = ({
   const [isDragging, setIsDragging] = useState(false);
   const [dragStart, setDragStart] = useState({ x: 0, y: 0 });
 
+  // Progressive loading: track whether the current full-res original has decoded so we
+  // can keep the thumbnail base layer visible until then (no blank flash / late pop-in).
+  const currentPath = images[currentIndex]?.path as string | undefined;
+  const [currentLoaded, setCurrentLoaded] = useState(false);
+  const currentImgRef = useRef<HTMLImageElement>(null);
+
   useEffect(() => { setScale(1); setPosition({ x: 0, y: 0 }); }, [currentIndex, batchMode, images[currentIndex]?.path]);
+
+  useEffect(() => {
+    setCurrentLoaded(false);
+    // If the <img> element was reused and is already decoded (e.g. it was a preloaded
+    // neighbor), onLoad won't fire again — reveal it immediately.
+    if (currentImgRef.current?.complete && currentImgRef.current.naturalWidth > 0) {
+      setCurrentLoaded(true);
+    }
+  }, [currentPath, reloadTimestamp]);
 
   const handleWheel = (e: React.WheelEvent) => {
     if (batchMode) return;
@@ -143,7 +188,9 @@ export const ZoomPanViewer = ({
 
   useEffect(() => {
     if (!batchMode) {
-        setDisplayBatch({current: [], range: null});
+        if (displayBatch.current.length > 0 || displayBatch.range !== null) {
+            setDisplayBatch({current: [], range: null});
+        }
         return;
     }
     
@@ -240,18 +287,28 @@ export const ZoomPanViewer = ({
           onMouseDown={handleMouseDown} onMouseMove={handleMouseMove}
           onMouseUp={() => setIsDragging(false)} onMouseLeave={() => setIsDragging(false)}
         >
+          {currentPath && (
+            <PreviewThumb
+              path={currentPath}
+              reloadTimestamp={reloadTimestamp}
+              hidden={currentLoaded}
+              style={{ transform: `translate(${position.x}px, ${position.y}px) scale(${scale})` }}
+            />
+          )}
           {stageImages.map((img) => {
             const isCurrent = img.idx === currentIndex;
             return (
               <img
                 key={img.path}
+                ref={isCurrent ? currentImgRef : undefined}
                 src={img.src}
                 alt=""
                 draggable={false}
                 // @ts-ignore
                 fetchpriority={isCurrent ? "high" : "low"}
+                onLoad={isCurrent ? () => setCurrentLoaded(true) : undefined}
                 className={`absolute max-w-full max-h-full object-contain transition-all duration-150 will-change-transform shadow-[0_0_50px_rgba(0,0,0,0.5)] select-none
-                  ${isCurrent ? 'opacity-100 z-20 scale-100' : 'opacity-0 z-0 scale-95 pointer-events-none'}
+                  ${isCurrent ? `${currentLoaded ? 'opacity-100' : 'opacity-0'} z-20 scale-100` : 'opacity-0 z-0 scale-95 pointer-events-none'}
                 `}
                 style={isCurrent ? { transform: `translate(${position.x}px, ${position.y}px) scale(${scale})` } : undefined}
               />
@@ -261,4 +318,4 @@ export const ZoomPanViewer = ({
       )}
     </div>
   );
-};
+});

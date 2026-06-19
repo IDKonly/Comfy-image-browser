@@ -1,10 +1,10 @@
 import { useState, useEffect, useCallback, useRef } from "react";
-import { invoke, convertFileSrc } from "@tauri-apps/api/core";
+import { api, assetSrc } from "./api";
 import { open, confirm, message } from "@tauri-apps/plugin-dialog";
 import { listen } from "@tauri-apps/api/event";
 import { Image as ImageIcon, ChevronLeft, ChevronRight, Filter } from "lucide-react";
 
-import { useAppStore, ImageMetadata } from "./store/useAppStore";
+import { useAppStore, SortMethod } from "./store/useAppStore";
 import { useToast } from "./components/Toast";
 import { ZoomPanViewer } from "./components/ZoomPanViewer";
 import { WildcardTools } from "./components/WildcardTools";
@@ -21,12 +21,11 @@ import { Sidebar } from "./components/layout/Sidebar";
 import { Inspector } from "./components/layout/Inspector";
 import { AppFooter } from "./components/layout/AppFooter";
 
-export type SortMethod = 'Newest' | 'Oldest' | 'NameAsc' | 'NameDesc';
-
-// Pre-caching components
-// @ts-ignore
-const _ImageCache = ({ images, currentIndex, batchMode, batchRange, reloadTimestamp, cacheSize }: { 
-  images: any[], currentIndex: number, batchMode: boolean, batchRange: [number, number] | null, reloadTimestamp: number, cacheSize: number 
+// Hidden preloader that warms the browser cache for full-resolution originals around
+// the current image (controlled by the "Image Cache Range" setting), so the viewer can
+// swap from the thumbnail base layer to the full-res original instantly while browsing.
+const ImageCache = ({ images, currentIndex, batchMode, batchRange, reloadTimestamp, cacheSize }: {
+  images: any[], currentIndex: number, batchMode: boolean, batchRange: [number, number] | null, reloadTimestamp: number, cacheSize: number
 }) => {
   const [shouldLoad, setShouldLoad] = useState(false);
   const fullImageIndices = new Set<number>();
@@ -62,12 +61,12 @@ const _ImageCache = ({ images, currentIndex, batchMode, batchRange, reloadTimest
       {Array.from(fullImageIndices).map(idx => {
         const img = images[idx];
         if (!img || !img.path) return null;
-        const normalizedPath = img.path.replace(/\//g, '\\');
         return (
-          <img 
+          <img
             key={`full-${img.path}-${reloadTimestamp}`}
-            src={reloadTimestamp ? `${convertFileSrc(normalizedPath)}?t=${reloadTimestamp}` : convertFileSrc(normalizedPath)} 
-            loading="lazy"
+            src={assetSrc(img.path, reloadTimestamp)}
+            decoding="async"
+            alt=""
           />
         );
       })}
@@ -91,25 +90,55 @@ const _ImageCache = ({ images, currentIndex, batchMode, batchRange, reloadTimest
 
 function App() {
   const { 
-    folderPath, recentFolders, images, currentIndex, currentMetadata, shortcuts, batchMode, indexProgress, twitterSettings, mobileServerSettings, recursive, sortMethod, imageCacheSize: _imageCacheSize,
-    setFolderPath, setImages, setCurrentIndex, setCurrentMetadata, removeImages, setShortcuts, setBatchMode, setIndexProgress, setTwitterSettings, setRecursive,
-    setWorkshopTargetPaths, workshopFilter, setWorkshopFilter, batchRange, setBatchRange, batchMap, setBatchMap
+    folderPath, recentFolders, images, currentIndex, currentMetadata, shortcuts, viewMode, batchMode, indexProgress, twitterSettings, mobileServerSettings, recursive, sortMethod, imageCacheSize,
+    setFolderPath, setImages, setCurrentIndex, setCurrentMetadata, removeImages, setShortcuts, setViewMode, setBatchMode, setIndexProgress, setTwitterSettings, setRecursive,
+    setWorkshopTargetPaths, workshopFilter, setWorkshopFilter, batchRange, setBatchRange, batchMap, setBatchMap,
+    checkedIndices, clearChecks, sidebarWidth, setSidebarWidth, toggleCheck,
+    similaritySearchActive, setSimilaritySearchActive, setSimilaritySearchTags, searchAuthFolders
   } = useAppStore();
 
   const { showToast } = useToast();
 
-  // Mobile Server Sync
+  // Sidebar Resizing
+  const isResizing = useRef(false);
+  const handleMouseDown = useCallback((e: React.MouseEvent) => {
+    e.preventDefault();
+    isResizing.current = true;
+    document.body.style.cursor = 'col-resize';
+  }, []);
+
   useEffect(() => {
-    console.log("Syncing mobile server:", mobileServerSettings.enabled);
-    invoke("update_mobile_server", { 
-      settings: {
-        ...mobileServerSettings,
-        authorizedFolders: mobileServerSettings.authorizedFolders || []
-      }, 
-      recentFolders: recentFolders 
-    })
+    const handleMouseMove = (e: MouseEvent) => {
+      if (!isResizing.current) return;
+      const newWidth = Math.max(100, Math.min(window.innerWidth * 0.8, e.clientX));
+      setSidebarWidth(newWidth);
+    };
+    const handleMouseUp = () => {
+      isResizing.current = false;
+      document.body.style.cursor = 'default';
+    };
+    window.addEventListener('mousemove', handleMouseMove);
+    window.addEventListener('mouseup', handleMouseUp);
+    return () => {
+      window.removeEventListener('mousemove', handleMouseMove);
+      window.removeEventListener('mouseup', handleMouseUp);
+    };
+  }, [setSidebarWidth]);
+
+  // Mobile Server Sync — push settings + recent folders to the backend whenever
+  // either changes. Only surface a success toast when the user actually changed the
+  // server settings (object identity changes), not on every recentFolders update
+  // (e.g. opening a folder), which would otherwise spam the toast on each folder open.
+  const prevServerSettings = useRef(mobileServerSettings);
+  useEffect(() => {
+    const settingsChanged = prevServerSettings.current !== mobileServerSettings;
+    prevServerSettings.current = mobileServerSettings;
+    api.updateMobileServer(
+      { ...mobileServerSettings, authorizedFolders: mobileServerSettings.authorizedFolders || [] },
+      recentFolders
+    )
     .then(() => {
-      if (mobileServerSettings.enabled) {
+      if (mobileServerSettings.enabled && settingsChanged) {
         showToast("Mobile server sync success", "info");
       }
     })
@@ -118,6 +147,25 @@ function App() {
       showToast(`Server Sync Error: ${e}`, "error");
     });
   }, [mobileServerSettings, recentFolders]);
+
+  // One-time migration: move any legacy plaintext Twitter/X keys that were persisted in
+  // localStorage into the OS keychain, then clear them from the store.
+  useEffect(() => {
+    const s = useAppStore.getState().twitterSettings;
+    if (s.apiKey || s.apiSecret || s.accessToken || s.accessSecret) {
+      api.saveTwitterSecrets({
+        apiKey: s.apiKey,
+        apiSecret: s.apiSecret,
+        accessToken: s.accessToken,
+        accessSecret: s.accessSecret,
+      })
+        .then(() => {
+          setTwitterSettings({ ...s, apiKey: '', apiSecret: '', accessToken: '', accessSecret: '' });
+          console.info("Migrated Twitter/X keys to secure OS keychain storage.");
+        })
+        .catch(e => console.error("Twitter key migration failed:", e));
+    }
+  }, []);
   
   // 배치 지도 업데이트 (프롬프트 기반 그룹화)
   const updateBatchMap = useCallback(async (currentImages: any[]) => {
@@ -128,7 +176,7 @@ function App() {
     try {
         // 경로 기반 프롬프트 맵 가져오기 (O(1) 조회를 위해)
         const paths = currentImages.map((img: any) => img.path);
-        const rawPromptMap = await invoke("get_prompts_map_by_paths", { paths }) as Record<string, string | null>;
+        const rawPromptMap = await api.getPromptsMapByPaths(paths);
         
         // Normalize keys to lowercase for robust matching
         const promptMap: Record<string, string | null> = {};
@@ -202,6 +250,10 @@ function App() {
   // Local UI States
   const [searchQuery, setSearchQuery] = useState("");
   const [isSearching, setIsSearching] = useState(false);
+  // Live refs for the folder-updated listener (whose effect deps are stable setters and would
+  // otherwise capture a stale isSearching/handleSearch from mount, clearing an active search).
+  const isSearchingRef = useRef(isSearching);
+  const handleSearchRef = useRef<(...args: any[]) => any>(() => {});
   const [_imageSrc, setImageSrc] = useState<string | null>(null);
   const [showSettings, setShowSettings] = useState(false);
   const [showFilters, setShowFilters] = useState(false);
@@ -226,11 +278,8 @@ function App() {
     if (images.length === 0 || !images[currentIndex]) return;
     try {
       showToast("Preparing X upload...", "info");
-      await invoke("twitter_upload", { 
-        path: images[currentIndex].path, 
-        settings: twitterSettings 
-      });
-      if (twitterSettings.apiKey && twitterSettings.accessToken) {
+      const method = await api.twitterUpload(images[currentIndex].path, twitterSettings);
+      if (method === "api") {
         showToast("Directly Uploaded to X", "success");
       } else {
         showToast("Copied Image! Press Ctrl+V in browser", "success");
@@ -240,59 +289,118 @@ function App() {
     }
   }, [images, currentIndex, twitterSettings, showToast]);
 
-  const handleOpenFolder = async () => {
-    const selected = await open({ directory: true, multiple: false });
-    if (selected && typeof selected === 'string') {
-      const result = await invoke("scan_directory", { path: selected, sortMethod, recursive }) as any;
+  const loadFolder = useCallback(async (path: string) => {
+    try {
+      const result = await api.scanDirectory(path, sortMethod, recursive);
       setFolderPath(result.folder);
       setImages(result.images);
       setCurrentIndex(result.initial_index);
       showToast(`Loaded ${ result.images.length } images`, 'success');
+    } catch (e) {
+      showToast(`Failed to open folder: ${ e }`, 'error');
     }
-  };
+  }, [sortMethod, recursive, setFolderPath, setImages, setCurrentIndex, showToast]);
 
-  const handleReload = async () => {
+  const handleOpenFolder = useCallback(async () => {
+    const selected = await open({ directory: true, multiple: false });
+    if (selected && typeof selected === 'string') {
+      await loadFolder(selected);
+    }
+  }, [loadFolder]);
+
+  const handleReload = useCallback(async () => {
     if (!folderPath) return;
     const ts = Date.now();
     setReloadTimestamp(ts);
-    const result = await invoke("scan_directory", { path: folderPath, sortMethod, recursive, force_reindex: true }) as any;
+    const result = await api.scanDirectory(folderPath, sortMethod, recursive, true);
     setFolderPath(result.folder);
     setImages(result.images);
     if (result.images[currentIndex]) {
         const current = result.images[currentIndex];
-        invoke("get_metadata", { path: current.path }).then(m => setCurrentMetadata(m as ImageMetadata)).catch(() => {});
-        setImageSrc(`${convertFileSrc(current.path)}?t=${ts}`);
+        api.getMetadata(current.path).then(m => setCurrentMetadata(m)).catch(() => {});
+        setImageSrc(assetSrc(current.path, ts));
     }
     showToast("Reloaded and Re-indexed", 'info');
-  };
+  }, [folderPath, sortMethod, recursive, currentIndex, setFolderPath, setImages, setCurrentMetadata, showToast]);
+
+  const handleOpenBatchCrop = useCallback(() => setShowBatchCrop(true), []);
 
   const handleSearch = async (overrideFilters?: { model: string, sampler: string }, overrideSort?: SortMethod) => {
-    if (!folderPath) return;
+    if (!folderPath && !searchAuthFolders) return;
+    
+    // Clear similarity search when a regular search is performed
+    if (similaritySearchActive) {
+      setSimilaritySearchActive(false);
+      setSimilaritySearchTags([]);
+    }
+    
     const progress = useAppStore.getState().indexProgress;
     if (progress?.is_indexing) {
         showToast(`Indexing in progress (${progress.current}/${progress.total}). Search results may be incomplete.`, "info");
     }
     const filters = overrideFilters || activeFilters;
     const currentSort = overrideSort || sortMethod;
-    if (!searchQuery.trim() && !filters.model && !filters.sampler) {
+    if (!searchQuery.trim() && !filters.model && !filters.sampler && !searchAuthFolders) {
       setIsSearching(false);
-      const result = await invoke("scan_directory", { path: folderPath, sortMethod: currentSort, recursive }) as any;
+      const result = await api.scanDirectory(folderPath!, currentSort, recursive);
       setImages(result.images);
       return;
     }
     setIsSearching(true);
-    const results = await invoke("search_advanced_images", { 
-        folder: folderPath, query: searchQuery, model: filters.model, sampler: filters.sampler, sortMethod: currentSort, recursive
-    }) as any[];
+    
+    const authFoldersList = searchAuthFolders ? mobileServerSettings.authorizedFolders : null;
+    const results = await api.searchAdvancedImages({
+        folder: folderPath || "", query: searchQuery, model: filters.model, sampler: filters.sampler, sortMethod: currentSort, recursive,
+        authFolders: authFoldersList
+    });
     setImages(results);
     showToast(`Found ${results.length} matches`, 'info');
   };
+
+  // Keep refs in sync so the folder-updated listener always sees the live search state.
+  isSearchingRef.current = isSearching;
+  handleSearchRef.current = handleSearch;
+
+  const handleSimilaritySearch = useCallback(async (numTags: number) => {
+    if (images.length === 0 || !images[currentIndex]) return;
+    try {
+      const currentImg = images[currentIndex];
+      const authFolders = mobileServerSettings.authorizedFolders || [];
+      if (authFolders.length === 0) {
+        showToast("Please configure Authorized Folders in Settings.", "error");
+        return;
+      }
+
+      showToast("Searching similar images...", "info");
+      const result = await api.searchSimilarImages({
+        authFolders,
+        currentImagePath: currentImg.path,
+        numTags,
+        filter: workshopFilter,
+        activeFolder: folderPath
+      });
+
+      setImages(result.images);
+      setSimilaritySearchTags(result.matched_tags);
+      setSimilaritySearchActive(true);
+      setCurrentIndex(0);
+      showToast(`Found ${result.images.length} similar images`, "success");
+    } catch (e: any) {
+      showToast(`Similarity search failed: ${e}`, "error");
+    }
+  }, [images, currentIndex, mobileServerSettings, workshopFilter, folderPath, showToast, setImages, setSimilaritySearchTags, setSimilaritySearchActive, setCurrentIndex]);
+
+  const handleClearSimilaritySearch = useCallback(async () => {
+    setSimilaritySearchActive(false);
+    setSimilaritySearchTags([]);
+    handleReload();
+  }, [setSimilaritySearchActive, setSimilaritySearchTags, handleReload]);
 
   const handleAutoClassify = async () => {
     if (!folderPath) return;
     if (await confirm("Automatically classify images into subfolders based on their names/tags?")) {
         try {
-            const result = await invoke("auto_classify", { root: folderPath, recursive }) as any;
+            const result = await api.autoClassify(folderPath, recursive);
             if (result.total_moved > 0) {
                 let summary = `Successfully moved ${result.total_moved} images:\n\n`;
                 for (const [folder, count] of Object.entries(result.folder_summary)) {
@@ -305,10 +413,31 @@ function App() {
     }
   };
 
+  const handleClassifyNsfw = async () => {
+    if (!folderPath) return;
+    const tags = mobileServerSettings.nsfwTags || [];
+    if (tags.length === 0) {
+      showToast("No NSFW keywords configured (set them in Settings).", "info");
+      return;
+    }
+    const scope = recursive ? "this folder and its subfolders" : "this folder";
+    if (await confirm(`Move NSFW-tagged images in ${scope} into an "nsfw" subfolder?`)) {
+      try {
+        const result = await api.classifyNsfw(folderPath, recursive, tags);
+        if (result.moved > 0) {
+          showToast(`Moved ${result.moved} NSFW image(s) to /nsfw (scanned ${result.scanned}).`, "success");
+          handleReload();
+        } else {
+          showToast(`No NSFW images found (scanned ${result.scanned}).`, "info");
+        }
+      } catch (e: any) { showToast(`Failed: ${e}`, "error"); }
+    }
+  };
+
   const handleDelete = useCallback(async () => {
     if (images.length === 0) return;
-    let targets = [currentIndex];
-    if (batchMode && batchRange) {
+    let targets = checkedIndices.length > 0 ? [...checkedIndices] : [currentIndex];
+    if (checkedIndices.length === 0 && batchMode && batchRange) {
         targets = [];
         for (let i = batchRange[0]; i <= batchRange[1]; i++) targets.push(i);
     }
@@ -319,23 +448,25 @@ function App() {
         if (isTrashFolder) {
             if (await confirm(`Permanently delete ${targets.length} image(s)?`)) {
                 removeImages(targets);
-                invoke("delete_to_trash", { paths: pathsToDelete }).catch(e => showToast(`Failed: ${e}`, 'error'));
+                api.deleteToTrash(pathsToDelete).catch(e => showToast(`Failed: ${e}`, 'error'));
                 showToast("Permanently Deleted", 'error');
+                if (checkedIndices.length > 0) clearChecks();
             }
         } else {
             removeImages(targets, 'trash');
-            invoke("delete_to_trash", { paths: pathsToDelete }).catch(e => showToast(`Failed: ${e}`, 'error'));
+            api.deleteToTrash(pathsToDelete).catch(e => showToast(`Failed: ${e}`, 'error'));
             showToast("Moved to _Trash", 'info');
+            if (checkedIndices.length > 0) clearChecks();
         }
     } finally {
         setTimeout(() => { isOperating.current = false; }, 500);
     }
-  }, [images, currentIndex, batchMode, batchRange, isTrashFolder, removeImages, showToast]);
+  }, [images, currentIndex, batchMode, batchRange, isTrashFolder, removeImages, showToast, checkedIndices, clearChecks]);
 
   const handleKeep = useCallback(async () => {
     if (images.length === 0) return;
-    let targets = [currentIndex];
-    if (batchMode && batchRange) {
+    let targets = checkedIndices.length > 0 ? [...checkedIndices] : [currentIndex];
+    if (checkedIndices.length === 0 && batchMode && batchRange) {
         targets = [];
         for (let i = batchRange[0]; i <= batchRange[1]; i++) targets.push(i);
     }
@@ -344,12 +475,13 @@ function App() {
     isOperating.current = true;
     try {
         removeImages(targets, 'keep');
-        invoke("move_to_keep", { paths: pathsToKeep }).catch(e => showToast(`Failed: ${e}`, 'error'));
+        api.moveToKeep(pathsToKeep).catch(e => showToast(`Failed: ${e}`, 'error'));
         showToast("Moved to _Keep", 'success');
+        if (checkedIndices.length > 0) clearChecks();
     } finally {
         setTimeout(() => { isOperating.current = false; }, 500);
     }
-  }, [images, currentIndex, batchMode, batchRange, removeImages, showToast]);
+  }, [images, currentIndex, batchMode, batchRange, removeImages, showToast, checkedIndices, clearChecks]);
 
   const handleUndo = useCallback(async () => {
     const action = useAppStore.getState().popUndo();
@@ -358,7 +490,7 @@ function App() {
       for (const item of action.originalImages) {
         const fileName = item.info.path.split(/[\\/]/).pop();
         const currentPath = `${item.info.path.substring(0, item.info.path.lastIndexOf(fileName!) - 1)}/${action.targetFolder}/${fileName}`;
-        await invoke("undo_move", { originalPath: item.info.path, currentPath: currentPath.replace(/\/\//g, '/') });
+        await api.undoMove(item.info.path, currentPath.replace(/\/\//g, '/'));
         useAppStore.getState().insertImage(item.info, item.index);
       }
       showToast(`Undid ${action.type} operation`, "success");
@@ -387,7 +519,7 @@ function App() {
       const paths = (event.payload as any).paths as string[];
       if (paths && paths.length > 0) {
         try {
-          const result = await invoke("scan_directory", { path: paths[0], sortMethod, recursive }) as any;
+          const result = await api.scanDirectory(paths[0], sortMethod, recursive);
           setFolderPath(result.folder); setImages(result.images); setCurrentIndex(result.initial_index);
           showToast(`Loaded ${result.images.length} images`, 'success');
         } catch (e) {}
@@ -403,7 +535,9 @@ function App() {
       
       const payload = event.payload as any;
       const state = useAppStore.getState();
-      if (payload.folder === state.folderPath || recursive) {
+      if (state.similaritySearchActive) return; // Do not overwrite similarity search results
+      
+      if (payload.folder === state.folderPath || state.recursive) {
         // [Differential Update] 이미지 목록이 실제로 변경되었는지 확인
         const isSameCount = payload.images.length === state.images.length;
         const isSameContent = isSameCount && payload.images.every((img: any, idx: number) => 
@@ -412,8 +546,8 @@ function App() {
         
         if (isSameContent) return;
 
-        if (isSearching) {
-            await handleSearch();
+        if (isSearchingRef.current) {
+            await handleSearchRef.current();
         } else {
             const currentImages = state.images;
             const currentIdx = state.currentIndex;
@@ -450,8 +584,8 @@ function App() {
         if (state.images.length > 0 && state.currentIndex !== undefined) {
             const currentImg = state.images[state.currentIndex];
             if (currentImg && !state.currentMetadata?.prompt) {
-                invoke("get_metadata", { path: currentImg.path })
-                    .then(m => setCurrentMetadata(m as ImageMetadata))
+                api.getMetadata(currentImg.path)
+                    .then(m => setCurrentMetadata(m))
                     .catch(() => {});
             }
         }
@@ -473,8 +607,8 @@ function App() {
   const initialScanDone = useRef(false);
   useEffect(() => {
     if (folderPath && !initialScanDone.current) {
-      invoke("scan_directory", { path: folderPath, sortMethod, recursive })
-        .then((result: any) => {
+      api.scanDirectory(folderPath, sortMethod, recursive)
+        .then((result) => {
           setImages(result.images);
           updateBatchMap(result.images); // 배치 지도 생성
           if (currentIndex !== undefined && result.images.length > currentIndex) setCurrentIndex(currentIndex);
@@ -485,24 +619,29 @@ function App() {
 
   useEffect(() => {
     if (folderPath && initialScanDone.current) {
+        const state = useAppStore.getState();
+        if (state.similaritySearchActive) {
+            setSimilaritySearchActive(false);
+            setSimilaritySearchTags([]);
+        }
         if (isSearching) handleSearch(activeFilters, sortMethod);
         else {
             const currentPath = images[currentIndex]?.path;
-            invoke("scan_directory", { path: folderPath, sortMethod, recursive }).then((result: any) => {
+            api.scanDirectory(folderPath, sortMethod, recursive).then((result) => {
                 setImages(result.images);
                 updateBatchMap(result.images); // 이미지 목록 변경 시 지도 갱신
                 if (currentPath) {
-                    const newIndex = result.images.findIndex((img: any) => img.path === currentPath);
+                    const newIndex = result.images.findIndex((img) => img.path === currentPath);
                     if (newIndex !== -1) setCurrentIndex(newIndex);
                 }
             });
         }
     }
-  }, [recursive, sortMethod]);
+  }, [recursive, sortMethod, setSimilaritySearchActive, setSimilaritySearchTags]);
 
   // [핵심] 배치 범위 즉시 업데이트 (0ms 지연)
   useEffect(() => {
-    if (batchMode && images.length > 0) {
+    if ((viewMode === 'Batch' || viewMode === 'Peaking') && images.length > 0) {
       const range = batchMap[currentIndex];
       if (range) {
         setBatchRange(range);
@@ -510,26 +649,25 @@ function App() {
         // 지도가 아직 없다면 (인덱싱 중 등) 싱글 이미지 범위로 폴백
         setBatchRange([currentIndex, currentIndex]);
       }
-    } else setBatchRange(null);
-  }, [currentIndex, images, batchMode, batchMap, setBatchRange]);
+    } else if (viewMode === 'Single') setBatchRange(null);
+  }, [currentIndex, images, viewMode, batchMap, setBatchRange]);
 
   useEffect(() => {
     if (images.length > 0 && images[currentIndex]) {
       const current = images[currentIndex];
       // 1. 최우선 순위: 인덱싱 포커스 업데이트 및 메타데이터 조회
-      invoke("update_scan_focus", { index: currentIndex }).catch(() => {});
-      invoke("get_metadata", { path: current.path }).then(m => setCurrentMetadata(m as ImageMetadata)).catch(() => {});
-      
+      api.updateScanFocus(currentIndex).catch(() => {});
+      api.getMetadata(current.path).then(m => setCurrentMetadata(m)).catch(() => {});
+
       // 2. 메인 이미지 경로 설정 (ImageCache보다 먼저 실행됨)
-      const normalizedPath = current.path.replace(/\//g, '\\');
-      setImageSrc(reloadTimestamp ? `${convertFileSrc(normalizedPath)}?t=${reloadTimestamp}` : convertFileSrc(normalizedPath));
+      setImageSrc(assetSrc(current.path, reloadTimestamp));
     } else setImageSrc(null);
   }, [currentIndex, images, reloadTimestamp, setCurrentMetadata]);
 
   // Shortcuts
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
-      if (document.activeElement?.tagName === 'INPUT' || document.activeElement?.tagName === 'TEXTAREA' || showSettings || showWildcards || showBatchCrop || showViewerRefiner || showDebug) return;
+      if (document.activeElement?.tagName === 'INPUT' || document.activeElement?.tagName === 'TEXTAREA' || showSettings || showWildcards || showBatchCrop || showViewerRefiner || showDebug || showTagClassifier) return;
       if (e.ctrlKey && e.altKey && e.key.toLowerCase() === 'd') { setShowDebug(prev => !prev); return; }
       if (e.ctrlKey && e.key.toLowerCase() === 'z') { e.preventDefault(); handleUndo(); return; }
       if (e.key.toLowerCase() === 'r') { handleReload(); return; }
@@ -540,14 +678,16 @@ function App() {
       else if (key === s.prev.toLowerCase() || e.key === s.prev) prevImage();
       else if (key === s.delete.toLowerCase() || e.key === s.delete) handleDelete();
       else if (key === s.keep.toLowerCase()) handleKeep();
-      else if (key === s.batch.toLowerCase()) setBatchMode(!batchMode);
+      else if (key === s.batch.toLowerCase()) setViewMode(viewMode === 'Batch' ? 'Single' : 'Batch');
+      else if (key === s.peaking.toLowerCase()) setViewMode(viewMode === 'Peaking' ? 'Single' : 'Peaking');
+      else if (key === s.check.toLowerCase()) { e.preventDefault(); toggleCheck(currentIndex); }
       else if (key === s.twitter.toLowerCase()) handleTwitterUpload();
       else if (key === s.random.toLowerCase()) handleRandom();
       else if (key === s.search.toLowerCase()) { e.preventDefault(); document.getElementById('search-input')?.focus(); }
     };
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [images.length, currentIndex, batchMode, batchRange, shortcuts, showSettings, showWildcards, showBatchCrop, showViewerRefiner, showDebug, handleKeep, handleDelete, handleUndo, handleTwitterUpload, handleRandom, handleReload, nextImage, prevImage, setBatchMode]);
+  }, [images.length, currentIndex, viewMode, batchMode, batchRange, shortcuts, showSettings, showWildcards, showBatchCrop, showViewerRefiner, showDebug, showTagClassifier, handleKeep, handleDelete, handleUndo, handleTwitterUpload, handleRandom, handleReload, nextImage, prevImage, setViewMode, setBatchMode]);
 
   // Pre-caching
   useEffect(() => {
@@ -572,15 +712,16 @@ function App() {
   return (
     <div className="flex flex-col h-screen bg-neutral-950 text-neutral-100 font-sans overflow-hidden">
       <AppHeader
-        batchMode={batchMode} setBatchMode={setBatchMode} setShowWildcards={setShowWildcards}
+        viewMode={viewMode} setViewMode={setViewMode} setShowWildcards={setShowWildcards}
         recursive={recursive} setRecursive={setRecursive} 
-        handleRandom={handleRandom} images={images}
+        handleRandom={handleRandom} handleClassifyNsfw={handleClassifyNsfw} images={images}
         handleKeep={handleKeep} handleDelete={handleDelete} isTrashFolder={isTrashFolder}
         setShowSettings={setShowSettings} handleOpenFolder={handleOpenFolder} shortcuts={shortcuts}
         setWorkshopTargetPaths={setWorkshopTargetPaths} setShowTagClassifier={setShowTagClassifier}
+        recentFolders={recentFolders} folderPath={folderPath} handleOpenRecent={loadFolder}
       />
 
-      <main className="flex-1 overflow-hidden flex">
+      <main className="flex-1 overflow-hidden flex relative z-0">
         <Sidebar 
           searchQuery={searchQuery} setSearchQuery={setSearchQuery} handleSearch={handleSearch}
           handleAutoClassify={handleAutoClassify} showFilters={showFilters} setShowFilters={setShowFilters}
@@ -588,15 +729,25 @@ function App() {
           isSearching={isSearching} moveSearchResults={async () => {
              const folderName = searchQuery ? searchQuery.replace(/[^a-z0-9]/gi, '_').toLowerCase() : "filtered_results";
              if (await confirm(`Move ${images.length} files to "${folderName}"?`)) {
-               await invoke("move_files_to_folder", { paths: images.map(img => img.path), folderName });
+               await api.moveFilesToFolder(images.map(img => img.path), folderName);
                showToast(`Moved ${images.length} files`, 'success'); setSearchQuery(""); setIsSearching(false);
-               const result = await invoke("scan_directory", { path: folderPath!, sortMethod, recursive }) as any;
+               const result = await api.scanDirectory(folderPath!, sortMethod, recursive);
                setImages(result.images);
              }
           }}
           images={images} currentIndex={currentIndex} batchRange={batchRange}
           setCurrentIndex={setCurrentIndex} reloadTimestamp={reloadTimestamp}
+          className="h-full"
+          style={{ width: viewMode === 'Peaking' ? `${sidebarWidth}px` : '288px' }}
         />
+
+        {/* Resizable Divider - Peaking Mode Only */}
+        {viewMode === 'Peaking' && (
+            <div 
+            onMouseDown={handleMouseDown}
+            className={`w-1.5 h-full cursor-col-resize hover:bg-blue-600/50 active:bg-blue-600 transition-colors z-50 shrink-0 border-x border-black/20 ${isResizing.current ? 'bg-blue-600' : 'bg-transparent'}`}
+            />
+        )}
 
         <section className="flex-1 flex flex-col bg-[#050505] overflow-hidden relative group">
           {images.length > 0 && images[currentIndex] ? (
@@ -609,11 +760,11 @@ function App() {
                 batchRange={batchRange}
                 batchMap={batchMap}
                 setCurrentIndex={setCurrentIndex}
-                onBatchCrop={() => setShowBatchCrop(true)} 
-                className="animate-image-change" 
+                onBatchCrop={handleOpenBatchCrop}
+                className="animate-image-change"
               />
               
-              {!batchMode && (
+              {viewMode !== 'Batch' && (
                 <>
                     <div className="absolute top-6 right-6 flex flex-col gap-2 z-50 opacity-0 group-hover:opacity-100 transition-opacity duration-300">
                         <button onClick={() => {
@@ -625,9 +776,9 @@ function App() {
                         }} className="p-3 bg-neutral-900/80 backdrop-blur-md border border-white/10 rounded-2xl hover:bg-blue-600/20 hover:border-blue-500/50 hover:text-blue-400 transition-all shadow-2xl"><Filter className="w-5 h-5" /></button>
                     </div>
 
-                    <button onClick={prevImage} className="absolute left-6 z-10 p-4 rounded-2xl bg-neutral-900/80 text-white opacity-0 group-hover:opacity-100 transition-all hover:bg-blue-600 shadow-2xl backdrop-blur-xl"><ChevronLeft className="w-8 h-8" /></button>
-                    <button onClick={nextImage} className="absolute right-6 z-10 p-4 rounded-2xl bg-neutral-900/80 text-white opacity-0 group-hover:opacity-100 transition-all hover:bg-blue-600 shadow-2xl backdrop-blur-xl"><ChevronRight className="w-8 h-8" /></button>
-                    <div className="absolute bottom-8 left-1/2 -translate-x-1/2 z-10 bg-neutral-900/90 px-6 py-2 rounded-full text-[11px] font-bold border border-white/10 backdrop-blur-2xl shadow-2xl flex items-center gap-4"><span className="opacity-50">{images[currentIndex].name}</span><div className="w-px h-3 bg-white/10" /><span className="text-blue-400">{(images[currentIndex].size / 1024 / 1024).toFixed(2)} MB</span></div>
+                    <button onClick={prevImage} className="absolute left-6 z-30 p-4 rounded-2xl bg-neutral-900/80 text-white opacity-0 group-hover:opacity-100 transition-all hover:bg-blue-600 shadow-2xl backdrop-blur-xl"><ChevronLeft className="w-8 h-8" /></button>
+                    <button onClick={nextImage} className="absolute right-6 z-30 p-4 rounded-2xl bg-neutral-900/80 text-white opacity-0 group-hover:opacity-100 transition-all hover:bg-blue-600 shadow-2xl backdrop-blur-xl"><ChevronRight className="w-8 h-8" /></button>
+                    <div className="absolute bottom-8 left-1/2 -translate-x-1/2 z-30 bg-neutral-900/90 px-6 py-2 rounded-full text-[11px] font-bold border border-white/10 backdrop-blur-2xl shadow-2xl flex items-center gap-4"><span className="opacity-50">{images[currentIndex].name}</span><div className="w-px h-3 bg-white/10" /><span className="text-blue-400">{(images[currentIndex].size / 1024 / 1024).toFixed(2)} MB</span></div>
                   </>
                 )}
               </div>
@@ -639,10 +790,14 @@ function App() {
           )}
         </section>
 
-        <Inspector 
-          currentMetadata={currentMetadata} handleTwitterUpload={handleTwitterUpload} 
-          shortcuts={shortcuts} showToast={showToast}
-        />
+        {viewMode !== 'Peaking' && (
+          <Inspector 
+            currentMetadata={currentMetadata} handleTwitterUpload={handleTwitterUpload} 
+            shortcuts={shortcuts} showToast={showToast}
+            onSimilaritySearch={handleSimilaritySearch}
+            onClearSimilaritySearch={handleClearSimilaritySearch}
+          />
+        )}
       </main>
 
       <SettingsModal 
@@ -654,6 +809,15 @@ function App() {
       />
 
       <AppFooter folderPath={folderPath} indexProgress={indexProgress} images={images} currentIndex={currentIndex} />
+
+      <ImageCache
+        images={images}
+        currentIndex={currentIndex}
+        batchMode={batchMode}
+        batchRange={batchRange}
+        reloadTimestamp={reloadTimestamp}
+        cacheSize={imageCacheSize}
+      />
 
       {showWildcards && <WildcardTools onClose={() => setShowWildcards(false)} images={images} currentIndex={currentIndex} batchRange={batchRange} />}
       
@@ -667,7 +831,7 @@ function App() {
                 setWorkshopFilter({...workshopFilter, exact_match: excluded});
                 setShowViewerRefiner(false);
                 try {
-                    await invoke("write_filter_file", { name: 'default_exact_exclusion.txt', content: excluded.join(', ') });
+                    await api.writeFilterFile('default_exact_exclusion.txt', excluded.join(', '));
                     showToast(`Saved ${excluded.length} exclusions`, 'success');
                 } catch (e: any) { showToast(`Save failed: ${e}`, 'error'); }
             }}
@@ -677,17 +841,17 @@ function App() {
       {showDebug && <DebugPanel folderPath={folderPath} onClose={() => setShowDebug(false)} />}
 
       {showBatchCrop && images[currentIndex] && (
-        <BatchCropModule 
-          src={convertFileSrc(images[currentIndex].path)} 
-          onClose={() => setShowBatchCrop(false)} 
+        <BatchCropModule
+          src={assetSrc(images[currentIndex].path)}
+          onClose={() => setShowBatchCrop(false)}
           onSave={async (rects, fillColor) => {
             try {
               showToast(`Processing ${rects.length} crops...`, 'info');
-              const paths = await invoke("process_batch_crop", {
-                imagePath: images[currentIndex].path,
-                rects: rects.map(r => ({ x: r.x, y: r.y, width: r.width, height: r.height })),
-                fillColor
-              }) as string[];
+              const paths = await api.processBatchCrop(
+                images[currentIndex].path,
+                rects.map(r => ({ x: r.x, y: r.y, width: r.width, height: r.height })),
+                fillColor as [number, number, number] | null
+              );
               setShowBatchCrop(false); showToast(`Saved ${paths.length} crops`, "success");
             } catch (e: any) { showToast(e.toString(), "error"); }
           }}
