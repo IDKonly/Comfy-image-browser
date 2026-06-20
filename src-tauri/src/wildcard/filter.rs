@@ -24,6 +24,34 @@ pub fn apply_simple_filter(tags: HashSet<String>, exclusions: &[String]) -> Hash
     filtered
 }
 
+/// Like `apply_filters` but preserves original tag order (no HashSet dedup).
+pub fn apply_filters_ordered(tags: Vec<String>, filter: &WildcardFilter) -> Vec<String> {
+    if filter.simple_mode {
+        let ex_set: HashSet<_> = filter.simple_exclusions.iter().map(|s| s.to_lowercase()).collect();
+        return tags.into_iter().filter(|tag| {
+            let tag_low = tag.to_lowercase();
+            !ex_set.contains(&tag_low) &&
+            !filter.simple_exclusions.iter().any(|ex| !ex.is_empty() && tag_low.contains(&ex.to_lowercase()))
+        }).collect();
+    }
+    let exact_set: HashSet<_> = filter.exact_match.iter().collect();
+    let exception_set: HashSet<_> = filter.exceptions.iter().collect();
+    tags.into_iter().filter(|tag| {
+        let mut should_exclude = false;
+        if exact_set.contains(tag) { should_exclude = true; }
+        if !should_exclude {
+            for p in &filter.partial_match {
+                if !p.is_empty() && tag.contains(p.as_str()) { should_exclude = true; break; }
+            }
+        }
+        if !should_exclude && filter.max_words > 0 && tag.split_whitespace().count() > filter.max_words as usize {
+            should_exclude = true;
+        }
+        if should_exclude && exception_set.contains(tag) { should_exclude = false; }
+        !should_exclude
+    }).collect()
+}
+
 pub fn apply_filters(tags: HashSet<String>, filter: &WildcardFilter) -> HashSet<String> {
     if filter.simple_mode {
         return apply_simple_filter(tags, &filter.simple_exclusions);

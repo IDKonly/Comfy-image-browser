@@ -2,12 +2,43 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use crate::db::DbState;
 use crate::scanner::WatcherState;
+use crate::nsfw::NsfwMatcher;
 use serde::{Serialize, Deserialize};
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct AutoClassifyResult {
     pub total_moved: usize,
     pub folder_summary: std::collections::HashMap<String, usize>,
+}
+
+#[derive(Serialize, Deserialize, Debug, Clone)]
+pub struct NsfwClassifyResult {
+    pub moved: usize,
+    pub scanned: usize,
+}
+
+/// Pick a destination path inside `dir` for `file_name`, appending `_1`, `_2`, … if a
+/// file with that name already exists (recursive classification can pull same-named files
+/// from different subfolders into one `nsfw` folder).
+fn unique_dest(dir: &Path, file_name: &std::ffi::OsStr) -> PathBuf {
+    let candidate = dir.join(file_name);
+    if !candidate.exists() {
+        return candidate;
+    }
+    let name = Path::new(file_name);
+    let stem = name.file_stem().map(|s| s.to_string_lossy().to_string()).unwrap_or_default();
+    let ext = name.extension().map(|e| e.to_string_lossy().to_string());
+    for i in 1.. {
+        let new_name = match &ext {
+            Some(e) => format!("{}_{}.{}", stem, i, e),
+            None => format!("{}_{}", stem, i),
+        };
+        let candidate = dir.join(&new_name);
+        if !candidate.exists() {
+            return candidate;
+        }
+    }
+    unreachable!()
 }
 
 /// Helper to validate if paths are within the authorized root directory.
@@ -269,4 +300,78 @@ pub fn auto_classify(
     }
 
     Ok(AutoClassifyResult { total_moved, folder_summary })
+}
+
+/// Move every image in `root` (optionally recursive) whose positive prompt or filename
+/// contains a configured NSFW keyword into a single `nsfw` subfolder under `root`. Shares
+/// the same `NsfwMatcher` the mobile SFW feed uses, so both judge identically.
+#[tauri::command]
+pub fn classify_nsfw(
+    db_state: tauri::State<'_, DbState>,
+    watcher_state: tauri::State<'_, WatcherState>,
+    root: String,
+    recursive: bool,
+    tags: Vec<String>,
+) -> Result<NsfwClassifyResult, String> {
+    validate_paths(&vec![root.clone()], &watcher_state)?;
+
+    let matcher = NsfwMatcher::new(&tags);
+    if matcher.is_empty() {
+        return Ok(NsfwClassifyResult { moved: 0, scanned: 0 });
+    }
+
+    let root_path = Path::new(&root);
+    if !root_path.exists() {
+        return Err("Root path does not exist".to_string());
+    }
+    let dest_dir = root_path.join("nsfw");
+
+    let state = db_state.0.lock().unwrap();
+    let db = state.as_ref().ok_or("Database not initialized")?;
+    let images = db.get_all_images_with_tags(&root, recursive).map_err(|e| e.to_string())?;
+    let scanned = images.len();
+
+    let mut to_move = Vec::new();
+    for img in images {
+        // Skip files already inside an `nsfw` folder so re-runs are idempotent.
+        let parent_name = Path::new(&img.path)
+            .parent()
+            .and_then(|p| p.file_name())
+            .map(|n| n.to_string_lossy().to_lowercase())
+            .unwrap_or_default();
+        if parent_name == "nsfw" {
+            continue;
+        }
+        if matcher.is_nsfw(img.prompt.as_deref(), Some(&img.name)) {
+            to_move.push(img.path);
+        }
+    }
+
+    if to_move.is_empty() {
+        return Ok(NsfwClassifyResult { moved: 0, scanned });
+    }
+
+    if !dest_dir.exists() {
+        fs::create_dir_all(&dest_dir).map_err(|e| e.to_string())?;
+    }
+
+    let mut moved = 0;
+    for path_str in to_move {
+        let src = Path::new(&path_str);
+        if !src.exists() {
+            continue;
+        }
+        let fname = match src.file_name() {
+            Some(f) => f,
+            None => continue,
+        };
+        let dest = unique_dest(&dest_dir, fname);
+        let dest_str = dest.to_string_lossy().to_string();
+        if fs::rename(src, &dest).is_ok() {
+            let _ = db.update_image_path(&path_str, &dest_str);
+            moved += 1;
+        }
+    }
+
+    Ok(NsfwClassifyResult { moved, scanned })
 }

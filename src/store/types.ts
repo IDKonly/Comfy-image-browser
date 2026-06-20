@@ -84,6 +84,7 @@ export interface FilterState {
   mix_depth: number;
   mix_tandem_min_branches: number;
   mix_tandem_ratio: number;
+  preserve_order: boolean;
 }
 
 export interface MobileServerSettings {
@@ -91,7 +92,39 @@ export interface MobileServerSettings {
   port: number;
   localOnly: boolean;
   authorizedFolders: string[];
+  // NSFW keywords: drive both the viewer's "Move NSFW" action and the mobile feed's SFW mode.
+  // Kept here so the existing persist + backend-sync plumbing carries them automatically.
+  nsfwTags: string[];
 }
+
+// Base-form NSFW keywords. The Rust matcher handles plural/`-es` variants, so "nipple"
+// already covers "nipples". Keep in sync with `nsfw::default_nsfw_tags()` in the backend.
+export const DEFAULT_NSFW_TAGS: string[] = [
+  "sex", "nsfw", "nude", "nudity", "naked", "topless", "bottomless",
+  "nipple", "areola", "penis", "pussy", "vagina", "vaginal", "anus",
+  "clitoris", "testicle", "cum", "ejaculation", "penetration",
+  "fellatio", "cunnilingus", "masturbation", "pubic", "ahegao", "cameltoe",
+];
+
+export interface WildcardPipelineSettings {
+  sourceFolder: string;
+  outputFolder: string;
+  recursive: boolean;
+  presetName: string;
+  workshopThreshold: number;
+  autoRunOnScan: boolean;
+  removeDuplicates: boolean;
+}
+
+export const DEFAULT_PIPELINE_SETTINGS: WildcardPipelineSettings = {
+  sourceFolder: '',
+  outputFolder: '',
+  recursive: false,
+  presetName: 'default',
+  workshopThreshold: 0.5,
+  autoRunOnScan: false,
+  removeDuplicates: true,
+};
 
 // --- Store slices ---------------------------------------------------------
 // The store is composed from these slices via a single create()/persist call,
@@ -141,6 +174,7 @@ export interface SettingsSlice {
   sortMethod: SortMethod;
   imageCacheSize: number;
   sidebarWidth: number;
+  peakingColumns: number;
   setShortcuts: (shortcuts: Shortcuts) => void;
   setTwitterSettings: (settings: TwitterSettings) => void;
   setMobileServerSettings: (settings: MobileServerSettings) => void;
@@ -148,6 +182,7 @@ export interface SettingsSlice {
   setSortMethod: (method: SortMethod) => void;
   setImageCacheSize: (size: number) => void;
   setSidebarWidth: (width: number) => void;
+  setPeakingColumns: (columns: number) => void;
 }
 
 export interface WorkshopSlice {

@@ -1,5 +1,5 @@
-import { X, Keyboard, History, Zap, Smartphone, Link, Plus, Trash2 } from "lucide-react";
-import { Shortcuts, DEFAULT_SHORTCUTS, SortMethod, useAppStore } from "../store/useAppStore";
+import { X, Keyboard, History, Zap, Smartphone, Link, Plus, Trash2, ShieldAlert } from "lucide-react";
+import { Shortcuts, DEFAULT_SHORTCUTS, DEFAULT_NSFW_TAGS, SortMethod, useAppStore } from "../store/useAppStore";
 import { api } from "../api";
 import { open, confirm } from "@tauri-apps/plugin-dialog";
 import { useState, useEffect } from "react";
@@ -36,6 +36,24 @@ export const SettingsModal = ({
 
   // Twitter/X credentials live in the OS keychain, not in the persisted store.
   const [twitterSecrets, setTwitterSecrets] = useState({ apiKey: '', apiSecret: '', accessToken: '', accessSecret: '' });
+
+  // Raw text buffer for the NSFW keyword editor. Binding the textarea to the parsed array
+  // would strip a trailing comma on every keystroke and re-sync the mobile server per
+  // character; instead we edit raw text and commit (parse + store) only on blur.
+  const [nsfwText, setNsfwText] = useState('');
+
+  // Seed the buffer from the store each time the modal opens (and on external resets).
+  useEffect(() => {
+    if (show) setNsfwText((mobileServerSettings.nsfwTags || []).join(', '));
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [show]);
+
+  const commitNsfwTags = () => {
+    const tags = nsfwText.split(',').map(s => s.trim().toLowerCase()).filter(Boolean);
+    const unique = Array.from(new Set(tags));
+    setMobileServerSettings({ ...mobileServerSettings, nsfwTags: unique });
+    setNsfwText(unique.join(', '));
+  };
 
   useEffect(() => {
     if (show && mobileServerSettings.enabled) {
@@ -110,6 +128,30 @@ export const SettingsModal = ({
                 <span className="text-[11px] font-mono text-blue-400 w-4 text-center">{imageCacheSize}</span>
               </div>
             </div>
+          </div>
+
+          <div className="space-y-4 pt-6 border-t border-white/5">
+            <h4 className="text-[10px] font-black uppercase tracking-[0.2em] text-red-500 flex items-center gap-2"><ShieldAlert className="w-3 h-3" /> Content Filter (NSFW)</h4>
+            <p className="text-[8px] text-neutral-500 italic leading-relaxed uppercase">
+              Keywords used by the viewer's "Move NSFW" action and the mobile SFW mode. Matched as whole words (plurals included) against each image's positive prompt and filename.
+            </p>
+            <textarea
+              value={nsfwText}
+              onChange={e => setNsfwText(e.target.value)}
+              onBlur={commitNsfwTags}
+              className="w-full h-24 bg-neutral-950 border border-white/5 rounded-xl p-3 text-[11px] font-mono focus:outline-none focus:border-red-500/50 resize-none scrollbar-thin"
+              placeholder="sex, nipple, penis, pussy, ..."
+            />
+            <p className="text-[8px] text-neutral-600 italic">Changes apply when you click away from the box.</p>
+            <button
+              onClick={() => {
+                setNsfwText(DEFAULT_NSFW_TAGS.join(', '));
+                setMobileServerSettings({ ...mobileServerSettings, nsfwTags: DEFAULT_NSFW_TAGS });
+              }}
+              className="text-[8px] font-black uppercase text-neutral-500 hover:text-neutral-300 underline underline-offset-4"
+            >
+              Reset to default list
+            </button>
           </div>
 
           <div className="space-y-4 pt-6 border-t border-white/5">

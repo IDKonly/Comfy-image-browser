@@ -1,6 +1,6 @@
 import { create } from 'zustand';
 import { persist, createJSONStorage } from 'zustand/middleware';
-import { AppState, DEFAULT_SHORTCUTS } from './types';
+import { AppState, DEFAULT_SHORTCUTS, DEFAULT_NSFW_TAGS } from './types';
 import { createSessionSlice } from './slices/sessionSlice';
 import { createNavigationSlice } from './slices/navigationSlice';
 import { createSettingsSlice } from './slices/settingsSlice';
@@ -20,7 +20,7 @@ export const useAppStore = create<AppState>()(
     }),
     {
       name: 'comfy-image-browser-storage',
-      version: 5,
+      version: 6,
       storage: createJSONStorage(() => localStorage),
       migrate: (persistedState: any, version: number) => {
         if (version < 1) {
@@ -67,6 +67,13 @@ export const useAppStore = create<AppState>()(
           }
         }
 
+        // v6: seed NSFW keyword list for the new classify/SFW feature.
+        if (version < 6) {
+          if (persistedState && persistedState.mobileServerSettings && !persistedState.mobileServerSettings.nsfwTags) {
+            persistedState.mobileServerSettings.nsfwTags = DEFAULT_NSFW_TAGS;
+          }
+        }
+
         return persistedState;
       },
       partialize: (state) => ({
@@ -90,6 +97,7 @@ export const useAppStore = create<AppState>()(
         workshopFilter: state.workshopFilter,
         imageCacheSize: state.imageCacheSize,
         sidebarWidth: state.sidebarWidth,
+        peakingColumns: state.peakingColumns,
         similaritySearchNumTags: state.similaritySearchNumTags,
         searchAuthFolders: state.searchAuthFolders,
       }),

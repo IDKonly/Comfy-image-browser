@@ -18,7 +18,8 @@ export const createWorkshopSlice: AppSliceCreator<WorkshopSlice> = (set) => ({
     mix_mode: false,
     mix_depth: 2,
     mix_tandem_min_branches: 2,
-    mix_tandem_ratio: 0.51
+    mix_tandem_ratio: 0.51,
+    preserve_order: false,
   },
 
   setWorkshopFilter: (workshopFilter) => set({ workshopFilter }),

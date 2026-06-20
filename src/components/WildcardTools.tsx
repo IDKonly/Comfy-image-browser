@@ -3,7 +3,7 @@ import { api } from "../api";
 import { settingsStore } from "../api/settings";
 import { listen } from "@tauri-apps/api/event";
 import { open, save } from "@tauri-apps/plugin-dialog";
-import { X, Wand2, ListFilter } from "lucide-react";
+import { X, Wand2, ListFilter, GitMerge } from "lucide-react";
 import { useToast } from "./Toast";
 import { TagRefiner } from "./TagRefiner";
 import { useAppStore, FilterState } from "../store/useAppStore";
@@ -15,6 +15,7 @@ import { CleaningBaseCard } from "./wildcardtools/CleaningBaseCard";
 import { WorkshopSettings } from "./wildcardtools/WorkshopSettings";
 import { ExclusionFiltersSection } from "./wildcardtools/ExclusionFiltersSection";
 import { WorkshopResults } from "./wildcardtools/WorkshopResults";
+import { PipelinePanel } from "./wildcardtools/PipelinePanel";
 
 interface WildcardToolsProps {
   onClose: () => void;
@@ -24,6 +25,7 @@ interface WildcardToolsProps {
 }
 
 export const WildcardTools = ({ onClose, images, currentIndex, batchRange }: WildcardToolsProps) => {
+  const [activeTab, setActiveTab] = useState<'workshop' | 'pipeline'>('workshop');
   const [threshold, setThreshold] = useState(0.5);
   const [results, setResults] = useState<string[]>([]);
   const [loading, setLoading] = useState(false);
@@ -83,6 +85,7 @@ export const WildcardTools = ({ onClose, images, currentIndex, batchRange }: Wil
         mix_tandem_min_branches: currentFilter.mix_tandem_min_branches ?? 2,
         mix_tandem_ratio: currentFilter.mix_tandem_ratio ?? 0.51,
         simple_exclusions: currentFilter.simple_exclusions || [],
+        preserve_order: currentFilter.preserve_order ?? false,
       });
 
       // Load filter text lists ONLY if we don't have a saved filter state in settingsStore
@@ -356,19 +359,46 @@ export const WildcardTools = ({ onClose, images, currentIndex, batchRange }: Wil
         <div className="p-6 border-b border-white/5 flex items-center justify-between shrink-0">
           <div className="flex items-center gap-3">
             <div className="w-10 h-10 bg-blue-600/20 rounded-xl flex items-center justify-center">
-              <Wand2 className="w-5 h-5 text-blue-500" />
+              {activeTab === 'workshop' ? <Wand2 className="w-5 h-5 text-blue-500" /> : <GitMerge className="w-5 h-5 text-blue-500" />}
             </div>
             <div className="min-w-0">
-              <h2 className="text-sm font-black uppercase tracking-widest truncate">Wildcard Workshop</h2>
-              <p className="text-[10px] text-neutral-300 font-bold uppercase truncate">Mixed Input Analysis (Images + Text)</p>
+              <h2 className="text-sm font-black uppercase tracking-widest truncate">
+                {activeTab === 'workshop' ? 'Wildcard Workshop' : 'Auto Pipeline'}
+              </h2>
+              <p className="text-[10px] text-neutral-300 font-bold uppercase truncate">
+                {activeTab === 'workshop' ? 'Mixed Input Analysis (Images + Text)' : 'Extract → Clean → Classify → Save'}
+              </p>
             </div>
           </div>
-          <button onClick={onClose} className="w-11 h-11 flex items-center justify-center hover:bg-white/5 rounded-full transition-colors shrink-0">
-            <X className="w-5 h-5" />
-          </button>
+          <div className="flex items-center gap-2 shrink-0">
+            {/* Tab switcher */}
+            <div className="flex bg-neutral-800 rounded-xl p-1 border border-white/5">
+              <button
+                onClick={() => setActiveTab('workshop')}
+                className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-[10px] font-black uppercase tracking-widest transition-colors ${activeTab === 'workshop' ? 'bg-blue-600 text-white' : 'text-neutral-400 hover:text-white'}`}
+              >
+                <Wand2 className="w-3 h-3" /> Workshop
+              </button>
+              <button
+                onClick={() => setActiveTab('pipeline')}
+                className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-[10px] font-black uppercase tracking-widest transition-colors ${activeTab === 'pipeline' ? 'bg-blue-600 text-white' : 'text-neutral-400 hover:text-white'}`}
+              >
+                <GitMerge className="w-3 h-3" /> Pipeline
+              </button>
+            </div>
+            <button onClick={onClose} className="w-11 h-11 flex items-center justify-center hover:bg-white/5 rounded-full transition-colors">
+              <X className="w-5 h-5" />
+            </button>
+          </div>
         </div>
 
-        <div className="flex flex-col lg:flex-row flex-1 overflow-y-auto lg:overflow-hidden scrollbar-thin">
+        {activeTab === 'pipeline' && (
+          <div className="flex-1 overflow-y-auto scrollbar-thin">
+            <PipelinePanel />
+          </div>
+        )}
+
+        <div className={`flex flex-col lg:flex-row flex-1 overflow-y-auto lg:overflow-hidden scrollbar-thin ${activeTab !== 'workshop' ? 'hidden' : ''}`}>
           {/* Combined Sidebar */}
           <div className="w-full lg:w-80 border-b lg:border-b-0 lg:border-r border-white/5 flex flex-col bg-solid-nested shrink-0">
             <TargetImagesPanel

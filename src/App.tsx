@@ -1,5 +1,8 @@
 import { useState, useEffect, useCallback, useRef } from "react";
 import { api, assetSrc } from "./api";
+import { runWildcardPipeline } from "./api/wildcardPipeline";
+import { settingsStore } from "./api/settings";
+import type { WildcardPipelineSettings } from "./store/types";
 import { open, confirm, message } from "@tauri-apps/plugin-dialog";
 import { listen } from "@tauri-apps/api/event";
 import { Image as ImageIcon, ChevronLeft, ChevronRight, Filter } from "lucide-react";
@@ -12,6 +15,7 @@ import { DebugPanel } from "./components/DebugPanel";
 import { TagRefiner } from "./components/TagRefiner";
 import { BatchCropModule } from "./components/BatchCropModule";
 import { TagClassifier } from "./components/TagClassifier";
+import { ConvertPanel } from "./components/ConvertPanel";
 
 // New Modular Components
 import { Thumbnail, scheduleThumbnailGeneration } from "./components/Thumbnail";
@@ -250,6 +254,10 @@ function App() {
   // Local UI States
   const [searchQuery, setSearchQuery] = useState("");
   const [isSearching, setIsSearching] = useState(false);
+  // Live refs for the folder-updated listener (whose effect deps are stable setters and would
+  // otherwise capture a stale isSearching/handleSearch from mount, clearing an active search).
+  const isSearchingRef = useRef(isSearching);
+  const handleSearchRef = useRef<(...args: any[]) => any>(() => {});
   const [_imageSrc, setImageSrc] = useState<string | null>(null);
   const [showSettings, setShowSettings] = useState(false);
   const [showFilters, setShowFilters] = useState(false);
@@ -257,6 +265,7 @@ function App() {
   const [showDebug, setShowDebug] = useState(false);
   const [showBatchCrop, setShowBatchCrop] = useState(false);
   const [showTagClassifier, setShowTagClassifier] = useState(false);
+  const [showConverter, setShowConverter] = useState(false);
   const [activeFilters, setActiveFilters] = useState({ model: "", sampler: "" });
   const [reloadTimestamp, setReloadTimestamp] = useState<number>(0);
   const [showViewerRefiner, setShowViewerRefiner] = useState(false);
@@ -285,16 +294,24 @@ function App() {
     }
   }, [images, currentIndex, twitterSettings, showToast]);
 
-  const handleOpenFolder = async () => {
-    const selected = await open({ directory: true, multiple: false });
-    if (selected && typeof selected === 'string') {
-      const result = await api.scanDirectory(selected, sortMethod, recursive);
+  const loadFolder = useCallback(async (path: string) => {
+    try {
+      const result = await api.scanDirectory(path, sortMethod, recursive);
       setFolderPath(result.folder);
       setImages(result.images);
       setCurrentIndex(result.initial_index);
       showToast(`Loaded ${ result.images.length } images`, 'success');
+    } catch (e) {
+      showToast(`Failed to open folder: ${ e }`, 'error');
     }
-  };
+  }, [sortMethod, recursive, setFolderPath, setImages, setCurrentIndex, showToast]);
+
+  const handleOpenFolder = useCallback(async () => {
+    const selected = await open({ directory: true, multiple: false });
+    if (selected && typeof selected === 'string') {
+      await loadFolder(selected);
+    }
+  }, [loadFolder]);
 
   const handleReload = useCallback(async () => {
     if (!folderPath) return;
@@ -345,6 +362,10 @@ function App() {
     showToast(`Found ${results.length} matches`, 'info');
   };
 
+  // Keep refs in sync so the folder-updated listener always sees the live search state.
+  isSearchingRef.current = isSearching;
+  handleSearchRef.current = handleSearch;
+
   const handleSimilaritySearch = useCallback(async (numTags: number) => {
     if (images.length === 0 || !images[currentIndex]) return;
     try {
@@ -394,6 +415,27 @@ function App() {
                 handleReload();
             } else { showToast("No matching images found", "info"); }
         } catch (e: any) { showToast(`Failed: ${e}`, "error"); }
+    }
+  };
+
+  const handleClassifyNsfw = async () => {
+    if (!folderPath) return;
+    const tags = mobileServerSettings.nsfwTags || [];
+    if (tags.length === 0) {
+      showToast("No NSFW keywords configured (set them in Settings).", "info");
+      return;
+    }
+    const scope = recursive ? "this folder and its subfolders" : "this folder";
+    if (await confirm(`Move NSFW-tagged images in ${scope} into an "nsfw" subfolder?`)) {
+      try {
+        const result = await api.classifyNsfw(folderPath, recursive, tags);
+        if (result.moved > 0) {
+          showToast(`Moved ${result.moved} NSFW image(s) to /nsfw (scanned ${result.scanned}).`, "success");
+          handleReload();
+        } else {
+          showToast(`No NSFW images found (scanned ${result.scanned}).`, "info");
+        }
+      } catch (e: any) { showToast(`Failed: ${e}`, "error"); }
     }
   };
 
@@ -491,8 +533,29 @@ function App() {
     return () => { unlisten.then(f => f()); };
   }, [sortMethod, recursive, setFolderPath, setImages, setCurrentIndex, showToast]);
 
+  const prevIsIndexing = useRef(false);
+
   useEffect(() => {
-    const unlistenProgress = listen('index-progress', (event: any) => setIndexProgress(event.payload));
+    const unlistenProgress = listen('index-progress', async (event: any) => {
+      const payload = event.payload;
+      const wasIndexing = prevIsIndexing.current;
+      prevIsIndexing.current = payload.is_indexing;
+      setIndexProgress(payload);
+
+      // Mode B: auto-run pipeline when scan transitions from running → complete
+      if (wasIndexing && !payload.is_indexing) {
+        try {
+          const pipelineCfg = await settingsStore.get<WildcardPipelineSettings>('pipeline_settings');
+          if (pipelineCfg?.autoRunOnScan && pipelineCfg.sourceFolder && pipelineCfg.outputFolder) {
+            const state = useAppStore.getState();
+            showToast('Auto Pipeline: starting...', 'info');
+            runWildcardPipeline({ ...pipelineCfg, workshopFilter: state.workshopFilter }, () => {})
+              .then(r => showToast(`Auto Pipeline: ${r.savedFiles.length} file(s) saved`, 'success'))
+              .catch(e => showToast(`Auto Pipeline failed: ${e?.message ?? e}`, 'error'));
+          }
+        } catch {}
+      }
+    });
     const unlistenUpdate = listen('folder-updated', async (event: any) => {
       if (isOperating.current) return;
       
@@ -509,8 +572,8 @@ function App() {
         
         if (isSameContent) return;
 
-        if (isSearching) {
-            await handleSearch();
+        if (isSearchingRef.current) {
+            await handleSearchRef.current();
         } else {
             const currentImages = state.images;
             const currentIdx = state.currentIndex;
@@ -630,7 +693,7 @@ function App() {
   // Shortcuts
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
-      if (document.activeElement?.tagName === 'INPUT' || document.activeElement?.tagName === 'TEXTAREA' || showSettings || showWildcards || showBatchCrop || showViewerRefiner || showDebug || showTagClassifier) return;
+      if (document.activeElement?.tagName === 'INPUT' || document.activeElement?.tagName === 'TEXTAREA' || showSettings || showWildcards || showBatchCrop || showViewerRefiner || showDebug || showTagClassifier || showConverter) return;
       if (e.ctrlKey && e.altKey && e.key.toLowerCase() === 'd') { setShowDebug(prev => !prev); return; }
       if (e.ctrlKey && e.key.toLowerCase() === 'z') { e.preventDefault(); handleUndo(); return; }
       if (e.key.toLowerCase() === 'r') { handleReload(); return; }
@@ -677,13 +740,15 @@ function App() {
       <AppHeader
         viewMode={viewMode} setViewMode={setViewMode} setShowWildcards={setShowWildcards}
         recursive={recursive} setRecursive={setRecursive} 
-        handleRandom={handleRandom} images={images}
+        handleRandom={handleRandom} handleClassifyNsfw={handleClassifyNsfw} images={images}
         handleKeep={handleKeep} handleDelete={handleDelete} isTrashFolder={isTrashFolder}
         setShowSettings={setShowSettings} handleOpenFolder={handleOpenFolder} shortcuts={shortcuts}
         setWorkshopTargetPaths={setWorkshopTargetPaths} setShowTagClassifier={setShowTagClassifier}
+        setShowConverter={setShowConverter}
+        recentFolders={recentFolders} folderPath={folderPath} handleOpenRecent={loadFolder}
       />
 
-      <main className="flex-1 overflow-hidden flex relative">
+      <main className="flex-1 overflow-hidden flex relative z-0">
         <Sidebar 
           searchQuery={searchQuery} setSearchQuery={setSearchQuery} handleSearch={handleSearch}
           handleAutoClassify={handleAutoClassify} showFilters={showFilters} setShowFilters={setShowFilters}
@@ -784,6 +849,7 @@ function App() {
       {showWildcards && <WildcardTools onClose={() => setShowWildcards(false)} images={images} currentIndex={currentIndex} batchRange={batchRange} />}
       
       {showTagClassifier && <TagClassifier onClose={() => setShowTagClassifier(false)} initialData="" />}
+      {showConverter && <ConvertPanel onClose={() => setShowConverter(false)} />}
 
       {showViewerRefiner && (
         <TagRefiner 

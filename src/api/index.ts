@@ -57,6 +57,11 @@ export interface AutoClassifyResult {
   folder_summary: Record<string, number>;
 }
 
+export interface NsfwClassifyResult {
+  moved: number;
+  scanned: number;
+}
+
 export interface TwitterSecrets {
   apiKey: string;
   apiSecret: string;
@@ -147,6 +152,9 @@ export const api = {
 
   autoClassify: (root: string, recursive: boolean) =>
     invoke<AutoClassifyResult>("auto_classify", { root: toBackendPath(root), recursive }),
+
+  classifyNsfw: (root: string, recursive: boolean, tags: string[]) =>
+    invoke<NsfwClassifyResult>("classify_nsfw", { root: toBackendPath(root), recursive, tags }),
 
   // Thumbnails
   getThumbnail: (path: string, size?: number) =>

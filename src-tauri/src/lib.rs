@@ -8,6 +8,8 @@ mod twitter;
 mod crop;
 mod mobile_server;
 mod secrets;
+mod nsfw;
+mod convert;
 #[cfg(test)]
 mod benchmarks;
 
@@ -60,6 +62,7 @@ pub fn run() {
             port: 4882,
             local_only: true,
             authorized_folders: Vec::new(),
+            nsfw_tags: nsfw::default_nsfw_tags(),
         },
         state: mobile_server::MobileState {
             recent_folders: Vec::new(),
@@ -120,6 +123,7 @@ pub fn run() {
             file_ops::move_files_to_folder,
             file_ops::undo_move,
             file_ops::auto_classify,
+            file_ops::classify_nsfw,
             thumbnails::get_thumbnail,
             wildcard::generate_wildcards,
             wildcard::expand_wildcards,
@@ -136,7 +140,9 @@ pub fn run() {
             secrets::delete_twitter_secrets,
             crop::process_batch_crop,
             mobile_server::update_mobile_server,
-            mobile_server::get_local_ip
+            mobile_server::get_local_ip,
+            convert::convert_to_webp,
+            convert::convert_to_png
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

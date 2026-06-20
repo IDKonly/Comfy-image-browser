@@ -19,9 +19,19 @@ export const WorkshopSettings = ({ threshold, onThresholdChange, filter, onFilte
             <div className="col-span-1 bg-neutral-950 p-3 rounded-2xl border border-white/5 flex flex-col justify-center">
                 <div className="flex items-center justify-between mb-2">
                     <span className="text-[10px] font-black uppercase text-neutral-400 tracking-wider">Similarity</span>
-                    <span className="text-[11px] font-mono text-blue-400 font-bold">{threshold.toFixed(2)}</span>
+                    <span className="text-[11px] font-mono text-blue-400 font-bold">
+                        {filter.preserve_order ? '1.00' : threshold.toFixed(2)}
+                        {filter.preserve_order && <span className="text-[9px] text-neutral-600 ml-1">(locked)</span>}
+                    </span>
                 </div>
-                <input type="range" min="0" max="1" step="0.05" value={threshold} onChange={e => onThresholdChange(parseFloat(e.target.value))} aria-label="Similarity Threshold" className="w-full accent-blue-600" />
+                <input
+                    type="range" min="0" max="1" step="0.05"
+                    value={filter.preserve_order ? 1 : threshold}
+                    onChange={e => { if (!filter.preserve_order) onThresholdChange(parseFloat(e.target.value)); }}
+                    disabled={filter.preserve_order}
+                    aria-label="Similarity Threshold"
+                    className={`w-full accent-blue-600 ${filter.preserve_order ? 'opacity-40 cursor-not-allowed' : ''}`}
+                />
             </div>
             <div className="bg-neutral-950 p-3 rounded-2xl border border-white/5 flex flex-col justify-center">
                 <label className="text-[8px] font-black uppercase text-neutral-400 mb-1 block tracking-widest">Max Words/Tag</label>
@@ -71,6 +81,13 @@ export const WorkshopSettings = ({ threshold, onThresholdChange, filter, onFilte
           >
               <label className={`text-[8px] font-black uppercase mb-0.5 block tracking-widest cursor-pointer ${filter.mix_mode ? 'text-indigo-100' : 'text-neutral-400'}`}>Mix Mode</label>
               <span className="text-[9px] font-black uppercase">{filter.mix_mode ? 'Enabled' : 'Disabled'}</span>
+          </button>
+          <button
+              onClick={() => onFilterChange({...filter, preserve_order: !filter.preserve_order})}
+              className={`flex-1 py-1 rounded-xl border flex flex-col items-center justify-center transition-all min-h-[44px] ${filter.preserve_order ? 'bg-emerald-700 border-emerald-500 text-white shadow-lg shadow-emerald-600/20' : 'bg-neutral-950 border-white/5 text-neutral-400 hover:text-neutral-200'}`}
+          >
+              <label className={`text-[8px] font-black uppercase mb-0.5 block tracking-widest cursor-pointer ${filter.preserve_order ? 'text-emerald-100' : 'text-neutral-400'}`}>Preserve Order</label>
+              <span className="text-[9px] font-black uppercase">{filter.preserve_order ? 'ON' : 'OFF'}</span>
           </button>
         </div>
       </div>

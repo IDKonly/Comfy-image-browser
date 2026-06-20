@@ -12,7 +12,16 @@ export const createNavigationSlice: AppSliceCreator<NavigationSlice> = (set, get
   batchMap: {},
   checkedIndices: [],
 
-  setImages: (images) => set({ images, checkedIndices: [] }),
+  setImages: (images) => {
+    const { viewMode, checkedIndices, images: prevImages } = get();
+    if (viewMode === 'Peaking' && checkedIndices.length > 0) {
+      const checkedPaths = new Set(checkedIndices.map(i => prevImages[i]?.path).filter(Boolean));
+      const newChecked = images.map((img, i) => checkedPaths.has(img.path) ? i : -1).filter(i => i >= 0);
+      set({ images, checkedIndices: newChecked });
+    } else {
+      set({ images, checkedIndices: [] });
+    }
+  },
   setCurrentIndex: (index) => set({ currentIndex: index, currentMetadata: null }),
   setCurrentMetadata: (metadata) => set({ currentMetadata: metadata }),
   setIndexProgress: (progress) => set({ indexProgress: progress }),
