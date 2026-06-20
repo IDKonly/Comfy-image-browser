@@ -97,6 +97,7 @@ export const useAppStore = create<AppState>()(
         workshopFilter: state.workshopFilter,
         imageCacheSize: state.imageCacheSize,
         sidebarWidth: state.sidebarWidth,
+        peakingColumns: state.peakingColumns,
         similaritySearchNumTags: state.similaritySearchNumTags,
         searchAuthFolders: state.searchAuthFolders,
       }),

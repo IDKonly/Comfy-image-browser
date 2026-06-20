@@ -84,6 +84,7 @@ export interface FilterState {
   mix_depth: number;
   mix_tandem_min_branches: number;
   mix_tandem_ratio: number;
+  preserve_order: boolean;
 }
 
 export interface MobileServerSettings {
@@ -104,6 +105,26 @@ export const DEFAULT_NSFW_TAGS: string[] = [
   "clitoris", "testicle", "cum", "ejaculation", "penetration",
   "fellatio", "cunnilingus", "masturbation", "pubic", "ahegao", "cameltoe",
 ];
+
+export interface WildcardPipelineSettings {
+  sourceFolder: string;
+  outputFolder: string;
+  recursive: boolean;
+  presetName: string;
+  workshopThreshold: number;
+  autoRunOnScan: boolean;
+  removeDuplicates: boolean;
+}
+
+export const DEFAULT_PIPELINE_SETTINGS: WildcardPipelineSettings = {
+  sourceFolder: '',
+  outputFolder: '',
+  recursive: false,
+  presetName: 'default',
+  workshopThreshold: 0.5,
+  autoRunOnScan: false,
+  removeDuplicates: true,
+};
 
 // --- Store slices ---------------------------------------------------------
 // The store is composed from these slices via a single create()/persist call,
@@ -153,6 +174,7 @@ export interface SettingsSlice {
   sortMethod: SortMethod;
   imageCacheSize: number;
   sidebarWidth: number;
+  peakingColumns: number;
   setShortcuts: (shortcuts: Shortcuts) => void;
   setTwitterSettings: (settings: TwitterSettings) => void;
   setMobileServerSettings: (settings: MobileServerSettings) => void;
@@ -160,6 +182,7 @@ export interface SettingsSlice {
   setSortMethod: (method: SortMethod) => void;
   setImageCacheSize: (size: number) => void;
   setSidebarWidth: (width: number) => void;
+  setPeakingColumns: (columns: number) => void;
 }
 
 export interface WorkshopSlice {

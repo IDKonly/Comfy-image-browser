@@ -1,6 +1,6 @@
 import { useState, useEffect } from "react";
 import { api } from "../../api";
-import { Search, Zap, Filter, FolderPlus, X } from "lucide-react";
+import { Search, Zap, Filter, FolderPlus, X, Minus, Plus } from "lucide-react";
 import { ImageInfo, useAppStore } from "../../store/useAppStore";
 import { ImageGrid } from "../ImageGrid";
 import { FilterPanel } from "../FilterPanel";
@@ -46,9 +46,10 @@ export const Sidebar = ({
   className,
   style
 }: SidebarProps) => {
-  const { 
+  const {
     sortMethod, setSortMethod, recursive, checkedIndices, clearChecks, setCheckedIndices, viewMode,
-    searchAuthFolders, setSearchAuthFolders, similaritySearchActive, setSimilaritySearchActive
+    searchAuthFolders, setSearchAuthFolders, similaritySearchActive, setSimilaritySearchActive,
+    peakingColumns, setPeakingColumns,
   } = useAppStore();
   const [suggestions, setSuggestions] = useState<[string, number][]>([]);
   const [showSuggestions, setShowSuggestions] = useState(false);
@@ -182,15 +183,34 @@ export const Sidebar = ({
           <div className="flex items-center gap-2">
             <span className="text-[10px] font-black uppercase text-neutral-200 tracking-tighter">Library View</span>
             {viewMode === 'Peaking' && images.length > 0 && (
-                <button 
-                    onClick={() => {
-                        if (checkedIndices.length === images.length) clearChecks();
-                        else setCheckedIndices(images.map((_, i) => i));
-                    }}
-                    className={`text-[8px] font-black uppercase px-3 py-1.5 min-h-[32px] rounded transition-all ${checkedIndices.length === images.length ? 'bg-blue-600 text-white' : 'bg-white/5 text-neutral-400 hover:text-neutral-200'}`}
-                >
-                    {checkedIndices.length === images.length ? 'Unselect All' : 'Select All'}
-                </button>
+                <div className="flex items-center gap-1.5">
+                    <button
+                        onClick={() => {
+                            if (checkedIndices.length === images.length) clearChecks();
+                            else setCheckedIndices(images.map((_, i) => i));
+                        }}
+                        className={`text-[8px] font-black uppercase px-3 py-1.5 min-h-[32px] rounded transition-all ${checkedIndices.length === images.length ? 'bg-blue-600 text-white' : 'bg-white/5 text-neutral-400 hover:text-neutral-200'}`}
+                    >
+                        {checkedIndices.length === images.length ? 'Unselect All' : 'Select All'}
+                    </button>
+                    <div className="flex items-center gap-1 bg-white/5 rounded px-1.5 py-1">
+                        <button
+                            onClick={() => setPeakingColumns(Math.max(1, peakingColumns - 1))}
+                            className="w-5 h-5 flex items-center justify-center text-neutral-400 hover:text-white transition-colors"
+                            title="Fewer columns"
+                        >
+                            <Minus className="w-3 h-3" />
+                        </button>
+                        <span className="text-[9px] font-black text-neutral-300 w-4 text-center">{peakingColumns}</span>
+                        <button
+                            onClick={() => setPeakingColumns(Math.min(12, peakingColumns + 1))}
+                            className="w-5 h-5 flex items-center justify-center text-neutral-400 hover:text-white transition-colors"
+                            title="More columns"
+                        >
+                            <Plus className="w-3 h-3" />
+                        </button>
+                    </div>
+                </div>
             )}
           </div>
           <button 

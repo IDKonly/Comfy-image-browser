@@ -1,5 +1,8 @@
 import { useState, useEffect, useCallback, useRef } from "react";
 import { api, assetSrc } from "./api";
+import { runWildcardPipeline } from "./api/wildcardPipeline";
+import { settingsStore } from "./api/settings";
+import type { WildcardPipelineSettings } from "./store/types";
 import { open, confirm, message } from "@tauri-apps/plugin-dialog";
 import { listen } from "@tauri-apps/api/event";
 import { Image as ImageIcon, ChevronLeft, ChevronRight, Filter } from "lucide-react";
@@ -12,6 +15,7 @@ import { DebugPanel } from "./components/DebugPanel";
 import { TagRefiner } from "./components/TagRefiner";
 import { BatchCropModule } from "./components/BatchCropModule";
 import { TagClassifier } from "./components/TagClassifier";
+import { ConvertPanel } from "./components/ConvertPanel";
 
 // New Modular Components
 import { Thumbnail, scheduleThumbnailGeneration } from "./components/Thumbnail";
@@ -261,6 +265,7 @@ function App() {
   const [showDebug, setShowDebug] = useState(false);
   const [showBatchCrop, setShowBatchCrop] = useState(false);
   const [showTagClassifier, setShowTagClassifier] = useState(false);
+  const [showConverter, setShowConverter] = useState(false);
   const [activeFilters, setActiveFilters] = useState({ model: "", sampler: "" });
   const [reloadTimestamp, setReloadTimestamp] = useState<number>(0);
   const [showViewerRefiner, setShowViewerRefiner] = useState(false);
@@ -528,8 +533,29 @@ function App() {
     return () => { unlisten.then(f => f()); };
   }, [sortMethod, recursive, setFolderPath, setImages, setCurrentIndex, showToast]);
 
+  const prevIsIndexing = useRef(false);
+
   useEffect(() => {
-    const unlistenProgress = listen('index-progress', (event: any) => setIndexProgress(event.payload));
+    const unlistenProgress = listen('index-progress', async (event: any) => {
+      const payload = event.payload;
+      const wasIndexing = prevIsIndexing.current;
+      prevIsIndexing.current = payload.is_indexing;
+      setIndexProgress(payload);
+
+      // Mode B: auto-run pipeline when scan transitions from running → complete
+      if (wasIndexing && !payload.is_indexing) {
+        try {
+          const pipelineCfg = await settingsStore.get<WildcardPipelineSettings>('pipeline_settings');
+          if (pipelineCfg?.autoRunOnScan && pipelineCfg.sourceFolder && pipelineCfg.outputFolder) {
+            const state = useAppStore.getState();
+            showToast('Auto Pipeline: starting...', 'info');
+            runWildcardPipeline({ ...pipelineCfg, workshopFilter: state.workshopFilter }, () => {})
+              .then(r => showToast(`Auto Pipeline: ${r.savedFiles.length} file(s) saved`, 'success'))
+              .catch(e => showToast(`Auto Pipeline failed: ${e?.message ?? e}`, 'error'));
+          }
+        } catch {}
+      }
+    });
     const unlistenUpdate = listen('folder-updated', async (event: any) => {
       if (isOperating.current) return;
       
@@ -667,7 +693,7 @@ function App() {
   // Shortcuts
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
-      if (document.activeElement?.tagName === 'INPUT' || document.activeElement?.tagName === 'TEXTAREA' || showSettings || showWildcards || showBatchCrop || showViewerRefiner || showDebug || showTagClassifier) return;
+      if (document.activeElement?.tagName === 'INPUT' || document.activeElement?.tagName === 'TEXTAREA' || showSettings || showWildcards || showBatchCrop || showViewerRefiner || showDebug || showTagClassifier || showConverter) return;
       if (e.ctrlKey && e.altKey && e.key.toLowerCase() === 'd') { setShowDebug(prev => !prev); return; }
       if (e.ctrlKey && e.key.toLowerCase() === 'z') { e.preventDefault(); handleUndo(); return; }
       if (e.key.toLowerCase() === 'r') { handleReload(); return; }
@@ -718,6 +744,7 @@ function App() {
         handleKeep={handleKeep} handleDelete={handleDelete} isTrashFolder={isTrashFolder}
         setShowSettings={setShowSettings} handleOpenFolder={handleOpenFolder} shortcuts={shortcuts}
         setWorkshopTargetPaths={setWorkshopTargetPaths} setShowTagClassifier={setShowTagClassifier}
+        setShowConverter={setShowConverter}
         recentFolders={recentFolders} folderPath={folderPath} handleOpenRecent={loadFolder}
       />
 
@@ -822,6 +849,7 @@ function App() {
       {showWildcards && <WildcardTools onClose={() => setShowWildcards(false)} images={images} currentIndex={currentIndex} batchRange={batchRange} />}
       
       {showTagClassifier && <TagClassifier onClose={() => setShowTagClassifier(false)} initialData="" />}
+      {showConverter && <ConvertPanel onClose={() => setShowConverter(false)} />}
 
       {showViewerRefiner && (
         <TagRefiner 

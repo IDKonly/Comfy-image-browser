@@ -9,6 +9,7 @@ mod crop;
 mod mobile_server;
 mod secrets;
 mod nsfw;
+mod convert;
 #[cfg(test)]
 mod benchmarks;
 
@@ -139,7 +140,9 @@ pub fn run() {
             secrets::delete_twitter_secrets,
             crop::process_batch_crop,
             mobile_server::update_mobile_server,
-            mobile_server::get_local_ip
+            mobile_server::get_local_ip,
+            convert::convert_to_webp,
+            convert::convert_to_png
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

@@ -8,7 +8,7 @@ use crate::db::DbState;
 use crate::metadata::read_metadata;
 use crate::scanner::{validate_path, WatcherState};
 use super::types::WildcardFilter;
-use super::filter::apply_filters;
+use super::filter::{apply_filters, apply_filters_ordered};
 use super::merger::merge_tag_groups;
 use std::path::Path;
 use std::time::UNIX_EPOCH;
@@ -150,6 +150,45 @@ pub fn generate_wildcards(
                 }
             }
         }
+    }
+
+    // PRESERVE ORDER PATH: maintain input order, skip HashSet/merging
+    if filter.preserve_order {
+        let mut ordered: Vec<String> = Vec::with_capacity(total);
+
+        for path in &paths {
+            let prompt_opt = db_prompts.get(path).cloned().or_else(|| {
+                read_metadata(path).ok().and_then(|m| m.prompt)
+            });
+            if let Some(prompt) = prompt_opt {
+                let mut seen = HashSet::new();
+                let tags: Vec<String> = prompt.split(',')
+                    .map(|s| remove_unbalanced_braces(s))
+                    .filter(|s| !s.trim().is_empty())
+                    .filter(|s| seen.insert(s.clone()))
+                    .collect();
+                let filtered = apply_filters_ordered(tags, &filter);
+                if (filter.min_tags == 0 || filtered.len() >= filter.min_tags as usize) && !filtered.is_empty() {
+                    ordered.push(filtered.join(", "));
+                }
+            }
+        }
+
+        for prompt in &prompts {
+            let mut seen = HashSet::new();
+            let tags: Vec<String> = prompt.split(',')
+                .map(|s| remove_unbalanced_braces(s))
+                .filter(|s| !s.trim().is_empty())
+                .filter(|s| seen.insert(s.clone()))
+                .collect();
+            let filtered = apply_filters_ordered(tags, &filter);
+            if (filter.min_tags == 0 || filtered.len() >= filter.min_tags as usize) && !filtered.is_empty() {
+                ordered.push(filtered.join(", "));
+            }
+        }
+
+        let _ = window.emit("workshop-progress", 100.0f32);
+        return Ok(ordered);
     }
 
     // 2. Process Image Paths (with Sync logic)

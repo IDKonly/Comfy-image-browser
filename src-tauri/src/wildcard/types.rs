@@ -14,4 +14,5 @@ pub struct WildcardFilter {
     pub mix_depth: u32, // New: depth at which to start mixing features
     pub mix_tandem_min_branches: u32, // Minimum branches to consider tandem
     pub mix_tandem_ratio: f32, // Probability threshold for tandem
+    pub preserve_order: bool,
 }
