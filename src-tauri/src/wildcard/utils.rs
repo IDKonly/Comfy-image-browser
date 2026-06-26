@@ -98,6 +98,62 @@ pub fn remove_unbalanced_braces(mut s: &str) -> String {
     chars.into_iter().collect::<String>().trim().to_string()
 }
 
+/// Wrap every `<...>` group in commas so a later comma-split separates LoRA/embedding tokens
+/// (`<lora:name:1.0>`, `<embedding:...>`, …) from adjacent tags even when the source prompt
+/// omits a comma between them. Unbalanced `<`/`>` are tolerated.
+fn isolate_angle_tokens(s: &str) -> String {
+    if !s.contains('<') {
+        return s.to_string();
+    }
+    let mut out = String::with_capacity(s.len() + 8);
+    let mut inside = false;
+    for c in s.chars() {
+        match c {
+            '<' if !inside => { out.push(','); out.push('<'); inside = true; }
+            '>' if inside => { out.push('>'); out.push(','); inside = false; }
+            _ => out.push(c),
+        }
+    }
+    out
+}
+
+/// Split a prompt string into individual tags.
+///
+/// LoRA / embedding tokens like `<lora:name:1.0>` are isolated as their own tags even when no
+/// comma separates them from a neighbouring tag. Without this, a prompt ending in
+/// `...white sports bra<lora:foo:1.0>` splits into one tag gluing the real tag to the LoRA, so
+/// a `contains`-based exclusion filter matching "lora" would drop the real tag along with it.
+/// Each resulting tag is brace-balanced via [`remove_unbalanced_braces`], trimmed, and empty
+/// tags are dropped.
+pub fn split_prompt_tags<S: AsRef<str>>(prompt: S) -> Vec<String> {
+    isolate_angle_tokens(prompt.as_ref())
+        .split(',')
+        .map(remove_unbalanced_braces)
+        .filter(|s| !s.trim().is_empty())
+        .collect()
+}
+
+#[cfg(test)]
+mod split_tests {
+    use super::split_prompt_tags;
+
+    #[test]
+    fn isolates_lora_without_comma() {
+        let prompt = "1girl, white sports bra<lora:cutesexy(taken2212)-@yjcg:1.0> <lora:kisaki_(swimsuit)-@a6uj:1.0>";
+        let tags = split_prompt_tags(prompt);
+        assert_eq!(tags[0], "1girl");
+        assert_eq!(tags[1], "white sports bra");
+        assert_eq!(tags[2], "<lora:cutesexy(taken2212)-@yjcg:1.0>");
+        assert_eq!(tags[3], "<lora:kisaki_(swimsuit)-@a6uj:1.0>");
+    }
+
+    #[test]
+    fn plain_prompt_unchanged() {
+        let tags = split_prompt_tags("1girl, solo, smile");
+        assert_eq!(tags, vec!["1girl", "solo", "smile"]);
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

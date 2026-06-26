@@ -21,6 +21,20 @@ export const splitCommaTrim = (input: string): string[] =>
 export const splitCommaTrimNonEmpty = (input: string): string[] =>
   input.split(',').map(s => s.trim()).filter(Boolean);
 
+/**
+ * Decompose a generation prompt into tags, isolating LoRA/embedding tokens like
+ * `<lora:name:1.0>` as their own tags even when no comma separates them from a neighbouring
+ * tag. Mirrors the backend `split_prompt_tags` (wildcard/utils.rs) so the Refine-Tags list
+ * and Workshop output agree. Without this, a trailing `tag<lora:...>` glues the real tag to
+ * the LoRA, and a contains-based exclusion matching "lora" would drop both.
+ */
+export const splitPromptTags = (prompt: string): string[] =>
+  prompt
+    .replace(/<[^>]*>/g, m => `,${m},`)
+    .split(',')
+    .map(s => s.trim())
+    .filter(Boolean);
+
 /** Set-union of two string lists, preserving first-seen order. */
 export const uniqueMerge = (existing: string[], incoming: string[]): string[] =>
   Array.from(new Set([...existing, ...incoming]));

@@ -15,10 +15,11 @@ interface ImageGridProps {
   batchRange: [number, number] | null;
   setCurrentIndex: (index: number) => void;
   reloadTimestamp: number;
+  onImageContextMenu?: (e: React.MouseEvent, path: string) => void;
 }
 
 const Row = ({ index, style, data }: any) => {
-  const { images, currentIndex, batchRange, setCurrentIndex, reloadTimestamp, columns, checkedIndices, toggleCheck, viewMode } = data;
+  const { images, currentIndex, batchRange, setCurrentIndex, reloadTimestamp, columns, checkedIndices, toggleCheck, viewMode, onImageContextMenu } = data;
   const startIndex = index * columns;
 
   const indices = [];
@@ -48,6 +49,7 @@ const Row = ({ index, style, data }: any) => {
                 mtime={images[idx].mtime}
                 reloadTimestamp={reloadTimestamp}
                 fit="contain"
+                onContextMenu={(e) => onImageContextMenu?.(e, images[idx].path)}
                 className={`w-full h-full rounded-lg border-2 transition-all duration-150 ${isChecked ? 'border-blue-500 scale-[0.96]' : 'border-transparent hover:border-white/20'}`}
               />
               {/* 선택 오버레이 */}
@@ -73,6 +75,7 @@ const Row = ({ index, style, data }: any) => {
               mtime={images[idx].mtime}
               reloadTimestamp={reloadTimestamp}
               onClick={() => setCurrentIndex(idx)}
+              onContextMenu={(e) => onImageContextMenu?.(e, images[idx].path)}
               fit="cover"
               className={`w-full h-full cursor-pointer rounded-lg border-2 transition-all ${isCurrent ? 'border-blue-500 scale-[0.98]' : inBatch ? 'border-blue-500/30' : 'border-transparent'}`}
             />
@@ -85,7 +88,7 @@ const Row = ({ index, style, data }: any) => {
   );
 };
 
-export const ImageGrid = ({ images, currentIndex, batchRange, setCurrentIndex, reloadTimestamp }: ImageGridProps) => {
+export const ImageGrid = ({ images, currentIndex, batchRange, setCurrentIndex, reloadTimestamp, onImageContextMenu }: ImageGridProps) => {
   const listRef = useRef<any>(null);
   const [isLocked, setIsLocked] = React.useState(true);
   const { checkedIndices, toggleCheck, viewMode, peakingColumns } = useAppStore();
@@ -137,7 +140,8 @@ export const ImageGrid = ({ images, currentIndex, batchRange, setCurrentIndex, r
                 columns,
                 checkedIndices,
                 toggleCheck,
-                viewMode
+                viewMode,
+                onImageContextMenu
               }}
               onScroll={handleScroll}
               className="scrollbar-thin absolute inset-0"

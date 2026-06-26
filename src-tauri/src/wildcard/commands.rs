@@ -14,7 +14,7 @@ use std::path::Path;
 use std::time::UNIX_EPOCH;
 use crate::metadata::ImageMetadata;
 use crate::scanner::ImageInfo;
-use super::utils::remove_unbalanced_braces;
+use super::utils::split_prompt_tags;
 use super::expansion::expand_single_line;
 use super::classifier::{classify_prompts, ClassifierSubset, WordGroup, ClassificationResult};
 
@@ -98,10 +98,7 @@ pub fn get_tag_counts(
     let counts: HashMap<String, u32> = results.par_iter()
         .map(|(_, prompt_opt, _)| {
             if let Some(prompt) = prompt_opt {
-                prompt.split(',')
-                    .map(|s| remove_unbalanced_braces(s))
-                    .filter(|s| !s.trim().is_empty())
-                    .collect::<Vec<_>>()
+                split_prompt_tags(prompt)
             } else {
                 Vec::new()
             }
@@ -162,9 +159,8 @@ pub fn generate_wildcards(
             });
             if let Some(prompt) = prompt_opt {
                 let mut seen = HashSet::new();
-                let tags: Vec<String> = prompt.split(',')
-                    .map(|s| remove_unbalanced_braces(s))
-                    .filter(|s| !s.trim().is_empty())
+                let tags: Vec<String> = split_prompt_tags(&prompt)
+                    .into_iter()
                     .filter(|s| seen.insert(s.clone()))
                     .collect();
                 let filtered = apply_filters_ordered(tags, &filter);
@@ -176,9 +172,8 @@ pub fn generate_wildcards(
 
         for prompt in &prompts {
             let mut seen = HashSet::new();
-            let tags: Vec<String> = prompt.split(',')
-                .map(|s| remove_unbalanced_braces(s))
-                .filter(|s| !s.trim().is_empty())
+            let tags: Vec<String> = split_prompt_tags(prompt)
+                .into_iter()
                 .filter(|s| seen.insert(s.clone()))
                 .collect();
             let filtered = apply_filters_ordered(tags, &filter);
@@ -214,11 +209,8 @@ pub fn generate_wildcards(
     let mut tag_sets: Vec<HashSet<String>> = results.into_iter()
         .map(|(_, prompt_opt, _)| {
             let res = if let Some(prompt) = prompt_opt {
-                let tags: HashSet<String> = prompt.split(',')
-                    .map(|s| remove_unbalanced_braces(s))
-                    .filter(|s| !s.trim().is_empty())
-                    .collect();
-                
+                let tags: HashSet<String> = split_prompt_tags(&prompt).into_iter().collect();
+
                 let filtered = apply_filters(tags, &filter);
                 if filter.min_tags > 0 && filtered.len() < filter.min_tags as usize {
                     HashSet::new()
@@ -244,11 +236,8 @@ pub fn generate_wildcards(
     // 3. Process Direct Text Prompts
     let text_tag_sets: Vec<HashSet<String>> = prompts.par_iter()
         .map(|prompt| {
-            let tags: HashSet<String> = prompt.split(',')
-                .map(|s| remove_unbalanced_braces(s))
-                .filter(|s| !s.trim().is_empty())
-                .collect();
-            
+            let tags: HashSet<String> = split_prompt_tags(prompt).into_iter().collect();
+
             let filtered = apply_filters(tags, &filter);
             
             let c = current.fetch_add(1, Ordering::SeqCst) + 1;
@@ -369,7 +358,7 @@ pub fn compare_tags(
     let mut target_tags_sets: Vec<HashSet<String>> = target_results.into_iter()
         .map(|(_, prompt_opt, _)| {
             let tags = if let Some(prompt) = prompt_opt {
-                prompt.split(',').map(|s| remove_unbalanced_braces(s)).filter(|s| !s.trim().is_empty()).collect::<HashSet<_>>()
+                split_prompt_tags(&prompt).into_iter().collect::<HashSet<_>>()
             } else { HashSet::new() };
             
             let c = current.fetch_add(1, Ordering::SeqCst) + 1;
@@ -385,7 +374,7 @@ pub fn compare_tags(
 
     let text_target_sets: Vec<HashSet<String>> = target_prompts.par_iter()
         .map(|prompt| {
-            let tags = prompt.split(',').map(|s| remove_unbalanced_braces(s)).filter(|s| !s.trim().is_empty()).collect::<HashSet<_>>();
+            let tags = split_prompt_tags(prompt).into_iter().collect::<HashSet<_>>();
             let c = current.fetch_add(1, Ordering::SeqCst) + 1;
             let percent = (c * 100 / total) as usize;
             let last = last_emitted_percent.load(Ordering::SeqCst);
@@ -403,7 +392,7 @@ pub fn compare_tags(
     let mut comparison_tags: HashSet<String> = comparison_results.into_iter()
         .flat_map(|(_, prompt_opt, _)| {
             let res = if let Some(prompt) = prompt_opt {
-                prompt.split(',').map(|s| remove_unbalanced_braces(s)).filter(|s| !s.trim().is_empty()).collect::<Vec<_>>()
+                split_prompt_tags(&prompt).into_iter().collect::<Vec<_>>()
             } else { Vec::new() };
             
             let c = current.fetch_add(1, Ordering::SeqCst) + 1;
@@ -419,7 +408,7 @@ pub fn compare_tags(
 
     let text_comparison_tags: HashSet<String> = comparison_prompts.par_iter()
         .flat_map(|prompt| {
-            let res = prompt.split(',').map(|s| remove_unbalanced_braces(s)).filter(|s| !s.trim().is_empty()).collect::<Vec<_>>();
+            let res = split_prompt_tags(prompt).into_iter().collect::<Vec<_>>();
             let c = current.fetch_add(1, Ordering::SeqCst) + 1;
             let percent = (c * 100 / total) as usize;
             let last = last_emitted_percent.load(Ordering::SeqCst);
@@ -479,11 +468,22 @@ pub fn expand_wildcards(wildcards: Vec<String>) -> Result<Vec<String>, String> {
 #[tauri::command]
 pub fn save_to_file(
     watcher_state: tauri::State<'_, WatcherState>,
-    path: String, 
+    path: String,
     content: String
 ) -> Result<(), String> {
     validate_path(&path, &watcher_state)?;
     std::fs::write(path, content).map_err(|e| e.to_string())
+}
+
+/// Pipeline output save — no watcher-path restriction because the output folder
+/// was explicitly selected by the user via a folder picker dialog.
+#[tauri::command]
+pub fn pipeline_save_file(path: String, content: String) -> Result<(), String> {
+    let p = std::path::Path::new(&path);
+    if let Some(parent) = p.parent() {
+        std::fs::create_dir_all(parent).map_err(|e| e.to_string())?;
+    }
+    std::fs::write(p, content).map_err(|e| e.to_string())
 }
 
 #[tauri::command]

@@ -9,6 +9,7 @@ mod crop;
 mod mobile_server;
 mod secrets;
 mod nsfw;
+mod clipboard;
 mod convert;
 #[cfg(test)]
 mod benchmarks;
@@ -124,6 +125,7 @@ pub fn run() {
             file_ops::undo_move,
             file_ops::auto_classify,
             file_ops::classify_nsfw,
+            clipboard::copy_image_to_clipboard,
             thumbnails::get_thumbnail,
             wildcard::generate_wildcards,
             wildcard::expand_wildcards,
@@ -132,6 +134,7 @@ pub fn run() {
             wildcard::read_filter_file,
             wildcard::write_filter_file,
             wildcard::save_to_file,
+            wildcard::pipeline_save_file,
             wildcard::classify_prompts_command,
             twitter::twitter_upload,
             secrets::save_twitter_secrets,

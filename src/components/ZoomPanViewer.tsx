@@ -13,6 +13,7 @@ interface ZoomPanViewerProps {
   className?: string;
   onBatchCrop?: () => void;
   setCurrentIndex?: (index: number) => void;
+  onImageContextMenu?: (e: React.MouseEvent, path: string) => void;
 }
 
 /**
@@ -51,7 +52,7 @@ const PreviewThumb = ({ path, reloadTimestamp, hidden, style }: {
 };
 
 export const ZoomPanViewer = memo(({
-  images, currentIndex, reloadTimestamp, batchMode, batchRange, batchMap, className, onBatchCrop, setCurrentIndex
+  images, currentIndex, reloadTimestamp, batchMode, batchRange, batchMap, className, onBatchCrop, setCurrentIndex, onImageContextMenu
 }: ZoomPanViewerProps) => {
   const containerRef = useRef<HTMLDivElement>(null);
   const lastChangeTime = useRef(Date.now());
@@ -266,10 +267,11 @@ export const ZoomPanViewer = memo(({
                 style={{ gridTemplateColumns: `repeat(${Math.ceil(Math.sqrt(Math.max(1, batchSets.current.length)))}, minmax(0, 1fr))` }}
             >
                 {batchSets.current.map((img) => (
-                    <Thumbnail 
-                        key={img.path} 
+                    <Thumbnail
+                        key={img.path}
                         path={img.path} mtime={img.mtime} reloadTimestamp={reloadTimestamp} fit="contain" delay={0}
                         onClick={() => setCurrentIndex?.(images.indexOf(img))}
+                        onContextMenu={(e) => onImageContextMenu?.(e, img.path)}
                         className={`w-full h-full min-h-0 cursor-pointer rounded-2xl border-4 transition-all duration-200 hover:scale-[1.02] shadow-2xl ${images.indexOf(img) === currentIndex ? 'border-blue-500 ring-[4px] ring-blue-500/30' : 'border-white/5 hover:border-white/10'}`}
                     />
                 ))}
@@ -282,10 +284,11 @@ export const ZoomPanViewer = memo(({
             </div>
         </div>
       ) : (
-        <div 
+        <div
           className="relative w-full h-full flex items-center justify-center cursor-grab active:cursor-grabbing"
           onMouseDown={handleMouseDown} onMouseMove={handleMouseMove}
           onMouseUp={() => setIsDragging(false)} onMouseLeave={() => setIsDragging(false)}
+          onContextMenu={(e) => currentPath && onImageContextMenu?.(e, currentPath)}
         >
           {currentPath && (
             <PreviewThumb

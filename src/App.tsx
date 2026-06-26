@@ -13,6 +13,7 @@ import { ZoomPanViewer } from "./components/ZoomPanViewer";
 import { WildcardTools } from "./components/WildcardTools";
 import { DebugPanel } from "./components/DebugPanel";
 import { TagRefiner } from "./components/TagRefiner";
+import { splitPromptTags } from "./components/wildcardtools/utils";
 import { BatchCropModule } from "./components/BatchCropModule";
 import { TagClassifier } from "./components/TagClassifier";
 import { ConvertPanel } from "./components/ConvertPanel";
@@ -23,6 +24,7 @@ import { SettingsModal } from "./components/SettingsModal";
 import { AppHeader } from "./components/layout/AppHeader";
 import { Sidebar } from "./components/layout/Sidebar";
 import { Inspector } from "./components/layout/Inspector";
+import { ImageContextMenu, ImageMenuState } from "./components/ImageContextMenu";
 import { AppFooter } from "./components/layout/AppFooter";
 
 // Hidden preloader that warms the browser cache for full-resolution originals around
@@ -258,6 +260,12 @@ function App() {
   // otherwise capture a stale isSearching/handleSearch from mount, clearing an active search).
   const isSearchingRef = useRef(isSearching);
   const handleSearchRef = useRef<(...args: any[]) => any>(() => {});
+  // Right-click context menu for images (main viewer + grid thumbnails).
+  const [imageMenu, setImageMenu] = useState<ImageMenuState | null>(null);
+  const openImageMenu = useCallback((e: React.MouseEvent, path: string) => {
+    e.preventDefault();
+    setImageMenu({ x: e.clientX, y: e.clientY, path });
+  }, []);
   const [_imageSrc, setImageSrc] = useState<string | null>(null);
   const [showSettings, setShowSettings] = useState(false);
   const [showFilters, setShowFilters] = useState(false);
@@ -764,6 +772,7 @@ function App() {
           }}
           images={images} currentIndex={currentIndex} batchRange={batchRange}
           setCurrentIndex={setCurrentIndex} reloadTimestamp={reloadTimestamp}
+          onImageContextMenu={openImageMenu}
           className="h-full"
           style={{ width: viewMode === 'Peaking' ? `${sidebarWidth}px` : '288px' }}
         />
@@ -788,6 +797,7 @@ function App() {
                 batchMap={batchMap}
                 setCurrentIndex={setCurrentIndex}
                 onBatchCrop={handleOpenBatchCrop}
+                onImageContextMenu={openImageMenu}
                 className="animate-image-change"
               />
               
@@ -796,7 +806,7 @@ function App() {
                     <div className="absolute top-6 right-6 flex flex-col gap-2 z-50 opacity-0 group-hover:opacity-100 transition-opacity duration-300">
                         <button onClick={() => {
                             if (!currentMetadata?.prompt) return;
-                            const tags = currentMetadata.prompt.split(',').map((s: string) => s.trim()).filter(Boolean);
+                            const tags = splitPromptTags(currentMetadata.prompt);
                             const counts: Record<string, number> = {};
                             tags.forEach((t: string) => counts[t] = 1);
                             setViewerTagCounts(counts); setShowViewerRefiner(true);
@@ -834,6 +844,8 @@ function App() {
         folderPath={folderPath} sortMethod={sortMethod} recursive={recursive}
         setImages={setImages} showToast={showToast}
       />
+
+      <ImageContextMenu menu={imageMenu} onClose={() => setImageMenu(null)} showToast={showToast} />
 
       <AppFooter folderPath={folderPath} indexProgress={indexProgress} images={images} currentIndex={currentIndex} />
 

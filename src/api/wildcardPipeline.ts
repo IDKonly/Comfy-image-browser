@@ -95,7 +95,7 @@ export async function runWildcardPipeline(
     if (lines.length === 0) continue;
 
     const filePath = `${cfg.outputFolder}/${subsetName}.txt`;
-    await api.saveToFile(filePath, lines.join('\n'));
+    await api.pipelineSaveFile(filePath, lines.join('\n'));
     savedFiles.push(filePath);
   }
 

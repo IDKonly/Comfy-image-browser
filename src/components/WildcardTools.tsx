@@ -7,7 +7,7 @@ import { X, Wand2, ListFilter, GitMerge } from "lucide-react";
 import { useToast } from "./Toast";
 import { TagRefiner } from "./TagRefiner";
 import { useAppStore, FilterState } from "../store/useAppStore";
-import { splitLines, splitCommaOrNewline, splitCommaTrimNonEmpty, uniqueMerge } from "./wildcardtools/utils";
+import { splitLines, splitCommaOrNewline, splitCommaTrimNonEmpty, splitPromptTags, uniqueMerge } from "./wildcardtools/utils";
 import { MergeFilterModal } from "./wildcardtools/MergeFilterModal";
 import { TargetImagesPanel } from "./wildcardtools/TargetImagesPanel";
 import { TextPromptsPanel } from "./wildcardtools/TextPromptsPanel";
@@ -300,9 +300,8 @@ export const WildcardTools = ({ onClose, images, currentIndex, batchRange }: Wil
       // Merge counts from text prompts
       const prompts = splitLines(textInput);
       prompts.forEach(p => {
-          p.split(',').forEach(t => {
-              const tag = t.trim();
-              if (tag) counts[tag] = (counts[tag] || 0) + 1;
+          splitPromptTags(p).forEach(tag => {
+              counts[tag] = (counts[tag] || 0) + 1;
           });
       });
 

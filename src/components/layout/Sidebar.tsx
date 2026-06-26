@@ -22,6 +22,7 @@ interface SidebarProps {
   reloadTimestamp: number;
   activeFilters: { model: string, sampler: string };
   handleFilterChange: (f: any) => void;
+  onImageContextMenu?: (e: React.MouseEvent, path: string) => void;
   className?: string;
   style?: React.CSSProperties;
 }
@@ -43,6 +44,7 @@ export const Sidebar = ({
   reloadTimestamp,
   activeFilters,
   handleFilterChange,
+  onImageContextMenu,
   className,
   style
 }: SidebarProps) => {
@@ -226,12 +228,13 @@ export const Sidebar = ({
               <FilterPanel folderPath={folderPath} onFilterChange={handleFilterChange} onClose={() => setShowFilters(false)} />
             </div>
           )}
-          <ImageGrid 
-            images={images} 
-            currentIndex={currentIndex} 
+          <ImageGrid
+            images={images}
+            currentIndex={currentIndex}
             setCurrentIndex={setCurrentIndex}
             batchRange={batchRange}
             reloadTimestamp={reloadTimestamp}
+            onImageContextMenu={onImageContextMenu}
           />
         </div>
       </div>

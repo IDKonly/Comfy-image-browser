@@ -134,11 +134,12 @@ interface ThumbnailProps {
   reloadTimestamp?: number;
   className?: string;
   onClick?: () => void;
+  onContextMenu?: (e: React.MouseEvent) => void;
   fit?: "cover" | "contain";
   delay?: number;
 }
 
-export const Thumbnail = ({ path, mtime, reloadTimestamp, className, onClick, fit = "cover", delay = 100 }: ThumbnailProps) => {
+export const Thumbnail = ({ path, mtime, reloadTimestamp, className, onClick, onContextMenu, fit = "cover", delay = 100 }: ThumbnailProps) => {
   const initialCached = thumbUrlCache.get(thumbCacheKey(path, mtime, reloadTimestamp)) ?? null;
   const [src, setSrc] = useState<string | null>(initialCached);
   const [loading, setLoading] = useState(!initialCached);
@@ -199,9 +200,10 @@ export const Thumbnail = ({ path, mtime, reloadTimestamp, className, onClick, fi
   const isCorrectPath = loadedPath === path;
 
   return (
-    <div 
-      className={`overflow-hidden bg-neutral-900 flex items-center justify-center relative ${className || ""}`} 
+    <div
+      className={`overflow-hidden bg-neutral-900 flex items-center justify-center relative ${className || ""}`}
       onClick={onClick}
+      onContextMenu={onContextMenu}
       style={{ minHeight: '100px' }}
     >
       {src && (

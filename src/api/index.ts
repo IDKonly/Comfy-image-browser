@@ -156,6 +156,9 @@ export const api = {
   classifyNsfw: (root: string, recursive: boolean, tags: string[]) =>
     invoke<NsfwClassifyResult>("classify_nsfw", { root: toBackendPath(root), recursive, tags }),
 
+  copyImageToClipboard: (path: string) =>
+    invoke<void>("copy_image_to_clipboard", { path: toBackendPath(path) }),
+
   // Thumbnails
   getThumbnail: (path: string, size?: number) =>
     invoke<string>("get_thumbnail", { path: toBackendPath(path), size }),
@@ -186,6 +189,9 @@ export const api = {
 
   saveToFile: (path: string, content: string) =>
     invoke<void>("save_to_file", { path: toBackendPath(path), content }),
+
+  pipelineSaveFile: (path: string, content: string) =>
+    invoke<void>("pipeline_save_file", { path: toBackendPath(path), content }),
 
   scanPaths: (paths: string[], recursive: boolean) =>
     invoke<ImageInfo[]>("scan_paths", { paths: toBackendPaths(paths), recursive }),
