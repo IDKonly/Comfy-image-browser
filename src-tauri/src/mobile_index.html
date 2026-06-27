@@ -4,6 +4,12 @@
     <meta charset="UTF-8">
     <!-- Pinch-zoom is handled in-app; page zoom left enabled for accessibility -->
     <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+    <!-- Standalone (no browser chrome) when added to the home screen; address bar is also
+         hidden via the Fullscreen API when a feed session starts. -->
+    <meta name="mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+    <meta name="theme-color" content="#0a0a0a">
     <title>ComfyView Mobile Feed</title>
     <style>
         :root {
@@ -51,34 +57,34 @@
             backdrop-filter: blur(12px);
             z-index: 40; flex-shrink: 0;
         }
-        .brand { display: flex; align-items: center; gap: 0.5rem; }
+        .brand { display: flex; align-items: center; gap: 0.5rem; flex-shrink: 0; }
         .brand-badge {
             width: 1.5rem; height: 1.5rem; background: var(--blue-600);
             border-radius: 0.35rem; display: flex; align-items: center; justify-content: center;
             color: #fff; font-size: 10px; font-weight: 900; font-style: italic;
         }
-        .brand-title {
-            font-size: 0.7rem; font-weight: 900; text-transform: uppercase;
-            letter-spacing: 0.18em; font-style: italic; color: var(--fg-dim); margin: 0;
-        }
+        .brand-title { display: none; } /* mobile: the CV badge alone; reclaim header width */
 
         #indexDisplay {
-            position: absolute; left: 50%; transform: translateX(-50%);
+            flex: 1 1 auto; min-width: 0;
             display: flex; flex-direction: column; align-items: center;
-            padding: 0.25rem 1rem; transition: transform 0.1s ease;
+            padding: 0.25rem 0.5rem; transition: transform 0.1s ease;
         }
-        #indexDisplay:active { transform: translateX(-50%) scale(0.95); }
+        #indexDisplay:active { transform: scale(0.95); }
         #counter { font-size: 0.7rem; font-family: ui-monospace, monospace; font-weight: 900; color: var(--blue); letter-spacing: -0.02em; }
         .progress-track { width: 3rem; height: 2px; background: var(--border); border-radius: 999px; overflow: hidden; margin-top: 2px; }
         #progressBar { height: 100%; background: var(--blue-600); transition: width 0.3s ease; width: 0%; }
 
-        .header-actions { display: flex; align-items: center; gap: 0.6rem; }
+        .header-actions { display: flex; align-items: center; gap: 0.35rem; flex-shrink: 0; }
         .header-btn {
-            font-size: 0.6rem; font-weight: 900; text-transform: uppercase;
+            font-size: 0.55rem; font-weight: 900; text-transform: uppercase; white-space: nowrap;
             color: var(--fg-faint); border: 1px solid var(--border-strong);
-            padding: 0.3rem 0.55rem; border-radius: 0.5rem; letter-spacing: 0.05em;
+            padding: 0.28rem 0.42rem; border-radius: 0.5rem; letter-spacing: 0;
         }
         .header-btn.accent { color: var(--blue); border-color: rgba(59,130,246,0.3); background: rgba(59,130,246,0.1); }
+        .header-btn.live-on { color: #f87171; border-color: rgba(248,113,113,0.4); background: rgba(248,113,113,0.12); }
+        .live-dot { display: inline-block; width: 0.45rem; height: 0.45rem; border-radius: 999px; background: #f87171; margin-right: 0.25rem; animation: livePulse 1.4s ease-in-out infinite; }
+        @keyframes livePulse { 0%,100% { opacity: 1; } 50% { opacity: 0.25; } }
 
         /* ---------- Main / list views ---------- */
         #content { flex: 1; min-height: 0; position: relative; overflow: hidden; display: flex; flex-direction: column; }
@@ -131,7 +137,9 @@
             height: 100%;
             scroll-behavior: smooth;
             -webkit-overflow-scrolling: touch;
+            overflow-anchor: none; /* we anchor scroll manually when prepending earlier posts */
         }
+        #feedStartMarker { height: 1px; flex-shrink: 0; }
         .feed-post {
             scroll-snap-align: start;
             height: 100%; width: 100%;
@@ -292,6 +300,7 @@
         </div>
 
         <div class="header-actions">
+            <button id="liveBtn" class="header-btn" title="Live feed: show new images as they are added to this folder">LIVE</button>
             <button id="sfwBtn" class="header-btn" title="Toggle SFW mode (hide NSFW images)">SFW</button>
             <button id="swapBtn" class="header-btn">Side</button>
             <button id="backBtn" class="header-btn accent hidden">Back</button>
@@ -343,6 +352,14 @@
             visibleIndex: 0,
             btnSide: localStorage.getItem('cv_btn_side') || 'right',
             sfw: localStorage.getItem('cv_sfw') === '1',
+            live: localStorage.getItem('cv_live') === '1',
+            liveSource: null,
+            liveFolder: null,
+            firstRendered: 0,
+            knownPaths: new Set(),
+            loadingEarlier: false,
+            checkingNew: false,
+            topObserver: null,
             visibilityObserver: null,
             infiniteObserver: null,
             pendingUndo: null
@@ -529,31 +546,61 @@
         });
 
         /* ---------------- Feed session ---------------- */
+        // Hide the browser address bar by going fullscreen. Must run inside a user gesture
+        // (the Start/Resume tap), which startSession is called from. Safari on iPhone ignores
+        // this (no Fullscreen API) — there, "Add to Home Screen" gives the standalone view.
+        function enterFullscreen() {
+            const el = document.documentElement;
+            const req = el.requestFullscreen || el.webkitRequestFullscreen;
+            if (req && !document.fullscreenElement && !document.webkitFullscreenElement) {
+                try { const p = req.call(el); if (p && p.catch) p.catch(() => {}); } catch (_) {}
+            }
+        }
+
         function startSession(startIndex) {
             startIndex = startIndex || 0;
             if (!state.images || state.images.length === 0) { showToast("No images to display."); return; }
             commitPendingUndo();
+            enterFullscreen();
 
             state.view = 'viewer';
+            stopLive();
             $('browseView').classList.add('hidden');
             $('viewerView').classList.remove('hidden');
             $('indexDisplay').classList.remove('hidden');
 
             const container = $('feedContainer');
             container.replaceChildren();
+            const startMarker = el('div'); startMarker.id = 'feedStartMarker';
+            container.appendChild(startMarker);
             const endMarker = el('div'); endMarker.id = 'feedEndMarker'; endMarker.textContent = 'End of folder';
             container.appendChild(endMarker);
 
-            state.renderedCount = startIndex;
+            state.knownPaths = new Set(state.images.map(i => i.path));
+            state.firstRendered = startIndex;   // earlier posts load on scroll up
+            state.renderedCount = startIndex;   // later posts load on scroll down
             state.visibleIndex = startIndex;
+            state.loadingEarlier = false;
+            state.checkingNew = false;
             updateCounter();
 
             if (state.infiniteObserver) state.infiniteObserver.disconnect();
             if (state.visibilityObserver) state.visibilityObserver.disconnect();
+            if (state.topObserver) state.topObserver.disconnect();
 
+            // Scroll DOWN: render later posts, or — once everything is rendered — re-check the
+            // folder for newly generated images and append them.
             state.infiniteObserver = new IntersectionObserver(entries => {
-                if (entries[0].isIntersecting) loadMorePosts();
+                if (entries[0].isIntersecting) {
+                    if (state.renderedCount < state.images.length) loadMorePosts();
+                    else checkForNewImages();
+                }
             }, { root: container, rootMargin: '0px 0px 1000px 0px' });
+
+            // Scroll UP: render earlier posts so the start index is no longer a floor.
+            state.topObserver = new IntersectionObserver(entries => {
+                if (entries[0].isIntersecting) loadEarlierPosts();
+            }, { root: container, rootMargin: '1000px 0px 0px 0px' });
 
             state.visibilityObserver = new IntersectionObserver(entries => {
                 entries.forEach(entry => {
@@ -570,13 +617,13 @@
 
             loadMorePosts();
             state.infiniteObserver.observe(endMarker);
+            state.topObserver.observe(startMarker);
 
-            if (startIndex > 0) {
-                setTimeout(() => {
-                    const firstPost = container.querySelector('.feed-post');
-                    if (firstPost) firstPost.scrollIntoView();
-                }, 100);
-            }
+            requestAnimationFrame(() => {
+                const firstPost = document.getElementById('post-' + startIndex);
+                if (firstPost) firstPost.scrollIntoView({ behavior: 'instant', block: 'start' });
+                if (state.live) startLiveViewer();
+            });
         }
 
         function createPostElement(imgData, index) {
@@ -645,6 +692,55 @@
             }
             state.renderedCount = end;
             if (state.renderedCount >= state.images.length) endMarker.textContent = "✨ End of Feed";
+        }
+
+        // Prepend the previous chunk of images above the current first post, keeping the user's
+        // scroll position fixed (posts are full-height, so we just compensate by the added height).
+        function loadEarlierPosts() {
+            if (state.loadingEarlier || state.firstRendered <= 0) return;
+            state.loadingEarlier = true;
+            const container = $('feedContainer');
+            const startMarker = $('feedStartMarker');
+            const start = Math.max(0, state.firstRendered - state.chunkSize);
+
+            const prevTop = container.scrollTop;
+            const prevHeight = container.scrollHeight;
+            const prevBehavior = container.style.scrollBehavior;
+            container.style.scrollBehavior = 'auto';
+
+            const frag = document.createDocumentFragment();
+            for (let i = start; i < state.firstRendered; i++) {
+                frag.appendChild(createPostElement(state.images[i], i));
+            }
+            startMarker.after(frag); // insert between the start marker and the current first post
+            for (let i = start; i < state.firstRendered; i++) {
+                const p = document.getElementById('post-' + i);
+                if (p && state.visibilityObserver) state.visibilityObserver.observe(p);
+            }
+            state.firstRendered = start;
+
+            container.scrollTop = prevTop + (container.scrollHeight - prevHeight);
+            container.style.scrollBehavior = prevBehavior;
+            state.loadingEarlier = false;
+        }
+
+        // Reaching the end of the feed: re-scan the folder and append any images added since.
+        async function checkForNewImages() {
+            if (state.checkingNew || !state.currentFolderPath) return;
+            state.checkingNew = true;
+            try {
+                const sfwParam = state.sfw ? '&sfw=1' : '';
+                const latest = await (await fetch('/api/images?folder=' + encodeURIComponent(state.currentFolderPath) + sfwParam)).json();
+                if (Array.isArray(latest)) {
+                    const added = latest.filter(i => !state.knownPaths.has(i.path));
+                    if (added.length) {
+                        added.forEach(i => state.knownPaths.add(i.path));
+                        state.images = state.images.concat(added);
+                        $('feedEndMarker').textContent = 'End of folder';
+                        loadMorePosts();
+                    }
+                }
+            } catch (_) {} finally { state.checkingNew = false; }
         }
 
         function updateCounter() {
@@ -847,6 +943,61 @@
         });
         syncSfwBtn();
 
+        /* ---------------- Live feed (SSE → viewer) ---------------- */
+        // Live streaming surfaces in the VIEWER: new images are appended to the feed and, when
+        // the user is at the live edge (viewing the latest image), focus jumps to the new one.
+        // If the user has scrolled back to review earlier images, new ones are appended silently
+        // and picked up when they scroll/return to the end (or via the end-of-feed refresh).
+        function syncLiveBtn() {
+            const btn = $('liveBtn');
+            btn.classList.toggle('live-on', state.live);
+            btn.innerHTML = state.live ? '<span class="live-dot"></span>LIVE' : 'LIVE';
+        }
+
+        function stopLive() {
+            if (state.liveSource) { state.liveSource.close(); state.liveSource = null; }
+            state.liveFolder = null;
+        }
+
+        function startLiveViewer() {
+            if (!state.live || state.view !== 'viewer' || !state.currentFolderPath) { stopLive(); return; }
+            if (state.liveSource && state.liveFolder === state.currentFolderPath) return; // already streaming
+            stopLive();
+            state.liveFolder = state.currentFolderPath;
+            const src = new EventSource('/api/feed?folder=' + encodeURIComponent(state.currentFolderPath));
+            src.addEventListener('new-image', (e) => {
+                try { const d = JSON.parse(e.data); onLiveImage(d.path, d.name); } catch (_) {}
+            });
+            state.liveSource = src; // EventSource auto-reconnects on transient errors
+        }
+
+        function onLiveImage(path, name) {
+            if (!path || state.knownPaths.has(path)) return;
+            const atEdge = state.visibleIndex >= state.images.length - 1; // viewing the latest?
+            state.knownPaths.add(path);
+            state.images.push({ path, name: name || path.split('/').pop() });
+            $('feedEndMarker').textContent = 'End of folder';
+            if (atEdge) {
+                // Render forward to include the new post, then move focus to it.
+                while (state.renderedCount < state.images.length) loadMorePosts();
+                const lastIdx = state.images.length - 1;
+                const post = document.getElementById('post-' + lastIdx);
+                if (post) post.scrollIntoView({ behavior: 'smooth' });
+                // Optimistically mark the edge so a rapid burst keeps following.
+                state.visibleIndex = lastIdx;
+                updateCounter();
+            }
+        }
+
+        $('liveBtn').addEventListener('click', () => {
+            state.live = !state.live;
+            localStorage.setItem('cv_live', state.live ? '1' : '0');
+            syncLiveBtn();
+            if (state.view === 'viewer') { if (state.live) startLiveViewer(); else stopLive(); }
+            else if (state.live) showToast('Live focus will follow new images in the feed view.');
+        });
+        syncLiveBtn();
+
         $('swapBtn').addEventListener('click', () => {
             state.btnSide = state.btnSide === 'right' ? 'left' : 'right';
             localStorage.setItem('cv_btn_side', state.btnSide);
@@ -932,17 +1083,20 @@
 
         function goBackToBrowse() {
             commitPendingUndo();
+            stopLive();
             state.view = 'browse';
             $('viewerView').classList.add('hidden');
             $('browseView').classList.remove('hidden');
             $('indexDisplay').classList.add('hidden');
             if (state.infiniteObserver) state.infiniteObserver.disconnect();
             if (state.visibilityObserver) state.visibilityObserver.disconnect();
+            if (state.topObserver) state.topObserver.disconnect();
             refreshBrowse();
         }
 
         function goBack() {
             commitPendingUndo();
+            stopLive();
             state.view = 'root';
             state.pathStack = [];
             $('rootView').classList.remove('hidden');

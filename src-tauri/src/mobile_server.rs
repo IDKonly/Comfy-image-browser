@@ -1,18 +1,22 @@
 use axum::{
     extract::{Query, State},
     http::StatusCode,
+    response::sse::{Event, KeepAlive, Sse},
     response::{Html, IntoResponse, Response},
     routing::{get, post},
     Json, Router,
 };
 use serde::{Deserialize, Serialize};
+use std::convert::Infallible;
 use std::sync::{Arc, Mutex};
-use tokio::sync::oneshot;
+use tokio::sync::{broadcast, oneshot};
+use tokio_stream::wrappers::BroadcastStream;
+use tokio_stream::StreamExt;
 use std::net::SocketAddr;
 use tower_http::cors::CorsLayer;
 use tauri::Manager;
+use notify::{EventKind, RecursiveMode, Watcher};
 use crate::db::DbState;
-use crate::scanner::WatcherState;
 use std::path::{Path, PathBuf};
 
 #[derive(Clone, Serialize, Deserialize, Debug)]
@@ -39,11 +43,27 @@ pub struct ServerHandle {
     pub shutdown_tx: oneshot::Sender<()>,
 }
 
+/// A new image observed by the live-feed watcher. `folder` is the normalized (forward-slash)
+/// active folder the event belongs to, so each SSE subscriber can ignore events for folders
+/// other than the one it is watching.
+#[derive(Clone, Serialize)]
+pub struct FeedEvent {
+    pub folder: String,
+    pub path: String,
+    pub name: String,
+}
+
 pub struct GlobalMobileState {
     pub settings: MobileServerSettings,
     pub state: MobileState,
     pub handle: Option<ServerHandle>,
     pub app_handle: Option<tauri::AppHandle>,
+    /// Broadcast channel fanning live-feed events out to every connected `/api/feed` stream.
+    pub feed_tx: broadcast::Sender<FeedEvent>,
+    /// The single active folder watcher. Re-targeted as mobile clients change folders, so the
+    /// feed always follows whatever folder the phone is currently browsing.
+    pub feed_watcher: Option<notify::RecommendedWatcher>,
+    pub feed_folder: Option<String>,
 }
 
 pub type SharedState = Arc<Mutex<GlobalMobileState>>;
@@ -65,6 +85,96 @@ pub struct ImagesQuery {
 #[derive(Deserialize)]
 pub struct ImageQuery {
     pub path: String,
+}
+
+#[derive(Deserialize)]
+pub struct FeedQuery {
+    pub folder: String,
+}
+
+/// Is `p` a real image we want to surface in the live feed? Excludes hidden/system subfolders
+/// (`_Trash`, `_Keep`, dotfolders) so re-shelving an image doesn't re-announce it.
+fn is_feed_image(p: &Path) -> bool {
+    let ext_ok = p
+        .extension()
+        .map(|e| {
+            let e = e.to_string_lossy().to_lowercase();
+            e == "png" || e == "jpg" || e == "jpeg" || e == "webp"
+        })
+        .unwrap_or(false);
+    if !ext_ok {
+        return false;
+    }
+    !p.components().any(|c| {
+        let s = c.as_os_str().to_string_lossy();
+        s.starts_with('_') || s.starts_with('.')
+    })
+}
+
+/// Point the single live-feed watcher at `folder` (recursive), recreating it only when the
+/// target actually changes. New image files under the folder are broadcast to feed_tx.
+fn ensure_feed_watcher(state: &SharedState, folder: &str) {
+    let normalized = folder.replace('\\', "/");
+    let tx = {
+        let gs = state.lock().unwrap();
+        if gs.feed_folder.as_deref() == Some(normalized.as_str()) && gs.feed_watcher.is_some() {
+            return; // already watching this folder
+        }
+        gs.feed_tx.clone()
+    };
+
+    let folder_for_cb = normalized.clone();
+    let mut watcher = match notify::RecommendedWatcher::new(
+        move |res: notify::Result<notify::Event>| {
+            let event = match res {
+                Ok(e) => e,
+                Err(_) => return,
+            };
+            if !matches!(event.kind, EventKind::Create(_) | EventKind::Modify(_)) {
+                return;
+            }
+            for p in event.paths {
+                if is_feed_image(&p) {
+                    let name = p
+                        .file_name()
+                        .map(|n| n.to_string_lossy().to_string())
+                        .unwrap_or_default();
+                    let path = p.to_string_lossy().replace('\\', "/");
+                    log::debug!("Live feed event: {} ({} subscribers)", path, tx.receiver_count());
+                    let _ = tx.send(FeedEvent {
+                        folder: folder_for_cb.clone(),
+                        path,
+                        name,
+                    });
+                }
+            }
+        },
+        notify::Config::default(),
+    ) {
+        Ok(w) => w,
+        Err(e) => {
+            log::warn!("Failed to create feed watcher: {}", e);
+            return;
+        }
+    };
+
+    // notify (ReadDirectoryChangesW on Windows) needs a native-separator path. The folder the
+    // phone sends may use `/` (root/recent folders are stored normalized) or `\` (subfolders
+    // from read_dir), so convert to the platform separator before watching.
+    let watch_target: String = if std::path::MAIN_SEPARATOR == '\\' {
+        normalized.replace('/', "\\")
+    } else {
+        normalized.clone()
+    };
+    if let Err(e) = watcher.watch(Path::new(&watch_target), RecursiveMode::Recursive) {
+        log::warn!("Failed to watch feed folder {}: {}", watch_target, e);
+        return;
+    }
+    log::info!("Live feed watching {} (recursive)", watch_target);
+
+    let mut gs = state.lock().unwrap();
+    gs.feed_watcher = Some(watcher); // dropping the previous watcher stops the old folder
+    gs.feed_folder = Some(normalized);
 }
 
 #[derive(Deserialize)]
@@ -126,6 +236,7 @@ pub async fn start_server(shared_state: SharedState) {
         .route("/api/subfolders", get(get_subfolders_handler))
         .route("/api/images", get(get_images_handler))
         .route("/api/image", get(get_image_handler))
+        .route("/api/feed", get(get_feed_handler))
         .route("/api/action", post(post_action_handler))
         .layer(CorsLayer::permissive())
         .with_state(shared_state.clone());
@@ -294,6 +405,38 @@ async fn get_image_handler(State(state): State<SharedState>, Query(query): Query
         }
         Err(_) => (StatusCode::INTERNAL_SERVER_ERROR, "Failed to read image").into_response(),
     }
+}
+
+/// Server-Sent Events stream of new images appearing in `folder` (recursive). The phone opens
+/// this for whatever folder it is currently browsing; the watcher re-targets accordingly, so
+/// the live feed follows the phone even as the ComfyUI output folder changes.
+async fn get_feed_handler(
+    State(state): State<SharedState>,
+    Query(query): Query<FeedQuery>,
+) -> impl IntoResponse {
+    let folder = query.folder.clone();
+    {
+        let gs = state.lock().unwrap();
+        if !is_path_authorized(Path::new(&folder), &gs) {
+            return (StatusCode::FORBIDDEN, "Access denied").into_response();
+        }
+    }
+
+    ensure_feed_watcher(&state, &folder);
+
+    let normalized = folder.replace('\\', "/");
+    let rx = { state.lock().unwrap().feed_tx.subscribe() };
+
+    let stream = BroadcastStream::new(rx).filter_map(move |res| match res {
+        Ok(ev) if ev.folder == normalized => match Event::default().event("new-image").json_data(&ev) {
+            Ok(e) => Some(Ok::<Event, Infallible>(e)),
+            Err(_) => None,
+        },
+        // Ignore events for other folders and Lagged notifications.
+        _ => None,
+    });
+
+    Sse::new(stream).keep_alive(KeepAlive::default()).into_response()
 }
 
 async fn post_action_handler(

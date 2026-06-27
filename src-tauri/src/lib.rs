@@ -71,6 +71,9 @@ pub fn run() {
         },
         handle: None,
         app_handle: None,
+        feed_tx: tokio::sync::broadcast::channel(256).0,
+        feed_watcher: None,
+        feed_folder: None,
     }));
 
     tauri::Builder::default()
