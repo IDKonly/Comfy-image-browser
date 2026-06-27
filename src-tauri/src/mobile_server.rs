@@ -85,6 +85,10 @@ pub struct ImagesQuery {
 #[derive(Deserialize)]
 pub struct ImageQuery {
     pub path: String,
+    /// "1"/"true" serves the image as a download (Content-Disposition: attachment) so mobile
+    /// browsers save it to the device instead of displaying it inline.
+    #[serde(default)]
+    pub dl: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -398,10 +402,19 @@ async fn get_image_handler(State(state): State<SharedState>, Query(query): Query
             let mime = if query.path.to_lowercase().ends_with(".png") { "image/png" }
                        else if query.path.to_lowercase().ends_with(".webp") { "image/webp" }
                        else { "image/jpeg" };
-            Response::builder()
-                .header(axum::http::header::CONTENT_TYPE, mime)
-                .body(axum::body::Body::from(data))
-                .unwrap()
+            let mut builder = Response::builder().header(axum::http::header::CONTENT_TYPE, mime);
+            if matches!(query.dl.as_deref(), Some("1") | Some("true")) {
+                // Force a download with the original filename. RFC 5987 filename* covers
+                // non-ASCII names (e.g. Korean) for browsers that support it.
+                let name = path.file_name().map(|n| n.to_string_lossy().to_string()).unwrap_or_else(|| "image".into());
+                let encoded: String = percent_encoding::utf8_percent_encode(&name, percent_encoding::NON_ALPHANUMERIC).to_string();
+                let ascii: String = name.chars().map(|c| if c.is_ascii() && c != '"' { c } else { '_' }).collect();
+                builder = builder.header(
+                    axum::http::header::CONTENT_DISPOSITION,
+                    format!("attachment; filename=\"{}\"; filename*=UTF-8''{}", ascii, encoded),
+                );
+            }
+            builder.body(axum::body::Body::from(data)).unwrap()
         }
         Err(_) => (StatusCode::INTERNAL_SERVER_ERROR, "Failed to read image").into_response(),
     }

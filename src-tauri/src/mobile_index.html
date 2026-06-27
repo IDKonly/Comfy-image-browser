@@ -86,6 +86,15 @@
         .live-dot { display: inline-block; width: 0.45rem; height: 0.45rem; border-radius: 999px; background: #f87171; margin-right: 0.25rem; animation: livePulse 1.4s ease-in-out infinite; }
         @keyframes livePulse { 0%,100% { opacity: 1; } 50% { opacity: 0.25; } }
 
+        .install-hint {
+            display: flex; align-items: center; gap: 0.6rem; margin-bottom: 1rem;
+            background: rgba(59,130,246,0.1); border: 1px solid rgba(59,130,246,0.25);
+            color: var(--fg-dim); border-radius: 0.6rem; padding: 0.6rem 0.75rem;
+            font-size: 0.7rem; line-height: 1.4;
+        }
+        .install-hint span { flex: 1; }
+        .install-hint button { color: var(--fg-faint); font-size: 0.85rem; padding: 0 0.25rem; flex-shrink: 0; }
+
         /* ---------- Main / list views ---------- */
         #content { flex: 1; min-height: 0; position: relative; overflow: hidden; display: flex; flex-direction: column; }
         .scroll-view { padding: 1rem; overflow-y: auto; flex: 1; -webkit-overflow-scrolling: touch; }
@@ -309,6 +318,10 @@
 
     <main id="content">
         <div id="rootView" class="scroll-view">
+            <div id="installHint" class="install-hint hidden">
+                <span>🏠 Add this page to your Home Screen to use it full-screen, without the browser address bar.</span>
+                <button id="installHintClose" aria-label="Dismiss">✕</button>
+            </div>
             <div class="section">
                 <h2 class="section-title blue">Authorized Folders</h2>
                 <div id="authList" class="list"></div>
@@ -546,22 +559,10 @@
         });
 
         /* ---------------- Feed session ---------------- */
-        // Hide the browser address bar by going fullscreen. Must run inside a user gesture
-        // (the Start/Resume tap), which startSession is called from. Safari on iPhone ignores
-        // this (no Fullscreen API) — there, "Add to Home Screen" gives the standalone view.
-        function enterFullscreen() {
-            const el = document.documentElement;
-            const req = el.requestFullscreen || el.webkitRequestFullscreen;
-            if (req && !document.fullscreenElement && !document.webkitFullscreenElement) {
-                try { const p = req.call(el); if (p && p.catch) p.catch(() => {}); } catch (_) {}
-            }
-        }
-
         function startSession(startIndex) {
             startIndex = startIndex || 0;
             if (!state.images || state.images.length === 0) { showToast("No images to display."); return; }
             commitPendingUndo();
-            enterFullscreen();
 
             state.view = 'viewer';
             stopLive();
@@ -664,6 +665,7 @@
             const sidebar = el('div', 'action-sidebar ' + (state.btnSide === 'right' ? 'sidebar-right' : 'sidebar-left'));
             sidebar.appendChild(makeActionBtn('keep', '⭐', 'Keep', () => handleFeedAction(index, 'keep')));
             sidebar.appendChild(makeActionBtn('skip', '⏭', 'Skip', () => skipPost(index)));
+            sidebar.appendChild(makeActionBtn('save', '⬇️', 'Save', () => downloadImage(imgData.path, imgData.name)));
             sidebar.appendChild(makeActionBtn('trash', '🗑️', 'Trash', () => handleFeedAction(index, 'trash')));
             post.appendChild(sidebar);
 
@@ -678,6 +680,18 @@
             btn.appendChild(i); btn.appendChild(l);
             btn.addEventListener('click', onClick);
             return btn;
+        }
+
+        function downloadImage(path, name) {
+            const a = document.createElement('a');
+            // &dl=1 makes the server send Content-Disposition: attachment so mobile browsers
+            // save the file (with its original name) instead of opening it inline.
+            a.href = '/api/image?path=' + encodeURIComponent(path) + '&dl=1';
+            a.download = name || path.split('/').pop() || 'image.png';
+            document.body.appendChild(a);
+            a.click();
+            a.remove();
+            showToast('Saving image…');
         }
 
         function loadMorePosts() {
@@ -1108,8 +1122,24 @@
             init();
         }
 
+        // Show the "Add to Home Screen" hint only in a normal browser tab (not when already
+        // launched standalone), and remember dismissal. This is the address-bar-free path now
+        // that the feed no longer forces fullscreen.
+        (function setupInstallHint() {
+            const standalone = (window.matchMedia && window.matchMedia('(display-mode: standalone)').matches)
+                || window.navigator.standalone === true;
+            if (standalone || localStorage.getItem('cv_hide_install_hint') === '1') return;
+            const hint = $('installHint');
+            if (!hint) return;
+            hint.classList.remove('hidden');
+            $('installHintClose').addEventListener('click', () => {
+                hint.classList.add('hidden');
+                localStorage.setItem('cv_hide_install_hint', '1');
+            });
+        })();
+
         init();
     })();
-    </script>
+</script>
 </body>
 </html>
