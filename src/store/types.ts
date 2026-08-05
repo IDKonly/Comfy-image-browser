@@ -106,6 +106,15 @@ export const DEFAULT_NSFW_TAGS: string[] = [
   "fellatio", "cunnilingus", "masturbation", "pubic", "ahegao", "cameltoe",
 ];
 
+// How the pipeline splits cleaned prompts before classifying/saving:
+//  - 'all'      : no split — one set of <subset>.txt files (legacy behaviour)
+//  - 'sfwOnly'  : keep only SFW lines
+//  - 'nsfwOnly' : keep only NSFW lines
+//  - 'split'    : run both lanes, distinguished by a sfw_/nsfw_ filename token
+// NSFW judgement reuses mobileServerSettings.nsfwTags via the classify_nsfw_lines
+// command, so it matches the mobile SFW feed and the "Move NSFW" action.
+export type PipelineSeparationMode = 'all' | 'sfwOnly' | 'nsfwOnly' | 'split';
+
 export interface WildcardPipelineSettings {
   sourceFolder: string;
   outputFolder: string;
@@ -114,6 +123,11 @@ export interface WildcardPipelineSettings {
   workshopThreshold: number;
   autoRunOnScan: boolean;
   removeDuplicates: boolean;
+  separationMode: PipelineSeparationMode;
+  /** Prepend a "YYMMDD_" date token to output filenames (versions each run). */
+  datePrefix: boolean;
+  /** Also save the cleaned, pre-classification prompt list as "<prefix>raw.txt". */
+  saveRaw: boolean;
 }
 
 export const DEFAULT_PIPELINE_SETTINGS: WildcardPipelineSettings = {
@@ -124,6 +138,36 @@ export const DEFAULT_PIPELINE_SETTINGS: WildcardPipelineSettings = {
   workshopThreshold: 0.5,
   autoRunOnScan: false,
   removeDuplicates: true,
+  separationMode: 'all',
+  datePrefix: true,
+  saveRaw: false,
+};
+
+// Prompt Generator: sample N whole prompts from the classified fragment pools of
+// the current preset + DB, weighting each pick by tag co-occurrence (PMI) so the
+// combinations stay coherent. Bounded to `count` outputs (no combinatorial blowup).
+export interface GeneratorSettings {
+  sourceFolder: string;
+  recursive: boolean;
+  presetName: string;
+  /** Register to draw fragments from ('' = all registers / no register axis). */
+  register: string;
+  /** Number of prompts to generate. */
+  count: number;
+  /** Tags forced into every generated prompt (the user's desired base). */
+  mustInclude: string;
+  /** Minimum compatibility (PMI) for a fragment to be eligible given the context. */
+  minScore: number;
+}
+
+export const DEFAULT_GENERATOR_SETTINGS: GeneratorSettings = {
+  sourceFolder: '',
+  recursive: false,
+  presetName: 'default',
+  register: '',
+  count: 20,
+  mustInclude: '',
+  minScore: 0,
 };
 
 // --- Store slices ---------------------------------------------------------

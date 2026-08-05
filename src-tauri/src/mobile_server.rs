@@ -115,9 +115,109 @@ fn is_feed_image(p: &Path) -> bool {
     })
 }
 
+/// Asynchronously waits until `path` is completely written by an external generator (e.g. ComfyUI).
+/// Validates file size stability and format-specific end markers (PNG IEND, JPEG EOI, WEBP header).
+async fn wait_for_file_complete(path: PathBuf) -> bool {
+    let start_time = tokio::time::Instant::now();
+    let max_duration = tokio::time::Duration::from_secs(10);
+    let mut last_size: u64 = 0;
+    let mut stable_count = 0;
+
+    loop {
+        if start_time.elapsed() > max_duration {
+            log::warn!("Timeout waiting for file to complete: {:?}", path);
+            return false;
+        }
+
+        if let Ok(metadata) = tokio::fs::metadata(&path).await {
+            let size = metadata.len();
+            if size > 0 {
+                if size == last_size {
+                    stable_count += 1;
+                } else {
+                    last_size = size;
+                    stable_count = 0;
+                }
+
+                // If file size has been stable for at least 2 consecutive polling intervals (~150ms)
+                if stable_count >= 2 {
+                    if is_image_complete(&path).await {
+                        return true;
+                    }
+                }
+            }
+        }
+
+        tokio::time::sleep(tokio::time::Duration::from_millis(75)).await;
+    }
+}
+
+async fn is_image_complete(path: &Path) -> bool {
+    use tokio::io::{AsyncReadExt, AsyncSeekExt};
+
+    let Ok(mut file) = tokio::fs::File::open(path).await else {
+        return false;
+    };
+
+    let Ok(metadata) = file.metadata().await else {
+        return false;
+    };
+    let len = metadata.len();
+    if len < 12 {
+        return false;
+    }
+
+    let ext = path
+        .extension()
+        .map(|e| e.to_string_lossy().to_lowercase())
+        .unwrap_or_default();
+
+    if ext == "png" {
+        // PNG IEND chunk is 12 bytes at the very end of the file
+        if file.seek(std::io::SeekFrom::End(-12)).await.is_err() {
+            return false;
+        }
+        let mut buf = [0u8; 12];
+        if file.read_exact(&mut buf).await.is_err() {
+            return false;
+        }
+        // Offset 4..8 of IEND chunk must be b"IEND"
+        return &buf[4..8] == b"IEND";
+    } else if ext == "jpg" || ext == "jpeg" {
+        // JPEG ends with 0xFF 0xD9 (EOI marker)
+        if file.seek(std::io::SeekFrom::End(-2)).await.is_err() {
+            return false;
+        }
+        let mut buf = [0u8; 2];
+        if file.read_exact(&mut buf).await.is_err() {
+            return false;
+        }
+        return buf == [0xFF, 0xD9];
+    } else if ext == "webp" {
+        let mut buf = [0u8; 12];
+        if file.read_exact(&mut buf).await.is_err() {
+            return false;
+        }
+        if &buf[0..4] == b"RIFF" && &buf[8..12] == b"WEBP" {
+            let riff_size = u32::from_le_bytes(buf[4..8].try_into().unwrap()) as u64;
+            return len >= riff_size + 8;
+        }
+    }
+
+    true
+}
+
 /// Point the single live-feed watcher at `folder` (recursive), recreating it only when the
 /// target actually changes. New image files under the folder are broadcast to feed_tx.
 fn ensure_feed_watcher(state: &SharedState, folder: &str) {
+    let handle = match tokio::runtime::Handle::try_current() {
+        Ok(h) => h,
+        Err(e) => {
+            log::error!("Failed to get tokio runtime handle for feed watcher: {}", e);
+            return;
+        }
+    };
+
     let normalized = folder.replace('\\', "/");
     let tx = {
         let gs = state.lock().unwrap();
@@ -139,16 +239,23 @@ fn ensure_feed_watcher(state: &SharedState, folder: &str) {
             }
             for p in event.paths {
                 if is_feed_image(&p) {
-                    let name = p
-                        .file_name()
-                        .map(|n| n.to_string_lossy().to_string())
-                        .unwrap_or_default();
-                    let path = p.to_string_lossy().replace('\\', "/");
-                    log::debug!("Live feed event: {} ({} subscribers)", path, tx.receiver_count());
-                    let _ = tx.send(FeedEvent {
-                        folder: folder_for_cb.clone(),
-                        path,
-                        name,
+                    let tx = tx.clone();
+                    let folder_for_cb = folder_for_cb.clone();
+                    let path_buf = p.clone();
+                    handle.spawn(async move {
+                        if wait_for_file_complete(path_buf.clone()).await {
+                            let name = path_buf
+                                .file_name()
+                                .map(|n| n.to_string_lossy().to_string())
+                                .unwrap_or_default();
+                            let path = path_buf.to_string_lossy().replace('\\', "/");
+                            log::debug!("Live feed event ready: {} ({} subscribers)", path, tx.receiver_count());
+                            let _ = tx.send(FeedEvent {
+                                folder: folder_for_cb,
+                                path,
+                                name,
+                            });
+                        }
                     });
                 }
             }

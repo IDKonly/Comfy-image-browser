@@ -1,0 +1,707 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<mxfile host="app.diagrams.net" modified="2026-06-20" version="21.0">
+  <diagram name="Architecture &amp; Workflows" id="arch">
+    <mxGraphModel dx="1200" dy="700" grid="0" gridSize="10" guides="1" tooltips="1" connect="1" arrows="1" fold="1" page="0" pageScale="1" pageWidth="2800" pageHeight="1200" math="0" shadow="0">
+      <root>
+        <mxCell id="0"/>
+        <mxCell id="1" parent="0"/>
+
+        <!-- ═══ TITLE ═══ -->
+        <mxCell id="title" value="ComfyView — Code Architecture &amp; Workflow Map (feat/nsfw-classification branch)" style="text;fontSize=16;fontStyle=1;align=center;fillColor=none;strokeColor=none;" vertex="1" parent="1">
+          <mxGeometry x="500" y="8" width="900" height="28" as="geometry"/>
+        </mxCell>
+
+        <!-- ══════════════════════════════════════════════
+             LAYER 1 · USER ACTIONS
+             ══════════════════════════════════════════════ -->
+        <mxCell id="L_user" value="① USER ACTIONS" style="swimlane;fillColor=#ffe6cc;strokeColor=#d79b00;fontStyle=1;fontSize=11;startSize=26;" vertex="1" parent="1">
+          <mxGeometry x="10" y="42" width="2780" height="88" as="geometry"/>
+        </mxCell>
+
+        <mxCell id="U_folder" value="Open Folder" style="rounded=1;fillColor=#f0a30a;fontColor=#000;strokeColor=#bd7000;fontStyle=1;" vertex="1" parent="L_user">
+          <mxGeometry x="14" y="28" width="110" height="38" as="geometry"/>
+        </mxCell>
+        <mxCell id="U_nav" value="Navigate Images&#xa;← → (keyboard)" style="rounded=1;fillColor=#f0a30a;fontColor=#000;strokeColor=#bd7000;" vertex="1" parent="L_user">
+          <mxGeometry x="138" y="28" width="120" height="38" as="geometry"/>
+        </mxCell>
+        <mxCell id="U_delkeep" value="Delete / Keep&#xa;Del · k keys" style="rounded=1;fillColor=#f0a30a;fontColor=#000;strokeColor=#bd7000;" vertex="1" parent="L_user">
+          <mxGeometry x="272" y="28" width="110" height="38" as="geometry"/>
+        </mxCell>
+        <mxCell id="U_tag" value="Tag Classification&#xa;(tag icon)" style="rounded=1;fillColor=#f0a30a;fontColor=#000;strokeColor=#bd7000;" vertex="1" parent="L_user">
+          <mxGeometry x="396" y="28" width="120" height="38" as="geometry"/>
+        </mxCell>
+        <mxCell id="U_auto" value="Auto-Classify&#xa;(NSFW tag sort)" style="rounded=1;fillColor=#f0a30a;fontColor=#000;strokeColor=#bd7000;" vertex="1" parent="L_user">
+          <mxGeometry x="530" y="28" width="120" height="38" as="geometry"/>
+        </mxCell>
+        <mxCell id="U_wc" value="Wildcard Workshop&#xa;(prompt gen)" style="rounded=1;fillColor=#f0a30a;fontColor=#000;strokeColor=#bd7000;" vertex="1" parent="L_user">
+          <mxGeometry x="664" y="28" width="120" height="38" as="geometry"/>
+        </mxCell>
+        <mxCell id="U_crop" value="Batch Crop" style="rounded=1;fillColor=#f0a30a;fontColor=#000;strokeColor=#bd7000;" vertex="1" parent="L_user">
+          <mxGeometry x="798" y="28" width="100" height="38" as="geometry"/>
+        </mxCell>
+        <mxCell id="U_tw" value="Twitter Upload&#xa;(t key)" style="rounded=1;fillColor=#1DA1F2;fontColor=#fff;strokeColor=#0d8ecf;fontStyle=1;" vertex="1" parent="L_user">
+          <mxGeometry x="912" y="28" width="110" height="38" as="geometry"/>
+        </mxCell>
+        <mxCell id="U_mob" value="Mobile Browse&#xa;(phone / browser)" style="rounded=1;fillColor=#f0a30a;fontColor=#000;strokeColor=#bd7000;" vertex="1" parent="L_user">
+          <mxGeometry x="1036" y="28" width="120" height="38" as="geometry"/>
+        </mxCell>
+        <mxCell id="U_settings" value="Settings Modal" style="rounded=1;fillColor=#f0a30a;fontColor=#000;strokeColor=#bd7000;" vertex="1" parent="L_user">
+          <mxGeometry x="1170" y="28" width="110" height="38" as="geometry"/>
+        </mxCell>
+
+        <!-- ══════════════════════════════════════════════
+             LAYER 2 · REACT FRONTEND
+             ══════════════════════════════════════════════ -->
+        <mxCell id="L_fe" value="② REACT FRONTEND  (src/)" style="swimlane;fillColor=#dae8fc;strokeColor=#6c8ebf;fontStyle=1;fontSize=11;startSize=26;" vertex="1" parent="1">
+          <mxGeometry x="10" y="140" width="2780" height="310" as="geometry"/>
+        </mxCell>
+
+        <!-- App.tsx central hub -->
+        <mxCell id="F_app" value="App.tsx&#xa;root orchestrator&#xa;keyboard shortcuts&#xa;undo stack" style="rounded=1;fillColor=#023c7a;fontColor=#fff;strokeColor=#001DBC;fontStyle=1;fontSize=10;" vertex="1" parent="L_fe">
+          <mxGeometry x="14" y="30" width="120" height="70" as="geometry"/>
+        </mxCell>
+
+        <!-- Layout group -->
+        <mxCell id="G_layout" value="Layout / Navigation" style="swimlane;fillColor=#cfe2f3;strokeColor=#6c8ebf;startSize=18;fontSize=9;" vertex="1" parent="L_fe">
+          <mxGeometry x="156" y="26" width="260" height="135" as="geometry"/>
+        </mxCell>
+        <mxCell id="F_sidebar" value="Sidebar&#xa;folder nav" style="rounded=1;fillColor=#5781a8;fontColor=#fff;strokeColor=#3c5887;fontSize=9;" vertex="1" parent="G_layout">
+          <mxGeometry x="8" y="22" width="90" height="38" as="geometry"/>
+        </mxCell>
+        <mxCell id="F_header" value="AppHeader&#xa;search / sort" style="rounded=1;fillColor=#5781a8;fontColor=#fff;strokeColor=#3c5887;fontSize=9;" vertex="1" parent="G_layout">
+          <mxGeometry x="108" y="22" width="90" height="38" as="geometry"/>
+        </mxCell>
+        <mxCell id="F_filter" value="FilterPanel&#xa;tag / model filter" style="rounded=1;fillColor=#5781a8;fontColor=#fff;strokeColor=#3c5887;fontSize=9;" vertex="1" parent="G_layout">
+          <mxGeometry x="8" y="72" width="90" height="38" as="geometry"/>
+        </mxCell>
+        <mxCell id="F_footer" value="AppFooter&#xa;status bar" style="rounded=1;fillColor=#5781a8;fontColor=#fff;strokeColor=#3c5887;fontSize=9;" vertex="1" parent="G_layout">
+          <mxGeometry x="108" y="72" width="90" height="38" as="geometry"/>
+        </mxCell>
+        <mxCell id="F_inspector" value="Inspector&#xa;metadata panel" style="rounded=1;fillColor=#5781a8;fontColor=#fff;strokeColor=#3c5887;fontSize=9;" vertex="1" parent="G_layout">
+          <mxGeometry x="8" y="116" width="90" height="0" as="geometry"/>
+        </mxCell>
+
+        <!-- Image Display group -->
+        <mxCell id="G_img" value="Image Display" style="swimlane;fillColor=#cfe2f3;strokeColor=#6c8ebf;startSize=18;fontSize=9;" vertex="1" parent="L_fe">
+          <mxGeometry x="438" y="26" width="320" height="135" as="geometry"/>
+        </mxCell>
+        <mxCell id="F_grid" value="ImageGrid&#xa;virtualized list&#xa;(react-window)" style="rounded=1;fillColor=#0e6655;fontColor=#fff;strokeColor=#0B4942;fontSize=9;" vertex="1" parent="G_img">
+          <mxGeometry x="8" y="22" width="110" height="50" as="geometry"/>
+        </mxCell>
+        <mxCell id="F_thumb" value="Thumbnail&#xa;queue-based load&#xa;processQueue()" style="rounded=1;fillColor=#0e6655;fontColor=#fff;strokeColor=#0B4942;fontSize=9;" vertex="1" parent="G_img">
+          <mxGeometry x="130" y="22" width="110" height="50" as="geometry"/>
+        </mxCell>
+        <mxCell id="F_zoom" value="ZoomPanViewer&#xa;full-size view" style="rounded=1;fillColor=#0e6655;fontColor=#fff;strokeColor=#0B4942;fontSize=9;" vertex="1" parent="G_img">
+          <mxGeometry x="8" y="84" width="110" height="38" as="geometry"/>
+        </mxCell>
+        <mxCell id="F_imgcache" value="ImageCache&#xa;in-memory URL map" style="rounded=1;fillColor=#0e6655;fontColor=#fff;strokeColor=#0B4942;fontSize=9;" vertex="1" parent="G_img">
+          <mxGeometry x="130" y="84" width="110" height="38" as="geometry"/>
+        </mxCell>
+
+        <!-- Tag Classifier group -->
+        <mxCell id="G_tc" value="Tag Classifier  (src/components/tagclassifier/)" style="swimlane;fillColor=#cfe2f3;strokeColor=#6c8ebf;startSize=18;fontSize=9;" vertex="1" parent="L_fe">
+          <mxGeometry x="780" y="26" width="520" height="270" as="geometry"/>
+        </mxCell>
+        <mxCell id="F_tc" value="TagClassifier.tsx&#xa;top-level panel&#xa;preset load/save" style="rounded=1;fillColor=#6d4e70;fontColor=#fff;strokeColor=#4E2A56;fontStyle=1;fontSize=9;" vertex="1" parent="G_tc">
+          <mxGeometry x="8" y="22" width="130" height="50" as="geometry"/>
+        </mxCell>
+        <mxCell id="F_sev" value="SingleEditorView&#xa;one image at a time" style="rounded=1;fillColor=#9B59B6;fontColor=#fff;strokeColor=#7D3C98;fontSize=9;" vertex="1" parent="G_tc">
+          <mxGeometry x="155" y="22" width="120" height="38" as="geometry"/>
+        </mxCell>
+        <mxCell id="F_bsv" value="BulkSourceView&#xa;multi-image batch" style="rounded=1;fillColor=#9B59B6;fontColor=#fff;strokeColor=#7D3C98;fontSize=9;" vertex="1" parent="G_tc">
+          <mxGeometry x="155" y="70" width="120" height="38" as="geometry"/>
+        </mxCell>
+        <mxCell id="F_wge" value="WordGroupEditor&#xa;category buckets" style="rounded=1;fillColor=#9B59B6;fontColor=#fff;strokeColor=#7D3C98;fontSize=9;" vertex="1" parent="G_tc">
+          <mxGeometry x="290" y="22" width="110" height="38" as="geometry"/>
+        </mxCell>
+        <mxCell id="F_libv" value="LibraryView&#xa;saved groups" style="rounded=1;fillColor=#9B59B6;fontColor=#fff;strokeColor=#7D3C98;fontSize=9;" vertex="1" parent="G_tc">
+          <mxGeometry x="290" y="70" width="110" height="38" as="geometry"/>
+        </mxCell>
+        <mxCell id="F_presbar" value="PresetBar" style="rounded=1;fillColor=#9B59B6;fontColor=#fff;strokeColor=#7D3C98;fontSize=9;" vertex="1" parent="G_tc">
+          <mxGeometry x="415" y="22" width="90" height="38" as="geometry"/>
+        </mxCell>
+        <mxCell id="F_output" value="OutputPanel&#xa;copy / save file" style="rounded=1;fillColor=#9B59B6;fontColor=#fff;strokeColor=#7D3C98;fontSize=9;" vertex="1" parent="G_tc">
+          <mxGeometry x="415" y="70" width="90" height="38" as="geometry"/>
+        </mxCell>
+        <mxCell id="F_classify" value="classify.ts&#xa;parseLine()&#xa;getMergedTag()" style="rounded=1;fillColor=#7D3C98;fontColor=#fff;strokeColor=#4E2A56;fontSize=9;" vertex="1" parent="G_tc">
+          <mxGeometry x="8" y="130" width="130" height="50" as="geometry"/>
+        </mxCell>
+        <mxCell id="F_bfall" value="browserFallback.ts&#xa;fs API wrappers&#xa;BrowserStore (localStorage fallback)" style="rounded=1;fillColor=#7D3C98;fontColor=#fff;strokeColor=#4E2A56;fontSize=9;" vertex="1" parent="G_tc">
+          <mxGeometry x="155" y="130" width="240" height="50" as="geometry"/>
+        </mxCell>
+        <mxCell id="F_taginput" value="TagInput" style="rounded=1;fillColor=#9B59B6;fontColor=#fff;strokeColor=#7D3C98;fontSize=9;" vertex="1" parent="G_tc">
+          <mxGeometry x="8" y="200" width="90" height="30" as="geometry"/>
+        </mxCell>
+        <mxCell id="F_subsetcard" value="SubsetCard" style="rounded=1;fillColor=#9B59B6;fontColor=#fff;strokeColor=#7D3C98;fontSize=9;" vertex="1" parent="G_tc">
+          <mxGeometry x="112" y="200" width="90" height="30" as="geometry"/>
+        </mxCell>
+        <mxCell id="F_wstoolbar" value="WorkstationToolbar" style="rounded=1;fillColor=#9B59B6;fontColor=#fff;strokeColor=#7D3C98;fontSize=9;" vertex="1" parent="G_tc">
+          <mxGeometry x="216" y="200" width="120" height="30" as="geometry"/>
+        </mxCell>
+
+        <!-- Wildcard Workshop group -->
+        <mxCell id="G_wc" value="Wildcard Workshop  (src/components/wildcardtools/)" style="swimlane;fillColor=#cfe2f3;strokeColor=#6c8ebf;startSize=18;fontSize=9;" vertex="1" parent="L_fe">
+          <mxGeometry x="1322" y="26" width="360" height="175" as="geometry"/>
+        </mxCell>
+        <mxCell id="F_wct" value="WildcardTools.tsx&#xa;main panel" style="rounded=1;fillColor=#1A5276;fontColor=#fff;strokeColor=#154360;fontStyle=1;fontSize=9;" vertex="1" parent="G_wc">
+          <mxGeometry x="8" y="22" width="120" height="42" as="geometry"/>
+        </mxCell>
+        <mxCell id="F_tip" value="TargetImagesPanel&#xa;select source images" style="rounded=1;fillColor=#2E86C1;fontColor=#fff;strokeColor=#1A5276;fontSize=9;" vertex="1" parent="G_wc">
+          <mxGeometry x="145" y="22" width="120" height="42" as="geometry"/>
+        </mxCell>
+        <mxCell id="F_tpp" value="TextPromptsPanel&#xa;input prompts" style="rounded=1;fillColor=#2E86C1;fontColor=#fff;strokeColor=#1A5276;fontSize=9;" vertex="1" parent="G_wc">
+          <mxGeometry x="278" y="22" width="75" height="42" as="geometry"/>
+        </mxCell>
+        <mxCell id="F_wr" value="WorkshopResults&#xa;output wildcards" style="rounded=1;fillColor=#2E86C1;fontColor=#fff;strokeColor=#1A5276;fontSize=9;" vertex="1" parent="G_wc">
+          <mxGeometry x="8" y="78" width="120" height="38" as="geometry"/>
+        </mxCell>
+        <mxCell id="F_ws" value="WorkshopSettings&#xa;depth / mode" style="rounded=1;fillColor=#2E86C1;fontColor=#fff;strokeColor=#1A5276;fontSize=9;" vertex="1" parent="G_wc">
+          <mxGeometry x="145" y="78" width="120" height="38" as="geometry"/>
+        </mxCell>
+        <mxCell id="F_ef" value="ExclusionFilters" style="rounded=1;fillColor=#2E86C1;fontColor=#fff;strokeColor=#1A5276;fontSize=9;" vertex="1" parent="G_wc">
+          <mxGeometry x="278" y="78" width="75" height="38" as="geometry"/>
+        </mxCell>
+        <mxCell id="F_mfm" value="MergeFilterModal" style="rounded=1;fillColor=#2E86C1;fontColor=#fff;strokeColor=#1A5276;fontSize=9;" vertex="1" parent="G_wc">
+          <mxGeometry x="8" y="128" width="120" height="30" as="geometry"/>
+        </mxCell>
+
+        <!-- Batch Crop group -->
+        <mxCell id="G_crop" value="Batch Crop  (src/components/batchcrop/)" style="swimlane;fillColor=#cfe2f3;strokeColor=#6c8ebf;startSize=18;fontSize=9;" vertex="1" parent="L_fe">
+          <mxGeometry x="1700" y="26" width="290" height="135" as="geometry"/>
+        </mxCell>
+        <mxCell id="F_bcm" value="BatchCropModule.tsx&#xa;canvas + mouse events" style="rounded=1;fillColor=#196F3D;fontColor=#fff;strokeColor=#1E8449;fontStyle=1;fontSize=9;" vertex="1" parent="G_crop">
+          <mxGeometry x="8" y="22" width="140" height="42" as="geometry"/>
+        </mxCell>
+        <mxCell id="F_cb" value="CropBox" style="rounded=1;fillColor=#27AE60;fontColor=#fff;strokeColor=#1E8449;fontSize=9;" vertex="1" parent="G_crop">
+          <mxGeometry x="162" y="22" width="80" height="30" as="geometry"/>
+        </mxCell>
+        <mxCell id="F_ct" value="CropToolbar&#xa;ratio presets" style="rounded=1;fillColor=#27AE60;fontColor=#fff;strokeColor=#1E8449;fontSize=9;" vertex="1" parent="G_crop">
+          <mxGeometry x="162" y="62" width="80" height="30" as="geometry"/>
+        </mxCell>
+        <mxCell id="F_croph" value="CropHints&#xa;grid / guides" style="rounded=1;fillColor=#27AE60;fontColor=#fff;strokeColor=#1E8449;fontSize=9;" vertex="1" parent="G_crop">
+          <mxGeometry x="8" y="84" width="80" height="30" as="geometry"/>
+        </mxCell>
+        <mxCell id="F_sab" value="SelectionActionBar" style="rounded=1;fillColor=#27AE60;fontColor=#fff;strokeColor=#1E8449;fontSize=9;" vertex="1" parent="G_crop">
+          <mxGeometry x="100" y="104" width="130" height="22" as="geometry"/>
+        </mxCell>
+
+        <!-- Settings & Misc -->
+        <mxCell id="G_sett" value="Settings" style="swimlane;fillColor=#cfe2f3;strokeColor=#6c8ebf;startSize=18;fontSize=9;" vertex="1" parent="L_fe">
+          <mxGeometry x="2006" y="26" width="260" height="135" as="geometry"/>
+        </mxCell>
+        <mxCell id="F_settmod" value="SettingsModal.tsx&#xa;shortcuts / twitter&#xa;mobile server / NSFW" style="rounded=1;fillColor=#7B241C;fontColor=#fff;strokeColor=#922B21;fontStyle=1;fontSize=9;" vertex="1" parent="G_sett">
+          <mxGeometry x="8" y="22" width="140" height="50" as="geometry"/>
+        </mxCell>
+        <mxCell id="F_settapi" value="src/api/settings.ts&#xa;load/save .settings.json" style="rounded=1;fillColor=#E74C3C;fontColor=#fff;strokeColor=#922B21;fontSize=9;" vertex="1" parent="G_sett">
+          <mxGeometry x="8" y="84" width="220" height="38" as="geometry"/>
+        </mxCell>
+
+        <!-- Misc components -->
+        <mxCell id="F_debug" value="DebugPanel&#xa;DB stats" style="rounded=1;fillColor=#7F8C8D;fontColor=#fff;strokeColor=#626567;fontSize=9;" vertex="1" parent="L_fe">
+          <mxGeometry x="2290" y="40" width="90" height="40" as="geometry"/>
+        </mxCell>
+        <mxCell id="F_toast" value="Toast&#xa;notifications" style="rounded=1;fillColor=#7F8C8D;fontColor=#fff;strokeColor=#626567;fontSize=9;" vertex="1" parent="L_fe">
+          <mxGeometry x="2290" y="92" width="90" height="40" as="geometry"/>
+        </mxCell>
+        <mxCell id="F_tagref" value="TagRefiner" style="rounded=1;fillColor=#7F8C8D;fontColor=#fff;strokeColor=#626567;fontSize=9;" vertex="1" parent="L_fe">
+          <mxGeometry x="2390" y="40" width="90" height="40" as="geometry"/>
+        </mxCell>
+        <mxCell id="F_inspector2" value="Inspector.tsx&#xa;metadata sidebar" style="rounded=1;fillColor=#5781a8;fontColor=#fff;strokeColor=#3c5887;fontSize=9;" vertex="1" parent="L_fe">
+          <mxGeometry x="2390" y="92" width="90" height="40" as="geometry"/>
+        </mxCell>
+
+        <!-- ══════════════════════════════════════════════
+             LAYER 3 · ZUSTAND STORE
+             ══════════════════════════════════════════════ -->
+        <mxCell id="L_store" value="③ ZUSTAND STATE STORE  (src/store/useAppStore.ts)" style="swimlane;fillColor=#d5e8d4;strokeColor=#82b366;fontStyle=1;fontSize=11;startSize=26;" vertex="1" parent="1">
+          <mxGeometry x="10" y="460" width="2780" height="72" as="geometry"/>
+        </mxCell>
+        <mxCell id="S_nav" value="navigationSlice&#xa;images[], currentIndex, batchRange, checkedIndices, undoStack, viewMode" style="rounded=1;fillColor=#27AE60;fontColor=#fff;strokeColor=#1E8449;fontSize=9;" vertex="1" parent="L_store">
+          <mxGeometry x="14" y="16" width="380" height="42" as="geometry"/>
+        </mxCell>
+        <mxCell id="S_sett" value="settingsSlice&#xa;sortMethod, recursive, shortcuts, twitterSettings, mobileServerSettings, nsfwTags" style="rounded=1;fillColor=#27AE60;fontColor=#fff;strokeColor=#1E8449;fontSize=9;" vertex="1" parent="L_store">
+          <mxGeometry x="410" y="16" width="430" height="42" as="geometry"/>
+        </mxCell>
+        <mxCell id="S_sess" value="sessionSlice&#xa;folderPath, similaritySearchActive, indexProgress" style="rounded=1;fillColor=#27AE60;fontColor=#fff;strokeColor=#1E8449;fontSize=9;" vertex="1" parent="L_store">
+          <mxGeometry x="856" y="16" width="320" height="42" as="geometry"/>
+        </mxCell>
+        <mxCell id="S_work" value="workshopSlice&#xa;workshopFilter, similaritySearchTags" style="rounded=1;fillColor=#27AE60;fontColor=#fff;strokeColor=#1E8449;fontSize=9;" vertex="1" parent="L_store">
+          <mxGeometry x="1192" y="16" width="280" height="42" as="geometry"/>
+        </mxCell>
+
+        <!-- ══════════════════════════════════════════════
+             LAYER 4 · API LAYER  (invoke wrappers)
+             ══════════════════════════════════════════════ -->
+        <mxCell id="L_api" value="④ API LAYER — src/api/index.ts  (all invoke() calls — camelCase args → Tauri snake_case)" style="swimlane;fillColor=#e1d5e7;strokeColor=#9673a6;fontStyle=1;fontSize=11;startSize=26;" vertex="1" parent="1">
+          <mxGeometry x="10" y="542" width="2780" height="58" as="geometry"/>
+        </mxCell>
+        <mxCell id="A_scan" value="scanDirectory()" style="rounded=1;fillColor=#8E44AD;fontColor=#fff;strokeColor=#7D3C98;fontSize=9;" vertex="1" parent="L_api">
+          <mxGeometry x="14" y="16" width="118" height="26" as="geometry"/>
+        </mxCell>
+        <mxCell id="A_thumb" value="getThumbnail()" style="rounded=1;fillColor=#8E44AD;fontColor=#fff;strokeColor=#7D3C98;fontSize=9;" vertex="1" parent="L_api">
+          <mxGeometry x="138" y="16" width="110" height="26" as="geometry"/>
+        </mxCell>
+        <mxCell id="A_meta" value="getMetadata()" style="rounded=1;fillColor=#8E44AD;fontColor=#fff;strokeColor=#7D3C98;fontSize=9;" vertex="1" parent="L_api">
+          <mxGeometry x="254" y="16" width="110" height="26" as="geometry"/>
+        </mxCell>
+        <mxCell id="A_del" value="deleteToTrash()" style="rounded=1;fillColor=#8E44AD;fontColor=#fff;strokeColor=#7D3C98;fontSize=9;" vertex="1" parent="L_api">
+          <mxGeometry x="370" y="16" width="110" height="26" as="geometry"/>
+        </mxCell>
+        <mxCell id="A_keep" value="moveToKeep()" style="rounded=1;fillColor=#8E44AD;fontColor=#fff;strokeColor=#7D3C98;fontSize=9;" vertex="1" parent="L_api">
+          <mxGeometry x="486" y="16" width="100" height="26" as="geometry"/>
+        </mxCell>
+        <mxCell id="A_move" value="moveFilesToFolder()" style="rounded=1;fillColor=#8E44AD;fontColor=#fff;strokeColor=#7D3C98;fontSize=9;" vertex="1" parent="L_api">
+          <mxGeometry x="592" y="16" width="130" height="26" as="geometry"/>
+        </mxCell>
+        <mxCell id="A_undo" value="undoMove()" style="rounded=1;fillColor=#8E44AD;fontColor=#fff;strokeColor=#7D3C98;fontSize=9;" vertex="1" parent="L_api">
+          <mxGeometry x="728" y="16" width="90" height="26" as="geometry"/>
+        </mxCell>
+        <mxCell id="A_auto" value="autoClassify()" style="rounded=1;fillColor=#8E44AD;fontColor=#fff;strokeColor=#7D3C98;fontSize=9;" vertex="1" parent="L_api">
+          <mxGeometry x="824" y="16" width="110" height="26" as="geometry"/>
+        </mxCell>
+        <mxCell id="A_classify" value="classifyPromptsCommand()" style="rounded=1;fillColor=#8E44AD;fontColor=#fff;strokeColor=#7D3C98;fontSize=9;" vertex="1" parent="L_api">
+          <mxGeometry x="940" y="16" width="160" height="26" as="geometry"/>
+        </mxCell>
+        <mxCell id="A_gen" value="generateWildcards()" style="rounded=1;fillColor=#8E44AD;fontColor=#fff;strokeColor=#7D3C98;fontSize=9;" vertex="1" parent="L_api">
+          <mxGeometry x="1106" y="16" width="140" height="26" as="geometry"/>
+        </mxCell>
+        <mxCell id="A_cmp" value="compareTags()" style="rounded=1;fillColor=#8E44AD;fontColor=#fff;strokeColor=#7D3C98;fontSize=9;" vertex="1" parent="L_api">
+          <mxGeometry x="1252" y="16" width="110" height="26" as="geometry"/>
+        </mxCell>
+        <mxCell id="A_crop" value="processBatchCrop()" style="rounded=1;fillColor=#8E44AD;fontColor=#fff;strokeColor=#7D3C98;fontSize=9;" vertex="1" parent="L_api">
+          <mxGeometry x="1368" y="16" width="135" height="26" as="geometry"/>
+        </mxCell>
+        <mxCell id="A_tw" value="twitterUpload()" style="rounded=1;fillColor=#8E44AD;fontColor=#fff;strokeColor=#7D3C98;fontSize=9;" vertex="1" parent="L_api">
+          <mxGeometry x="1509" y="16" width="120" height="26" as="geometry"/>
+        </mxCell>
+        <mxCell id="A_mob" value="updateMobileServer()" style="rounded=1;fillColor=#8E44AD;fontColor=#fff;strokeColor=#7D3C98;fontSize=9;" vertex="1" parent="L_api">
+          <mxGeometry x="1635" y="16" width="145" height="26" as="geometry"/>
+        </mxCell>
+        <mxCell id="A_search" value="searchAdvancedImages()" style="rounded=1;fillColor=#8E44AD;fontColor=#fff;strokeColor=#7D3C98;fontSize=9;" vertex="1" parent="L_api">
+          <mxGeometry x="1786" y="16" width="155" height="26" as="geometry"/>
+        </mxCell>
+        <mxCell id="A_sim" value="searchSimilarImages()" style="rounded=1;fillColor=#8E44AD;fontColor=#fff;strokeColor=#7D3C98;fontSize=9;" vertex="1" parent="L_api">
+          <mxGeometry x="1947" y="16" width="150" height="26" as="geometry"/>
+        </mxCell>
+        <mxCell id="A_filter" value="getFilterOptions()" style="rounded=1;fillColor=#8E44AD;fontColor=#fff;strokeColor=#7D3C98;fontSize=9;" vertex="1" parent="L_api">
+          <mxGeometry x="2103" y="16" width="125" height="26" as="geometry"/>
+        </mxCell>
+        <mxCell id="A_prompts" value="getPromptsMapByPaths()" style="rounded=1;fillColor=#8E44AD;fontColor=#fff;strokeColor=#7D3C98;fontSize=9;" vertex="1" parent="L_api">
+          <mxGeometry x="2234" y="16" width="160" height="26" as="geometry"/>
+        </mxCell>
+        <mxCell id="A_wf" value="writeFilterFile()" style="rounded=1;fillColor=#8E44AD;fontColor=#fff;strokeColor=#7D3C98;fontSize=9;" vertex="1" parent="L_api">
+          <mxGeometry x="2400" y="16" width="120" height="26" as="geometry"/>
+        </mxCell>
+
+        <!-- ══════════════════════════════════════════════
+             LAYER 5 · RUST BACKEND
+             ══════════════════════════════════════════════ -->
+        <mxCell id="L_be" value="⑤ RUST BACKEND  (src-tauri/src/)" style="swimlane;fillColor=#f8cecc;strokeColor=#b85450;fontStyle=1;fontSize=11;startSize=26;" vertex="1" parent="1">
+          <mxGeometry x="10" y="610" width="2780" height="360" as="geometry"/>
+        </mxCell>
+
+        <!-- scanner.rs -->
+        <mxCell id="G_scan" value="scanner.rs" style="swimlane;fillColor=#f8cecc;strokeColor=#b85450;startSize=18;fontSize=9;" vertex="1" parent="L_be">
+          <mxGeometry x="14" y="28" width="230" height="296" as="geometry"/>
+        </mxCell>
+        <mxCell id="B_scandir" value="scan_directory()&#xa;[Tauri cmd]&#xa;walk FS → read_metadata&#xa;→ DB batch insert&#xa;→ emit progress events" style="rounded=1;fillColor=#C0392B;fontColor=#fff;strokeColor=#922B21;fontStyle=1;fontSize=9;" vertex="1" parent="G_scan">
+          <mxGeometry x="8" y="22" width="170" height="70" as="geometry"/>
+        </mxCell>
+        <mxCell id="B_watcher" value="setup_watcher()&#xa;inotify / FSEvents&#xa;→ add/remove on file change" style="rounded=1;fillColor=#E74C3C;fontColor=#fff;strokeColor=#C0392B;fontSize=9;" vertex="1" parent="G_scan">
+          <mxGeometry x="8" y="102" width="170" height="50" as="geometry"/>
+        </mxCell>
+        <mxCell id="B_sort" value="sort_images()&#xa;Newest/Oldest/Name" style="rounded=1;fillColor=#E74C3C;fontColor=#fff;strokeColor=#C0392B;fontSize=9;" vertex="1" parent="G_scan">
+          <mxGeometry x="8" y="162" width="170" height="36" as="geometry"/>
+        </mxCell>
+        <mxCell id="B_search" value="search_advanced()&#xa;search_similar()&#xa;tag / embedding search" style="rounded=1;fillColor=#E74C3C;fontColor=#fff;strokeColor=#C0392B;fontSize=9;" vertex="1" parent="G_scan">
+          <mxGeometry x="8" y="208" width="170" height="50" as="geometry"/>
+        </mxCell>
+        <mxCell id="B_filteropt" value="get_filter_options()&#xa;models, samplers list" style="rounded=1;fillColor=#E74C3C;fontColor=#fff;strokeColor=#C0392B;fontSize=9;" vertex="1" parent="G_scan">
+          <mxGeometry x="8" y="265" width="170" height="26" as="geometry"/>
+        </mxCell>
+
+        <!-- db.rs -->
+        <mxCell id="G_db" value="db.rs  (SQLite via rusqlite)" style="swimlane;fillColor=#f8cecc;strokeColor=#b85450;startSize=18;fontSize=9;" vertex="1" parent="L_be">
+          <mxGeometry x="258" y="28" width="230" height="296" as="geometry"/>
+        </mxCell>
+        <mxCell id="B_dbopen" value="DB::open()&#xa;init schema, migrations" style="rounded=1;fillColor=#C0392B;fontColor=#fff;strokeColor=#922B21;fontSize=9;" vertex="1" parent="G_db">
+          <mxGeometry x="8" y="22" width="180" height="36" as="geometry"/>
+        </mxCell>
+        <mxCell id="B_insert" value="insert_images_batch()" style="rounded=1;fillColor=#E74C3C;fontColor=#fff;strokeColor=#C0392B;fontSize=9;" vertex="1" parent="G_db">
+          <mxGeometry x="8" y="68" width="180" height="28" as="geometry"/>
+        </mxCell>
+        <mxCell id="B_dbdel" value="delete_images()" style="rounded=1;fillColor=#E74C3C;fontColor=#fff;strokeColor=#C0392B;fontSize=9;" vertex="1" parent="G_db">
+          <mxGeometry x="8" y="106" width="180" height="28" as="geometry"/>
+        </mxCell>
+        <mxCell id="B_dbupd" value="update_image_path()" style="rounded=1;fillColor=#E74C3C;fontColor=#fff;strokeColor=#C0392B;fontSize=9;" vertex="1" parent="G_db">
+          <mxGeometry x="8" y="144" width="180" height="28" as="geometry"/>
+        </mxCell>
+        <mxCell id="B_dbtags" value="get_all_images_with_tags()" style="rounded=1;fillColor=#E74C3C;fontColor=#fff;strokeColor=#C0392B;fontSize=9;" vertex="1" parent="G_db">
+          <mxGeometry x="8" y="182" width="200" height="28" as="geometry"/>
+        </mxCell>
+        <mxCell id="B_dbstats" value="get_folder_stats()" style="rounded=1;fillColor=#E74C3C;fontColor=#fff;strokeColor=#C0392B;fontSize=9;" vertex="1" parent="G_db">
+          <mxGeometry x="8" y="220" width="180" height="28" as="geometry"/>
+        </mxCell>
+        <mxCell id="B_dbsub" value="get_subfolder_counts()" style="rounded=1;fillColor=#E74C3C;fontColor=#fff;strokeColor=#C0392B;fontSize=9;" vertex="1" parent="G_db">
+          <mxGeometry x="8" y="258" width="180" height="28" as="geometry"/>
+        </mxCell>
+
+        <!-- metadata.rs -->
+        <mxCell id="G_meta" value="metadata.rs  (format-aware parser)" style="swimlane;fillColor=#f8cecc;strokeColor=#b85450;startSize=18;fontSize=9;" vertex="1" parent="L_be">
+          <mxGeometry x="502" y="28" width="240" height="296" as="geometry"/>
+        </mxCell>
+        <mxCell id="B_readmeta" value="read_metadata()&#xa;dispatch by file type" style="rounded=1;fillColor=#C0392B;fontColor=#fff;strokeColor=#922B21;fontStyle=1;fontSize=9;" vertex="1" parent="G_meta">
+          <mxGeometry x="8" y="22" width="175" height="36" as="geometry"/>
+        </mxCell>
+        <mxCell id="B_extpng" value="extract_png()&#xa;parse_png_chunk()&#xa;(ComfyUI / A1111 tEXt)" style="rounded=1;fillColor=#E74C3C;fontColor=#fff;strokeColor=#C0392B;fontSize=9;" vertex="1" parent="G_meta">
+          <mxGeometry x="8" y="68" width="175" height="50" as="geometry"/>
+        </mxCell>
+        <mxCell id="B_extjpg" value="extract_jpeg()&#xa;extract_from_exif()" style="rounded=1;fillColor=#E74C3C;fontColor=#fff;strokeColor=#C0392B;fontSize=9;" vertex="1" parent="G_meta">
+          <mxGeometry x="8" y="128" width="175" height="38" as="geometry"/>
+        </mxCell>
+        <mxCell id="B_extwbp" value="extract_webp()" style="rounded=1;fillColor=#E74C3C;fontColor=#fff;strokeColor=#C0392B;fontSize=9;" vertex="1" parent="G_meta">
+          <mxGeometry x="8" y="176" width="175" height="26" as="geometry"/>
+        </mxCell>
+        <mxCell id="B_parsecomfy" value="parse_comfyui_extended()&#xa;(JSON workflow graph)" style="rounded=1;fillColor=#E74C3C;fontColor=#fff;strokeColor=#C0392B;fontSize=9;" vertex="1" parent="G_meta">
+          <mxGeometry x="8" y="212" width="175" height="38" as="geometry"/>
+        </mxCell>
+        <mxCell id="B_parsea1" value="parse_a1111_improved()&#xa;(key:value text blocks)" style="rounded=1;fillColor=#E74C3C;fontColor=#fff;strokeColor=#C0392B;fontSize=9;" vertex="1" parent="G_meta">
+          <mxGeometry x="8" y="260" width="175" height="30" as="geometry"/>
+        </mxCell>
+
+        <!-- thumbnails.rs -->
+        <mxCell id="G_thumbs" value="thumbnails.rs" style="swimlane;fillColor=#f8cecc;strokeColor=#b85450;startSize=18;fontSize=9;" vertex="1" parent="L_be">
+          <mxGeometry x="756" y="28" width="200" height="120" as="geometry"/>
+        </mxCell>
+        <mxCell id="B_genthumb" value="generate_thumbnail()&#xa;[Tauri cmd]&#xa;resize → WebP encode&#xa;cache on disk" style="rounded=1;fillColor=#C0392B;fontColor=#fff;strokeColor=#922B21;fontStyle=1;fontSize=9;" vertex="1" parent="G_thumbs">
+          <mxGeometry x="8" y="22" width="175" height="60" as="geometry"/>
+        </mxCell>
+        <mxCell id="B_thumbloc" value="~/.config/comfyview/thumbs/" style="rounded=1;fillColor=#E74C3C;fontColor=#fff;strokeColor=#C0392B;fontSize=8;" vertex="1" parent="G_thumbs">
+          <mxGeometry x="8" y="90" width="175" height="22" as="geometry"/>
+        </mxCell>
+
+        <!-- file_ops.rs -->
+        <mxCell id="G_fops" value="file_ops.rs" style="swimlane;fillColor=#f8cecc;strokeColor=#b85450;startSize=18;fontSize=9;" vertex="1" parent="L_be">
+          <mxGeometry x="756" y="160" width="200" height="165" as="geometry"/>
+        </mxCell>
+        <mxCell id="B_autoclassify" value="auto_classify()&#xa;[Tauri cmd]&#xa;tags → subfolder sort&#xa;⚠ tag-based, not ML!" style="rounded=1;fillColor=#C0392B;fontColor=#fff;strokeColor=#922B21;fontStyle=1;fontSize=9;" vertex="1" parent="G_fops">
+          <mxGeometry x="8" y="22" width="170" height="58" as="geometry"/>
+        </mxCell>
+        <mxCell id="B_trash" value="delete_to_trash_impl()" style="rounded=1;fillColor=#E74C3C;fontColor=#fff;strokeColor=#C0392B;fontSize=9;" vertex="1" parent="G_fops">
+          <mxGeometry x="8" y="90" width="170" height="26" as="geometry"/>
+        </mxCell>
+        <mxCell id="B_movekeep" value="move_to_keep_impl()" style="rounded=1;fillColor=#E74C3C;fontColor=#fff;strokeColor=#C0392B;fontSize=9;" vertex="1" parent="G_fops">
+          <mxGeometry x="8" y="126" width="170" height="26" as="geometry"/>
+        </mxCell>
+
+        <!-- wildcard/ module -->
+        <mxCell id="G_wc_be" value="wildcard/  (classifier, generator, filter, merger)" style="swimlane;fillColor=#f8cecc;strokeColor=#b85450;startSize=18;fontSize=9;" vertex="1" parent="L_be">
+          <mxGeometry x="970" y="28" width="260" height="296" as="geometry"/>
+        </mxCell>
+        <mxCell id="B_wcclassify" value="classify_prompts()&#xa;tag string → category&#xa;map using WordGroups" style="rounded=1;fillColor=#C0392B;fontColor=#fff;strokeColor=#922B21;fontSize=9;" vertex="1" parent="G_wc_be">
+          <mxGeometry x="8" y="22" width="180" height="50" as="geometry"/>
+        </mxCell>
+        <mxCell id="B_wcgen" value="generate_wildcards()&#xa;prompts → wildcard .txt" style="rounded=1;fillColor=#C0392B;fontColor=#fff;strokeColor=#922B21;fontSize=9;" vertex="1" parent="G_wc_be">
+          <mxGeometry x="8" y="82" width="180" height="40" as="geometry"/>
+        </mxCell>
+        <mxCell id="B_wccmp" value="compare_tags()&#xa;diff two prompt sets" style="rounded=1;fillColor=#E74C3C;fontColor=#fff;strokeColor=#C0392B;fontSize=9;" vertex="1" parent="G_wc_be">
+          <mxGeometry x="8" y="132" width="180" height="36" as="geometry"/>
+        </mxCell>
+        <mxCell id="B_wcmix" value="mix_mode_transform()&#xa;parse_sequence()&#xa;serialize_node()" style="rounded=1;fillColor=#E74C3C;fontColor=#fff;strokeColor=#C0392B;fontSize=9;" vertex="1" parent="G_wc_be">
+          <mxGeometry x="8" y="178" width="180" height="50" as="geometry"/>
+        </mxCell>
+        <mxCell id="B_wcmerge" value="merge_tag_groups()&#xa;recursive_merge()" style="rounded=1;fillColor=#E74C3C;fontColor=#fff;strokeColor=#C0392B;fontSize=9;" vertex="1" parent="G_wc_be">
+          <mxGeometry x="8" y="238" width="180" height="36" as="geometry"/>
+        </mxCell>
+
+        <!-- mobile_server.rs -->
+        <mxCell id="G_mob" value="mobile_server.rs  (Axum HTTP)" style="swimlane;fillColor=#f8cecc;strokeColor=#b85450;startSize=18;fontSize=9;" vertex="1" parent="L_be">
+          <mxGeometry x="1244" y="28" width="270" height="296" as="geometry"/>
+        </mxCell>
+        <mxCell id="B_startsvr" value="start_server()&#xa;Axum + tokio&#xa;local network HTTP" style="rounded=1;fillColor=#C0392B;fontColor=#fff;strokeColor=#922B21;fontStyle=1;fontSize=9;" vertex="1" parent="G_mob">
+          <mxGeometry x="8" y="22" width="170" height="48" as="geometry"/>
+        </mxCell>
+        <mxCell id="B_updsrv" value="update_mobile_server()&#xa;[Tauri cmd]&#xa;start/stop + reconfigure" style="rounded=1;fillColor=#C0392B;fontColor=#fff;strokeColor=#922B21;fontSize=9;" vertex="1" parent="G_mob">
+          <mxGeometry x="8" y="80" width="200" height="48" as="geometry"/>
+        </mxCell>
+        <mxCell id="B_routes" value="GET  /api/images    (list)&#xa;GET  /api/image     (serve)&#xa;GET  /api/subfolders&#xa;GET  /api/state&#xa;POST /api/action (keep/trash)" style="rounded=1;fillColor=#E74C3C;fontColor=#fff;strokeColor=#C0392B;fontSize=9;align=left;" vertex="1" parent="G_mob">
+          <mxGeometry x="8" y="138" width="220" height="90" as="geometry"/>
+        </mxCell>
+        <mxCell id="B_pathauth" value="is_path_authorized()&#xa;SFW folder whitelist" style="rounded=1;fillColor=#E74C3C;fontColor=#fff;strokeColor=#C0392B;fontSize=9;" vertex="1" parent="G_mob">
+          <mxGeometry x="8" y="240" width="200" height="38" as="geometry"/>
+        </mxCell>
+
+        <!-- twitter.rs -->
+        <mxCell id="G_tw" value="twitter.rs" style="swimlane;fillColor=#f8cecc;strokeColor=#b85450;startSize=18;fontSize=9;" vertex="1" parent="L_be">
+          <mxGeometry x="1528" y="28" width="230" height="200" as="geometry"/>
+        </mxCell>
+        <mxCell id="B_twupload" value="twitter_upload()&#xa;[Tauri cmd]&#xa;read metadata → format&#xa;→ OAuth sign → POST" style="rounded=1;fillColor=#C0392B;fontColor=#fff;strokeColor=#922B21;fontStyle=1;fontSize=9;" vertex="1" parent="G_tw">
+          <mxGeometry x="8" y="22" width="185" height="60" as="geometry"/>
+        </mxCell>
+        <mxCell id="B_oauthheader" value="generate_oauth_header()" style="rounded=1;fillColor=#E74C3C;fontColor=#fff;strokeColor=#C0392B;fontSize=9;" vertex="1" parent="G_tw">
+          <mxGeometry x="8" y="92" width="185" height="28" as="geometry"/>
+        </mxCell>
+        <mxCell id="B_hashtags" value="format_character_hashtags()&#xa;(from image prompt tags)" style="rounded=1;fillColor=#E74C3C;fontColor=#fff;strokeColor=#C0392B;fontSize=9;" vertex="1" parent="G_tw">
+          <mxGeometry x="8" y="130" width="185" height="36" as="geometry"/>
+        </mxCell>
+
+        <!-- secrets.rs -->
+        <mxCell id="G_sec" value="secrets.rs  (OS keychain)" style="swimlane;fillColor=#f8cecc;strokeColor=#b85450;startSize=18;fontSize=9;" vertex="1" parent="L_be">
+          <mxGeometry x="1528" y="242" width="230" height="115" as="geometry"/>
+        </mxCell>
+        <mxCell id="B_entry" value="entry()  [keyring crate]&#xa;load/save Twitter OAuth&#xa;secrets in OS keychain" style="rounded=1;fillColor=#C0392B;fontColor=#fff;strokeColor=#922B21;fontSize=9;" vertex="1" parent="G_sec">
+          <mxGeometry x="8" y="22" width="195" height="50" as="geometry"/>
+        </mxCell>
+        <mxCell id="B_loadtw" value="load_twitter_secrets_internal()" style="rounded=1;fillColor=#E74C3C;fontColor=#fff;strokeColor=#C0392B;fontSize=9;" vertex="1" parent="G_sec">
+          <mxGeometry x="8" y="80" width="210" height="24" as="geometry"/>
+        </mxCell>
+
+        <!-- crop.rs -->
+        <mxCell id="G_cropbe" value="crop.rs" style="swimlane;fillColor=#f8cecc;strokeColor=#b85450;startSize=18;fontSize=9;" vertex="1" parent="L_be">
+          <mxGeometry x="1772" y="28" width="210" height="100" as="geometry"/>
+        </mxCell>
+        <mxCell id="B_batchcrop" value="batch_crop_images()&#xa;[Tauri cmd]&#xa;crop + save new files" style="rounded=1;fillColor=#C0392B;fontColor=#fff;strokeColor=#922B21;fontStyle=1;fontSize=9;" vertex="1" parent="G_cropbe">
+          <mxGeometry x="8" y="22" width="185" height="50" as="geometry"/>
+        </mxCell>
+
+        <!-- ══════════════════════════════════════════════
+             LAYER 6 · EXTERNAL SYSTEMS
+             ══════════════════════════════════════════════ -->
+        <mxCell id="L_ext" value="⑥ EXTERNAL SYSTEMS" style="swimlane;fillColor=#fff2cc;strokeColor=#d6b656;fontStyle=1;fontSize=11;startSize=26;" vertex="1" parent="1">
+          <mxGeometry x="10" y="980" width="2780" height="84" as="geometry"/>
+        </mxCell>
+        <mxCell id="E_fs" value="📁 Filesystem&#xa;images, .settings.json, presets, wildcard .txt, filter lists" style="rounded=1;fillColor=#D4AC0D;fontColor=#000;strokeColor=#B7950B;fontSize=9;" vertex="1" parent="L_ext">
+          <mxGeometry x="14" y="18" width="310" height="48" as="geometry"/>
+        </mxCell>
+        <mxCell id="E_sqlite" value="🗄️ SQLite DB&#xa;image index, tags, metadata" style="rounded=1;fillColor=#A9CCE3;fontColor=#000;strokeColor=#5DADE2;fontSize=9;" vertex="1" parent="L_ext">
+          <mxGeometry x="340" y="18" width="230" height="48" as="geometry"/>
+        </mxCell>
+        <mxCell id="E_thumbcache" value="🗂️ Thumbnail Cache&#xa;~/.config/comfyview/thumbs/*.webp" style="rounded=1;fillColor=#A9DFBF;fontColor=#000;strokeColor=#52BE80;fontSize=9;" vertex="1" parent="L_ext">
+          <mxGeometry x="586" y="18" width="260" height="48" as="geometry"/>
+        </mxCell>
+        <mxCell id="E_keychain" value="🔐 OS Keychain&#xa;Twitter OAuth secrets (keyring)" style="rounded=1;fillColor=#AED6F1;fontColor=#000;strokeColor=#5DADE2;fontSize=9;" vertex="1" parent="L_ext">
+          <mxGeometry x="862" y="18" width="230" height="48" as="geometry"/>
+        </mxCell>
+        <mxCell id="E_tw" value="🐦 Twitter API v2&#xa;media/upload + statuses/update" style="rounded=1;fillColor=#1DA1F2;fontColor=#fff;strokeColor=#0d8ecf;fontSize=9;" vertex="1" parent="L_ext">
+          <mxGeometry x="1108" y="18" width="230" height="48" as="geometry"/>
+        </mxCell>
+        <mxCell id="E_mob" value="📱 Mobile Browser&#xa;phone on LAN → Axum HTTP server" style="rounded=1;fillColor=#F0B27A;fontColor=#000;strokeColor=#D68910;fontSize=9;" vertex="1" parent="L_ext">
+          <mxGeometry x="1354" y="18" width="240" height="48" as="geometry"/>
+        </mxCell>
+        <mxCell id="E_comfy" value="🤖 ComfyUI / A1111&#xa;writes new images to watched folder" style="rounded=1;fillColor=#C8A2C8;fontColor=#000;strokeColor=#9B59B6;fontSize=9;" vertex="1" parent="L_ext">
+          <mxGeometry x="1610" y="18" width="250" height="48" as="geometry"/>
+        </mxCell>
+
+        <!-- ══════════════════════════════════════════════
+             KEY FLOW EDGES
+             ══════════════════════════════════════════════ -->
+
+        <!-- ── Flow 1: Open Folder → Scan Pipeline ── -->
+        <mxCell id="e_f1a" style="edgeStyle=orthogonalEdgeStyle;strokeColor=#FF8C00;strokeWidth=2;exitX=0.5;exitY=1;exitDx=0;exitDy=0;" edge="1" source="U_folder" target="F_sidebar" parent="1">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+        <mxCell id="e_f1b" style="edgeStyle=orthogonalEdgeStyle;strokeColor=#8E44AD;strokeWidth=2;" edge="1" source="F_sidebar" target="A_scan" parent="1">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+        <mxCell id="e_f1c" style="edgeStyle=orthogonalEdgeStyle;strokeColor=#C0392B;strokeWidth=2;" edge="1" source="A_scan" target="B_scandir" parent="1">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+        <mxCell id="e_f1d" style="edgeStyle=orthogonalEdgeStyle;strokeColor=#C0392B;strokeWidth=1;dashed=1;" edge="1" source="B_scandir" target="B_readmeta" parent="1">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+        <mxCell id="e_f1e" style="edgeStyle=orthogonalEdgeStyle;strokeColor=#C0392B;strokeWidth=1;dashed=1;" edge="1" source="B_scandir" target="B_insert" parent="1">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+        <mxCell id="e_f1f" style="edgeStyle=orthogonalEdgeStyle;strokeColor=#C0392B;strokeWidth=1;dashed=1;" edge="1" source="B_scandir" target="B_watcher" parent="1">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+        <mxCell id="e_f1g" style="edgeStyle=orthogonalEdgeStyle;strokeColor=#27AE60;strokeWidth=2;dashed=1;" edge="1" source="B_scandir" target="S_nav" parent="1">
+          <mxGeometry relative="1" as="geometry">
+            <Array as="points"><mxPoint x="135" y="740"/><mxPoint x="135" y="490"/><mxPoint x="100" y="490"/></mxPoint></Array>
+          </mxGeometry>
+        </mxCell>
+
+        <!-- ── Flow 2: ComfyUI writes image → watcher ── -->
+        <mxCell id="e_f2a" style="edgeStyle=orthogonalEdgeStyle;strokeColor=#9B59B6;strokeWidth=2;" edge="1" source="E_comfy" target="B_watcher" parent="1">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+
+        <!-- ── Flow 3: Navigate → Thumbnail queue ── -->
+        <mxCell id="e_f3a" style="edgeStyle=orthogonalEdgeStyle;strokeColor=#FF8C00;strokeWidth=2;" edge="1" source="U_nav" target="F_grid" parent="1">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+        <mxCell id="e_f3b" style="edgeStyle=orthogonalEdgeStyle;strokeColor=#0e6655;strokeWidth=1;dashed=1;" edge="1" source="F_grid" target="F_thumb" parent="1">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+        <mxCell id="e_f3c" style="edgeStyle=orthogonalEdgeStyle;strokeColor=#8E44AD;strokeWidth=2;" edge="1" source="F_thumb" target="A_thumb" parent="1">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+        <mxCell id="e_f3d" style="edgeStyle=orthogonalEdgeStyle;strokeColor=#C0392B;strokeWidth=2;" edge="1" source="A_thumb" target="B_genthumb" parent="1">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+        <mxCell id="e_f3e" style="edgeStyle=orthogonalEdgeStyle;strokeColor=#52BE80;strokeWidth=1;dashed=1;" edge="1" source="B_genthumb" target="E_thumbcache" parent="1">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+
+        <!-- ── Flow 4: Delete/Keep ── -->
+        <mxCell id="e_f4a" style="edgeStyle=orthogonalEdgeStyle;strokeColor=#FF8C00;strokeWidth=2;" edge="1" source="U_delkeep" target="A_del" parent="1">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+        <mxCell id="e_f4b" style="edgeStyle=orthogonalEdgeStyle;strokeColor=#C0392B;strokeWidth=2;" edge="1" source="A_del" target="B_trash" parent="1">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+        <mxCell id="e_f4c" style="edgeStyle=orthogonalEdgeStyle;strokeColor=#C0392B;strokeWidth=2;" edge="1" source="A_keep" target="B_movekeep" parent="1">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+
+        <!-- ── Flow 5: Tag Classification ── -->
+        <mxCell id="e_f5a" style="edgeStyle=orthogonalEdgeStyle;strokeColor=#FF8C00;strokeWidth=2;" edge="1" source="U_tag" target="F_tc" parent="1">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+        <mxCell id="e_f5b" style="edgeStyle=orthogonalEdgeStyle;strokeColor=#8E44AD;strokeWidth=2;" edge="1" source="F_tc" target="A_classify" parent="1">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+        <mxCell id="e_f5c" style="edgeStyle=orthogonalEdgeStyle;strokeColor=#C0392B;strokeWidth=2;" edge="1" source="A_classify" target="B_wcclassify" parent="1">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+        <mxCell id="e_f5d" style="edgeStyle=orthogonalEdgeStyle;strokeColor=#D4AC0D;strokeWidth=1;dashed=1;" edge="1" source="F_bfall" target="E_fs" parent="1">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+
+        <!-- ── Flow 6: Auto-Classify (NSFW sort) ── -->
+        <mxCell id="e_f6a" style="edgeStyle=orthogonalEdgeStyle;strokeColor=#FF8C00;strokeWidth=2;" edge="1" source="U_auto" target="A_auto" parent="1">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+        <mxCell id="e_f6b" style="edgeStyle=orthogonalEdgeStyle;strokeColor=#C0392B;strokeWidth=2;" edge="1" source="A_auto" target="B_autoclassify" parent="1">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+        <mxCell id="e_f6c" style="edgeStyle=orthogonalEdgeStyle;strokeColor=#C0392B;strokeWidth=1;dashed=1;" edge="1" source="B_autoclassify" target="B_dbtags" parent="1">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+        <mxCell id="e_f6d" style="edgeStyle=orthogonalEdgeStyle;strokeColor=#C0392B;strokeWidth=1;dashed=1;" edge="1" source="B_autoclassify" target="B_dbupd" parent="1">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+
+        <!-- ── Flow 7: Wildcard Workshop ── -->
+        <mxCell id="e_f7a" style="edgeStyle=orthogonalEdgeStyle;strokeColor=#FF8C00;strokeWidth=2;" edge="1" source="U_wc" target="F_wct" parent="1">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+        <mxCell id="e_f7b" style="edgeStyle=orthogonalEdgeStyle;strokeColor=#8E44AD;strokeWidth=2;" edge="1" source="F_wct" target="A_gen" parent="1">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+        <mxCell id="e_f7c" style="edgeStyle=orthogonalEdgeStyle;strokeColor=#C0392B;strokeWidth=2;" edge="1" source="A_gen" target="B_wcgen" parent="1">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+        <mxCell id="e_f7d" style="edgeStyle=orthogonalEdgeStyle;strokeColor=#C0392B;strokeWidth=2;" edge="1" source="A_cmp" target="B_wccmp" parent="1">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+
+        <!-- ── Flow 8: Batch Crop ── -->
+        <mxCell id="e_f8a" style="edgeStyle=orthogonalEdgeStyle;strokeColor=#FF8C00;strokeWidth=2;" edge="1" source="U_crop" target="F_bcm" parent="1">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+        <mxCell id="e_f8b" style="edgeStyle=orthogonalEdgeStyle;strokeColor=#8E44AD;strokeWidth=2;" edge="1" source="F_bcm" target="A_crop" parent="1">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+        <mxCell id="e_f8c" style="edgeStyle=orthogonalEdgeStyle;strokeColor=#C0392B;strokeWidth=2;" edge="1" source="A_crop" target="B_batchcrop" parent="1">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+        <mxCell id="e_f8d" style="edgeStyle=orthogonalEdgeStyle;strokeColor=#D4AC0D;strokeWidth=1;dashed=1;" edge="1" source="B_batchcrop" target="E_fs" parent="1">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+
+        <!-- ── Flow 9: Twitter Upload ── -->
+        <mxCell id="e_f9a" style="edgeStyle=orthogonalEdgeStyle;strokeColor=#1DA1F2;strokeWidth=2;" edge="1" source="U_tw" target="A_tw" parent="1">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+        <mxCell id="e_f9b" style="edgeStyle=orthogonalEdgeStyle;strokeColor=#C0392B;strokeWidth=2;" edge="1" source="A_tw" target="B_twupload" parent="1">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+        <mxCell id="e_f9c" style="edgeStyle=orthogonalEdgeStyle;strokeColor=#C0392B;strokeWidth=1;dashed=1;" edge="1" source="B_twupload" target="B_entry" parent="1">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+        <mxCell id="e_f9d" style="edgeStyle=orthogonalEdgeStyle;strokeColor=#5DADE2;strokeWidth=2;" edge="1" source="B_entry" target="E_keychain" parent="1">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+        <mxCell id="e_f9e" style="edgeStyle=orthogonalEdgeStyle;strokeColor=#1DA1F2;strokeWidth=2;" edge="1" source="B_twupload" target="E_tw" parent="1">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+
+        <!-- ── Flow 10: Mobile Server ── -->
+        <mxCell id="e_f10a" style="edgeStyle=orthogonalEdgeStyle;strokeColor=#FF8C00;strokeWidth=2;" edge="1" source="U_mob" target="A_mob" parent="1">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+        <mxCell id="e_f10b" style="edgeStyle=orthogonalEdgeStyle;strokeColor=#C0392B;strokeWidth=2;" edge="1" source="A_mob" target="B_updsrv" parent="1">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+        <mxCell id="e_f10c" style="edgeStyle=orthogonalEdgeStyle;strokeColor=#F0B27A;strokeWidth=2;" edge="1" source="E_mob" target="B_routes" parent="1">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+
+        <!-- ── Settings flow ── -->
+        <mxCell id="e_s1" style="edgeStyle=orthogonalEdgeStyle;strokeColor=#FF8C00;strokeWidth=2;" edge="1" source="U_settings" target="F_settmod" parent="1">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+        <mxCell id="e_s2" style="edgeStyle=orthogonalEdgeStyle;strokeColor=#D4AC0D;strokeWidth=1;dashed=1;" edge="1" source="F_settapi" target="E_fs" parent="1">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+
+        <!-- DB → SQLite -->
+        <mxCell id="e_db1" style="edgeStyle=orthogonalEdgeStyle;strokeColor=#5DADE2;strokeWidth=2;" edge="1" source="G_db" target="E_sqlite" parent="1">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+
+        <!-- Scanner reads FS -->
+        <mxCell id="e_sc1" style="edgeStyle=orthogonalEdgeStyle;strokeColor=#D4AC0D;strokeWidth=1;dashed=1;" edge="1" source="G_scan" target="E_fs" parent="1">
+          <mxGeometry relative="1" as="geometry"/>
+        </mxCell>
+
+        <!-- ══════════════════════════════════════════════
+             LEGEND + GAP NOTES
+             ══════════════════════════════════════════════ -->
+        <mxCell id="G_legend" value="LEGEND" style="swimlane;fillColor=#F2F3F4;strokeColor=#AAB7B8;fontStyle=1;startSize=22;fontSize=10;" vertex="1" parent="1">
+          <mxGeometry x="1900" y="980" width="890" height="84" as="geometry"/>
+        </mxCell>
+        <mxCell id="leg1" value="User Action" style="rounded=1;fillColor=#f0a30a;fontColor=#000;strokeColor=#bd7000;fontSize=9;" vertex="1" parent="G_legend">
+          <mxGeometry x="8" y="26" width="90" height="24" as="geometry"/>
+        </mxCell>
+        <mxCell id="leg2" value="React Component" style="rounded=1;fillColor=#5781a8;fontColor=#fff;strokeColor=#3c5887;fontSize=9;" vertex="1" parent="G_legend">
+          <mxGeometry x="108" y="26" width="110" height="24" as="geometry"/>
+        </mxCell>
+        <mxCell id="leg3" value="Zustand Store" style="rounded=1;fillColor=#27AE60;fontColor=#fff;strokeColor=#1E8449;fontSize=9;" vertex="1" parent="G_legend">
+          <mxGeometry x="228" y="26" width="100" height="24" as="geometry"/>
+        </mxCell>
+        <mxCell id="leg4" value="invoke() API" style="rounded=1;fillColor=#8E44AD;fontColor=#fff;strokeColor=#7D3C98;fontSize=9;" vertex="1" parent="G_legend">
+          <mxGeometry x="338" y="26" width="90" height="24" as="geometry"/>
+        </mxCell>
+        <mxCell id="leg5" value="Rust Backend" style="rounded=1;fillColor=#C0392B;fontColor=#fff;strokeColor=#922B21;fontSize=9;" vertex="1" parent="G_legend">
+          <mxGeometry x="438" y="26" width="90" height="24" as="geometry"/>
+        </mxCell>
+        <mxCell id="leg6" value="External System" style="rounded=1;fillColor=#D4AC0D;fontColor=#000;strokeColor=#B7950B;fontSize=9;" vertex="1" parent="G_legend">
+          <mxGeometry x="538" y="26" width="100" height="24" as="geometry"/>
+        </mxCell>
+        <mxCell id="leg7" value="─── trigger / call    - - - internal / side-effect    ──► data to external" style="text;fontSize=8;align=left;" vertex="1" parent="G_legend">
+          <mxGeometry x="648" y="28" width="230" height="20" as="geometry"/>
+        </mxCell>
+
+        <!-- ── GAP ANNOTATIONS (things not obvious from code alone) ── -->
+        <mxCell id="gap1" value="⚠ USAGE GAP: auto_classify() is TAG-BASED, not ML.&#xa;It checks image prompt tags against nsfwTags list in .settings.json.&#xa;Images must be scanned first to have tags in DB." style="callout;fillColor=#fff2cc;strokeColor=#d6b656;fontSize=9;align=left;whiteSpace=wrap;" vertex="1" parent="1">
+          <mxGeometry x="960" y="862" width="330" height="60" as="geometry"/>
+        </mxCell>
+        <mxCell id="gap2" value="⚠ USAGE GAP: File Watcher enables REAL-TIME updates.&#xa;When ComfyUI writes a new PNG to the watched folder,&#xa;it auto-appears in the grid without manual refresh." style="callout;fillColor=#fff2cc;strokeColor=#d6b656;fontSize=9;align=left;whiteSpace=wrap;" vertex="1" parent="1">
+          <mxGeometry x="14" y="860" width="330" height="60" as="geometry"/>
+        </mxCell>
+        <mxCell id="gap3" value="⚠ USAGE GAP: TagClassifier presets are saved to the app&#xa;data dir (via Tauri fs API / browserFallback.ts),&#xa;NOT inside the image folder — they persist across folders." style="callout;fillColor=#fff2cc;strokeColor=#d6b656;fontSize=9;align=left;whiteSpace=wrap;" vertex="1" parent="1">
+          <mxGeometry x="780" y="862" width="340" height="60" as="geometry"/>
+        </mxCell>
+        <mxCell id="gap4" value="⚠ USAGE GAP: Mobile Server has SFW folder whitelist.&#xa;authorized_folders in .settings.json controls which&#xa;image folders the phone browser is allowed to access." style="callout;fillColor=#fff2cc;strokeColor=#d6b656;fontSize=9;align=left;whiteSpace=wrap;" vertex="1" parent="1">
+          <mxGeometry x="1310" y="862" width="340" height="60" as="geometry"/>
+        </mxCell>
+        <mxCell id="gap5" value="⚠ USAGE GAP: Twitter secrets live in OS Keychain&#xa;(keyring crate), NOT in localStorage or .settings.json.&#xa;API keys survive app reinstalls." style="callout;fillColor=#fff2cc;strokeColor=#d6b656;fontSize=9;align=left;whiteSpace=wrap;" vertex="1" parent="1">
+          <mxGeometry x="1670" y="862" width="310" height="60" as="geometry"/>
+        </mxCell>
+
+      </root>
+    </mxGraphModel>
+  </diagram>
+</mxfile>

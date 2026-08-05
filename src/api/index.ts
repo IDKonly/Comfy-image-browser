@@ -8,6 +8,7 @@ import type {
   TwitterSettings,
   MobileServerSettings,
 } from "../store/useAppStore";
+import type { Subset, WordGroup, Register, ClassificationResult } from "../components/tagclassifier/types";
 
 /**
  * Central API service layer for ComfyView.
@@ -221,8 +222,22 @@ export const api = {
       filter: args.filter,
     }),
 
-  classifyPromptsCommand: (lines: string[], subsets: any[], wordGroups: any[]) =>
-    invoke<any[]>("classify_prompts_command", { lines, subsets, wordGroups }),
+  classifyPromptsCommand: (lines: string[], subsets: Subset[], wordGroups: WordGroup[]) =>
+    invoke<ClassificationResult[]>("classify_prompts_command", { lines, subsets, wordGroups }),
+
+  classifyNsfwLines: (lines: string[], tags: string[]) =>
+    invoke<boolean[]>("classify_nsfw_lines", { lines, tags }),
+
+  classifyRegistersCommand: (lines: string[], registers: Register[]) =>
+    invoke<number[]>("classify_registers_command", { lines, registers }),
+
+  generatePrompts: (args: {
+    corpusLines: string[];
+    fragmentSets: { register: string; fragments: { subsetId: number; tags: string[] }[] }[];
+    subsetOrder: number[];
+    options: { count: number; mustInclude: string[]; minScore: number; register: string; seed: number };
+  }) =>
+    invoke<{ text: string; score: number }[]>("generate_prompts", args),
 
   // Twitter / X
   twitterUpload: (path: string, settings: TwitterSettings) =>

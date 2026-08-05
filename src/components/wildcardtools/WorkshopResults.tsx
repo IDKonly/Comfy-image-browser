@@ -1,4 +1,5 @@
-import { Copy, Download } from "lucide-react";
+import { Copy, Download, Wand2 } from "lucide-react";
+import { LABEL, BAR_BTN, BAR_BTN_GHOST } from "../ui/tokens";
 
 interface WorkshopResultsProps {
   results: string[];
@@ -6,30 +7,32 @@ interface WorkshopResultsProps {
   onExport: () => void;
 }
 
-/** Results panel with copy / export actions and the numbered result rows. */
-export const WorkshopResults = ({ results, onCopy, onExport }: WorkshopResultsProps) => {
-  if (results.length === 0) return null;
-  return (
-    <div className="pt-6 border-t border-white/5 space-y-4 animate-in slide-in-from-bottom-4 duration-300 pb-10">
-      <div className="flex items-center justify-between">
-        <span className="text-[10px] font-black uppercase text-neutral-500">Workshop Results ({results.length})</span>
-        <div className="flex gap-2">
-            <button onClick={onCopy} className="flex items-center gap-2 px-3 py-1.5 bg-neutral-800 hover:bg-neutral-700 rounded-lg text-[9px] font-black uppercase text-neutral-400 hover:text-white transition-all">
-                <Copy className="w-3.5 h-3.5" /> Copy
-            </button>
-            <button onClick={onExport} className="flex items-center gap-2 px-3 py-1.5 bg-blue-600/20 hover:bg-blue-600/40 border border-blue-500/20 rounded-lg text-[9px] font-black uppercase text-blue-400 hover:text-blue-300 transition-all">
-                <Download className="w-3.5 h-3.5" /> Export .txt
-            </button>
-        </div>
-      </div>
-      <div className="bg-neutral-950 border border-white/5 rounded-2xl p-4 max-h-[400px] overflow-y-auto space-y-2 scrollbar-thin shadow-inner">
-        {results.map((res, i) => (
-          <div key={i} className="group flex gap-3 p-3 bg-neutral-900/50 rounded-xl border border-white/5 hover:border-blue-500/30 transition-all shadow-sm">
-            <div className="w-5 h-5 rounded-md bg-neutral-800 flex items-center justify-center text-[9px] font-black text-neutral-600 shrink-0">{i+1}</div>
-            <code className="text-[11px] text-neutral-300 break-all select-all leading-relaxed">{res}</code>
-          </div>
-        ))}
-      </div>
+/** Right rail: generated wildcard lines with copy / export actions. */
+export const WorkshopResults = ({ results, onCopy, onExport }: WorkshopResultsProps) => (
+  <>
+    <div className="h-7 max-lg:h-14 shrink-0 flex items-center gap-1.5 px-1.5 bg-solid-panel border-b border-white/5">
+      <span className={LABEL}>{results.length} results</span>
+      <div className="flex-1" />
+      {results.length > 0 && (
+        <>
+          <button onClick={onCopy} className={`${BAR_BTN} ${BAR_BTN_GHOST}`}><Copy className="w-3 h-3" /> Copy</button>
+          <button onClick={onExport} className={`${BAR_BTN} ${BAR_BTN_GHOST}`}><Download className="w-3 h-3" /> Export</button>
+        </>
+      )}
     </div>
-  );
-};
+
+    <div className="flex-1 min-h-0 overflow-y-auto scrollbar-thin p-1.5 space-y-1">
+      {results.length === 0 ? (
+        <div className="flex flex-col items-center justify-center h-full text-center p-3">
+          <Wand2 className="w-7 h-7 mb-2 text-blue-500/60" />
+          <p className={LABEL}>Generate wildcards to see them here</p>
+        </div>
+      ) : results.map((res, i) => (
+        <div key={i} className="flex items-start gap-1.5 px-1.5 py-1 bg-solid-card border border-white/5 hover:border-blue-500/30 rounded-md transition-colors">
+          <span className="w-6 shrink-0 text-right text-[9px] font-mono font-black text-neutral-600 tabular-nums leading-4">{i + 1}</span>
+          <code className="flex-1 min-w-0 text-[10.5px] font-mono text-neutral-300 break-all select-all leading-4">{res}</code>
+        </div>
+      ))}
+    </div>
+  </>
+);

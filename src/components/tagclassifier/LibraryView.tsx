@@ -1,5 +1,9 @@
-import { Search, XCircle, CheckCircle } from "lucide-react";
+import { useState, useMemo } from "react";
 import { Subset } from "./types";
+import { subsetClaims } from "./classify";
+import { LABEL } from "../ui/tokens";
+import { computeReach, TagSortMode } from "../ui/tagReach";
+import { TagPickerGrid, TagSortToggle, TagSearchField, TagVisual } from "../ui/TagPickerGrid";
 
 type ActionMode = 'include' | 'exclude';
 
@@ -15,98 +19,123 @@ interface LibraryViewProps {
   onToggleTag: (tag: string) => void;
 }
 
-/** "Library" view: layer selector + action mode + tag search + the toggleable tag grid. */
+/**
+ * "Library" view: target-group selector + action mode + sort + search in one compact bar,
+ * above the toggleable tag grid. The grid itself is shared with the Workshop's exclusion
+ * filters (`ui/TagPickerGrid`) so both pickers behave identically.
+ */
 export const LibraryView = ({
   subsets, uniqueTags, dictActiveSubsetId, dictActionMode, tagSearchQuery,
   onSelectSubset, onActionModeChange, onSearchChange, onToggleTag,
-}: LibraryViewProps) => (
-  <div className="flex-1 flex flex-col gap-6 overflow-hidden animate-in slide-in-from-right-4 duration-500">
-    <div className="grid grid-cols-1 lg:grid-cols-3 gap-4 sm:gap-6 bg-solid-panel p-5 rounded-3xl border border-white/5 shadow-2xl">
-      <div className="space-y-2">
-        <label className="text-[10px] font-black uppercase text-neutral-300 tracking-widest block ml-2">Active Pipeline Layer</label>
-        <div className="flex flex-wrap gap-2">
-            {subsets.map(s => (
-                <button
-                    key={s.id}
-                    onClick={() => onSelectSubset(s.id)}
-                    className={`px-4 py-2.5 rounded-xl text-[10px] font-black uppercase transition-all border min-h-[44px] ${dictActiveSubsetId === s.id ? 'bg-blue-600 border-blue-500 text-white shadow-lg shadow-blue-500/20' : 'bg-black/30 border-white/10 text-neutral-200 hover:text-white'}`}
-                    aria-label={`Activate layer ${s.name}`}
-                >
-                    {s.name}
-                </button>
-            ))}
+}: LibraryViewProps) => {
+  const [sortMode, setSortMode] = useState('reach' as TagSortMode);
+
+  const reach = useMemo(() => computeReach(uniqueTags), [uniqueTags]);
+  const activeSub = subsets.find(s => s.id === dictActiveSubsetId);
+
+  const matchCount = useMemo(() => {
+    const q = tagSearchQuery.trim().toLowerCase();
+    return q ? uniqueTags.filter(t => t.includes(q)).length : uniqueTags.length;
+  }, [uniqueTags, tagSearchQuery]);
+
+  /**
+   * Tags an earlier group in the waterfall already claims, mapped to that group's name.
+   *
+   * `parseLine` hands each subset only what upstream subsets left behind, so adding one of
+   * these to the current target changes nothing — the tag never reaches this stage. They're
+   * dimmed rather than hidden, since seeing *which* group took them is what tells you where
+   * the rule actually belongs.
+   */
+  const claimedUpstream = useMemo(() => {
+    const activeIdx = subsets.findIndex(s => s.id === dictActiveSubsetId);
+    const upstream = activeIdx < 0 ? [] : subsets.slice(0, activeIdx);
+    const map = new Map<string, string>();
+    if (upstream.length === 0) return map;
+    for (const tag of uniqueTags) {
+      const owner = upstream.find(s => subsetClaims(tag, s));
+      if (owner) map.set(tag, owner.name);
+    }
+    return map;
+  }, [subsets, dictActiveSubsetId, uniqueTags]);
+
+  const resolve = (tag: string): TagVisual => {
+    const isInc = !!activeSub?.keywords.includes(tag);
+    const isExc = !!activeSub?.excludeKeywords.includes(tag);
+    const isIncVar = !isInc && !!activeSub?.keywords.some(k => tag.includes(k.replace(/\{.*?\}/, '')));
+    const isExcVar = !isExc && !!activeSub?.excludeKeywords.some(k => tag.includes(k.replace(/\{.*?\}/, '')));
+
+    const tone = isInc ? 'include'
+      : isExc ? 'exclude'
+      : isIncVar ? 'include-soft'
+      : isExcVar ? 'exclude-soft'
+      : 'none';
+
+    const takenBy = claimedUpstream.get(tag);
+    return {
+      tone,
+      note: takenBy ? `Already claimed upstream by "${takenBy}" — this group never sees it` : undefined,
+      hint: /\{.*?\}/.test(tag) ? "Click 1: base | Click 2: full | Click 3: clear" : undefined,
+      // Only fade tags with no rule of their own here — an explicit include/exclude on the
+      // active group must stay legible even if it is currently unreachable.
+      dimmed: !!takenBy && !isInc && !isExc,
+    };
+  };
+
+  return (
+    <div className="flex-1 flex flex-col min-h-0 gap-1.5">
+      <div className="shrink-0 flex flex-wrap items-center gap-x-2 gap-y-1">
+        <span className={LABEL}>Target</span>
+        <div className="flex flex-wrap gap-1 min-w-0">
+          {subsets.map(s => (
+            <button
+              key={s.id}
+              onClick={() => onSelectSubset(s.id)}
+              className={`h-6 max-lg:h-10 px-2 rounded-md border text-[9px] font-black uppercase tracking-wide transition-colors ${
+                dictActiveSubsetId === s.id
+                  ? 'bg-blue-600 border-blue-500 text-white'
+                  : 'bg-neutral-950 border-white/10 text-neutral-300 hover:text-white hover:border-white/25'
+              }`}
+              aria-label={`Target group ${s.name}`}
+            >
+              {s.name}
+            </button>
+          ))}
         </div>
-      </div>
-      <div className="space-y-2">
-        <label className="text-[10px] font-black uppercase text-neutral-350 tracking-widest block ml-2">Action Mode</label>
-        <div className="flex bg-neutral-950 rounded-xl border border-white/5 p-1 shadow-inner min-h-[44px] items-center">
-            <button onClick={() => onActionModeChange('include')} className={`flex-1 py-2.5 min-h-[38px] flex items-center justify-center rounded-lg text-[10px] font-black uppercase transition-all ${dictActionMode === 'include' ? 'bg-blue-600 text-white shadow-md' : 'text-neutral-300 hover:text-white'}`}>Include (+)</button>
-            <button onClick={() => onActionModeChange('exclude')} className={`flex-1 py-2.5 min-h-[38px] flex items-center justify-center rounded-lg text-[10px] font-black uppercase transition-all ${dictActionMode === 'exclude' ? 'bg-red-600 text-white shadow-md' : 'text-neutral-300 hover:text-white'}`}>Exclude (-)</button>
+
+        <span className="w-px h-4 bg-white/10 shrink-0" aria-hidden="true" />
+
+        <div className="flex bg-neutral-950 border border-white/10 rounded-md p-0.5 shrink-0">
+          <button
+            onClick={() => onActionModeChange('include')}
+            className={`h-5 max-lg:h-9 px-2.5 rounded flex items-center text-[9px] font-black uppercase tracking-wide transition-colors ${dictActionMode === 'include' ? 'bg-blue-600 text-white' : 'text-neutral-400 hover:text-white'}`}
+          >
+            Include +
+          </button>
+          <button
+            onClick={() => onActionModeChange('exclude')}
+            className={`h-5 max-lg:h-9 px-2.5 rounded flex items-center text-[9px] font-black uppercase tracking-wide transition-colors ${dictActionMode === 'exclude' ? 'bg-red-600 text-white' : 'text-neutral-400 hover:text-white'}`}
+          >
+            Exclude −
+          </button>
         </div>
+
+        <TagSortToggle value={sortMode} onChange={setSortMode} />
+        <TagSearchField id="search-global-tags" value={tagSearchQuery} onChange={onSearchChange} placeholder="Filter unique tags…" />
+
+        <span className="text-[9px] font-mono text-neutral-500 tabular-nums shrink-0">
+          {matchCount}/{uniqueTags.length}
+        </span>
       </div>
-      <div className="space-y-2 relative">
-        <label className="text-[10px] font-black uppercase text-neutral-350 tracking-widest block ml-2" htmlFor="search-global-tags">Search Global Dataset</label>
-        <div className="relative">
-            <Search className="absolute left-4 top-1/2 -translate-y-1/2 w-4 h-4 text-neutral-400" />
-            <input
-              id="search-global-tags"
-              className="w-full bg-neutral-950 border border-white/5 focus:border-blue-500/50 rounded-xl pl-12 pr-4 py-2.5 text-xs font-bold text-white outline-none placeholder-neutral-600 shadow-inner min-h-[44px]"
-              value={tagSearchQuery}
-              onChange={e => onSearchChange(e.target.value)}
-              placeholder="Filter unique tags..."
-            />
-        </div>
-      </div>
+
+      <TagPickerGrid
+        tags={uniqueTags}
+        query={tagSearchQuery}
+        sortMode={sortMode}
+        reach={reach}
+        resolve={resolve}
+        onToggle={onToggleTag}
+        emptyMessage="No tags yet — import prompts to populate the library"
+      />
     </div>
-
-    {/* Library tag items layout */}
-    <div className="flex-1 overflow-y-auto bg-neutral-950 rounded-3xl border border-white/5 p-6 shadow-inner scrollbar-thin">
-        <div className="flex flex-wrap gap-2.5 content-start">
-        {uniqueTags.filter(t => t.toLowerCase().includes(tagSearchQuery.toLowerCase())).map(tag => {
-            const activeSub = subsets.find(s => s.id === dictActiveSubsetId);
-            const isInc = activeSub?.keywords.includes(tag);
-            const isExc = activeSub?.excludeKeywords.includes(tag);
-            const isIncVar = !isInc && activeSub?.keywords.some(k => tag.includes(k.replace(/\{.*?\}/, '')));
-            const isExcVar = !isExc && activeSub?.excludeKeywords.some(k => tag.includes(k.replace(/\{.*?\}/, '')));
-
-            let style = "bg-solid-card text-neutral-300 border-white/5 hover:bg-solid-active hover:text-white hover:border-blue-500/20";
-            let tooltip = "Toggle Tag Selection";
-            let indicator = null;
-
-            if (isIncVar) {
-              style = "bg-[#162235] text-blue-405 border-blue-500/20 border-dashed hover:bg-[#1f2e45]";
-              indicator = <div className="w-1.5 h-1.5 rounded-full bg-blue-500 animate-pulse" />;
-            }
-            if (!isInc && isExcVar) {
-              style = "bg-[#2d1217] text-red-405 border-red-500/20 border-dashed hover:bg-[#3d1820]";
-              indicator = <div className="w-1.5 h-1.5 rounded-full bg-red-500 animate-pulse" />;
-            }
-            if (isExc) {
-              style = "bg-red-600 border-red-500 text-white shadow-md font-black";
-              tooltip = "Explicitly Excluded";
-              indicator = <XCircle className="w-3.5 h-3.5 text-white" />;
-            }
-            if (isInc) {
-              style = "bg-blue-600 border-blue-500 text-white shadow-md font-black";
-              tooltip = "Explicitly Included";
-              indicator = <CheckCircle className="w-3.5 h-3.5 text-white" />;
-            }
-
-            const hasVar = /\{.*?\}/.test(tag);
-
-            return (
-              <button
-                key={tag}
-                title={hasVar ? "Click 1: Base | Click 2: Full | Click 3: Clear" : tooltip}
-                onClick={() => onToggleTag(tag)}
-                className={`px-4 py-2.5 rounded-2xl text-[11px] font-mono border transition-all active:scale-95 flex items-center gap-2 min-h-[44px] ${style}`}
-                aria-label={`Toggle tag ${tag}`}
-              >
-                {indicator}
-                {tag}
-              </button>
-            );
-        })}
-    </div></div>
-  </div>
-);
+  );
+};

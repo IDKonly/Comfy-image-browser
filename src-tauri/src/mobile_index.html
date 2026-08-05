@@ -694,17 +694,17 @@
             showToast('Saving image…');
         }
 
-        function loadMorePosts() {
+        function loadMorePosts(count) {
             if (state.renderedCount >= state.images.length) return;
             const container = $('feedContainer');
             const endMarker = $('feedEndMarker');
-            const end = Math.min(state.renderedCount + state.chunkSize, state.images.length);
-            for (let i = state.renderedCount; i < end; i++) {
+            const limit = count ? Math.min(state.renderedCount + count, state.images.length) : Math.min(state.renderedCount + state.chunkSize, state.images.length);
+            for (let i = state.renderedCount; i < limit; i++) {
                 const post = createPostElement(state.images[i], i);
                 container.insertBefore(post, endMarker);
                 if (state.visibilityObserver) state.visibilityObserver.observe(post);
             }
-            state.renderedCount = end;
+            state.renderedCount = limit;
             if (state.renderedCount >= state.images.length) endMarker.textContent = "✨ End of Feed";
         }
 
@@ -748,10 +748,14 @@
                 if (Array.isArray(latest)) {
                     const added = latest.filter(i => !state.knownPaths.has(i.path));
                     if (added.length) {
-                        added.forEach(i => state.knownPaths.add(i.path));
-                        state.images = state.images.concat(added);
-                        $('feedEndMarker').textContent = 'End of folder';
-                        loadMorePosts();
+                        if (state.live) {
+                            added.forEach(i => onLiveImage(i.path, i.name));
+                        } else {
+                            added.forEach(i => state.knownPaths.add(i.path));
+                            state.images = state.images.concat(added);
+                            $('feedEndMarker').textContent = 'End of folder';
+                            loadMorePosts();
+                        }
                     }
                 }
             } catch (_) {} finally { state.checkingNew = false; }
@@ -985,21 +989,61 @@
             state.liveSource = src; // EventSource auto-reconnects on transient errors
         }
 
+        let liveQueue = [];
+        let isLiveProcessing = false;
+
+        function processLiveQueue() {
+            if (isLiveProcessing || liveQueue.length === 0) return;
+            isLiveProcessing = true;
+            
+            const lastIdx = liveQueue.shift();
+            // Ensure posts are rendered 1 by 1 up to lastIdx
+            while (state.renderedCount <= lastIdx && state.renderedCount < state.images.length) {
+                loadMorePosts(1);
+            }
+            
+            const post = document.getElementById('post-' + lastIdx);
+            if (!post) {
+                isLiveProcessing = false;
+                processLiveQueue();
+                return;
+            }
+            const img = post.querySelector('.post-image');
+            
+            const doScroll = () => {
+                post.scrollIntoView({ behavior: 'smooth' });
+                state.visibleIndex = lastIdx;
+                updateCounter();
+                
+                // Allow time for smooth scroll to finish so visibilityObserver doesn't 
+                // incorrectly revert visibleIndex to a previous post and break atEdge logic.
+                setTimeout(() => {
+                    state.visibleIndex = lastIdx;
+                    updateCounter();
+                    isLiveProcessing = false;
+                    processLiveQueue();
+                }, 500);
+            };
+
+            if (img && !img.complete) {
+                img.addEventListener('load', doScroll, { once: true });
+                img.addEventListener('error', doScroll, { once: true });
+            } else {
+                doScroll();
+            }
+        }
+
         function onLiveImage(path, name) {
             if (!path || state.knownPaths.has(path)) return;
-            const atEdge = state.visibleIndex >= state.images.length - 1; // viewing the latest?
+            const atEdge = state.visibleIndex >= state.images.length - 1 || isLiveProcessing || liveQueue.length > 0;
             state.knownPaths.add(path);
             state.images.push({ path, name: name || path.split('/').pop() });
             $('feedEndMarker').textContent = 'End of folder';
+            
             if (atEdge) {
-                // Render forward to include the new post, then move focus to it.
-                while (state.renderedCount < state.images.length) loadMorePosts();
                 const lastIdx = state.images.length - 1;
-                const post = document.getElementById('post-' + lastIdx);
-                if (post) post.scrollIntoView({ behavior: 'smooth' });
-                // Optimistically mark the edge so a rapid burst keeps following.
-                state.visibleIndex = lastIdx;
-                updateCounter();
+                liveQueue.push(lastIdx);
+                processLiveQueue();
             }
         }
 

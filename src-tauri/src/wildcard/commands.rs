@@ -16,15 +16,44 @@ use crate::metadata::ImageMetadata;
 use crate::scanner::ImageInfo;
 use super::utils::split_prompt_tags;
 use super::expansion::expand_single_line;
-use super::classifier::{classify_prompts, ClassifierSubset, WordGroup, ClassificationResult};
+use super::classifier::{classify_prompts, classify_registers, ClassifierSubset, WordGroup, ClassificationResult, RegisterDef};
 
-#[tauri::command]
+// The corpus-scale classify commands are `(async)` so they run off the main
+// thread: the UI stays responsive, and the frontend can genuinely overlap the
+// independent subset/register/NSFW passes with Promise.all.
+#[tauri::command(async)]
 pub fn classify_prompts_command(
     lines: Vec<String>,
     subsets: Vec<ClassifierSubset>,
     word_groups: Vec<WordGroup>,
 ) -> Result<Vec<ClassificationResult>, String> {
     Ok(classify_prompts(lines, subsets, word_groups))
+}
+
+/// Assign each cleaned line to one scene register (priority waterfall). Returns
+/// one register id per line; 0 when no registers are defined. Used by the
+/// pipeline to partition output into per-register files and by the
+/// TagClassifier preview to badge each line.
+#[tauri::command(async)]
+pub fn classify_registers_command(lines: Vec<String>, registers: Vec<RegisterDef>) -> Vec<u64> {
+    classify_registers(lines, registers)
+}
+
+/// Judge each line NSFW/SFW with the shared `NsfwMatcher`, so the pipeline's
+/// lane split uses the exact same semantics as the mobile SFW feed and the
+/// `classify_nsfw` file-move action: whole-word + plural matching over the
+/// positive-prompt text only. Returns one bool per input line (true = NSFW).
+/// An empty `tags` list yields all-false (nothing is NSFW without keywords).
+#[tauri::command(async)]
+pub fn classify_nsfw_lines(lines: Vec<String>, tags: Vec<String>) -> Vec<bool> {
+    let matcher = crate::nsfw::NsfwMatcher::new(&tags);
+    if matcher.is_empty() {
+        return vec![false; lines.len()];
+    }
+    lines
+        .par_iter()
+        .map(|l| matcher.is_nsfw(Some(l), None))
+        .collect()
 }
 
 fn sync_newly_parsed_metadata(db_state: &tauri::State<'_, DbState>, paths_and_meta: &[(String, Option<ImageMetadata>)]) {
@@ -519,4 +548,28 @@ pub fn write_filter_file(app_handle: tauri::AppHandle, name: String, content: St
     }
     path.push(&name);
     std::fs::write(path, content).map_err(|e| e.to_string())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn classify_nsfw_lines_flags_per_line() {
+        let lines = vec![
+            "1girl, solo, blue dress, outdoors".to_string(),
+            "1girl, sex, indoors".to_string(),
+            "exposed nipples, blush".to_string(),
+        ];
+        let tags = vec!["sex".to_string(), "nipple".to_string()];
+        let flags = classify_nsfw_lines(lines, tags);
+        assert_eq!(flags, vec![false, true, true]);
+    }
+
+    #[test]
+    fn classify_nsfw_lines_empty_tags_all_false() {
+        let lines = vec!["sex".to_string(), "nude".to_string()];
+        let flags = classify_nsfw_lines(lines, vec![]);
+        assert_eq!(flags, vec![false, false]);
+    }
 }

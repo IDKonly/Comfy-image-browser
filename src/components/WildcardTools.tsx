@@ -1,21 +1,22 @@
-import { useState, useEffect, useRef } from "react";
+import { useState, useEffect, useRef, useMemo } from "react";
 import { api } from "../api";
 import { settingsStore } from "../api/settings";
 import { listen } from "@tauri-apps/api/event";
 import { open, save } from "@tauri-apps/plugin-dialog";
-import { X, Wand2, ListFilter, GitMerge } from "lucide-react";
+import { Wand2, ListFilter, LayoutGrid, FilePlus, FolderPlus, Play, RefreshCw, PanelRight, Trash2, FileUp } from "lucide-react";
 import { useToast } from "./Toast";
 import { TagRefiner } from "./TagRefiner";
 import { useAppStore, FilterState } from "../store/useAppStore";
-import { splitLines, splitCommaOrNewline, splitCommaTrimNonEmpty, splitPromptTags, uniqueMerge } from "./wildcardtools/utils";
+import { splitLines, splitCommaOrNewline, splitPromptTags, uniqueMerge } from "./wildcardtools/utils";
 import { MergeFilterModal } from "./wildcardtools/MergeFilterModal";
+import { InputRail, InputTab } from "./wildcardtools/InputRail";
 import { TargetImagesPanel } from "./wildcardtools/TargetImagesPanel";
 import { TextPromptsPanel } from "./wildcardtools/TextPromptsPanel";
 import { CleaningBaseCard } from "./wildcardtools/CleaningBaseCard";
 import { WorkshopSettings } from "./wildcardtools/WorkshopSettings";
 import { ExclusionFiltersSection } from "./wildcardtools/ExclusionFiltersSection";
 import { WorkshopResults } from "./wildcardtools/WorkshopResults";
-import { PipelinePanel } from "./wildcardtools/PipelinePanel";
+import { ToolShell, ICON_BTN, BAR_BTN, BAR_BTN_GHOST } from "./ui";
 
 interface WildcardToolsProps {
   onClose: () => void;
@@ -25,7 +26,8 @@ interface WildcardToolsProps {
 }
 
 export const WildcardTools = ({ onClose, images, currentIndex, batchRange }: WildcardToolsProps) => {
-  const [activeTab, setActiveTab] = useState<'workshop' | 'pipeline'>('workshop');
+  const [inputTab, setInputTab] = useState<InputTab>('images');
+  const [isResultsOpen, setIsResultsOpen] = useState(true);
   const [threshold, setThreshold] = useState(0.5);
   const [results, setResults] = useState<string[]>([]);
   const [loading, setLoading] = useState(false);
@@ -44,6 +46,7 @@ export const WildcardTools = ({ onClose, images, currentIndex, batchRange }: Wil
 
   const [showRefiner, setShowRefiner] = useState(false);
   const [tagCounts, setTagCounts] = useState<Record<string, number>>({});
+  const [scanningTags, setScanningTags] = useState(false);
   const [mergeTarget, setMergeTarget] = useState<keyof FilterState | null>(null);
   const isLoaded = useRef(false);
 
@@ -101,7 +104,10 @@ export const WildcardTools = ({ onClose, images, currentIndex, batchRange }: Wil
             try {
               const content = await api.readFilterFile(file.name);
               if (content) {
-                (loadedFilter as any)[file.key] = splitCommaTrimNonEmpty(content);
+                // Newline-separated too — hand-maintained default_*.txt files are commonly
+                // written one tag per line, and comma-only splitting glued those into a
+                // single unmatchable entry.
+                (loadedFilter as any)[file.key] = splitCommaOrNewline(content);
               }
             } catch (e) {}
           }
@@ -288,30 +294,55 @@ export const WildcardTools = ({ onClose, images, currentIndex, batchRange }: Wil
     }
   };
 
+  /**
+   * Every tag the current input contains, with occurrence counts.
+   *
+   * Backed by a command over the image paths, so it is pulled on demand rather than kept
+   * live: the Refine dialog fetches it when opened, and the exclusion picker when its
+   * section is expanded or explicitly rescanned.
+   */
+  const scanInputTags = async (): Promise<Record<string, number>> => {
+    let counts: Record<string, number> = {};
+    if (targetPaths.length > 0) {
+      counts = await api.getTagCounts(targetPaths);
+    }
+    // Merge counts from text prompts
+    splitLines(textInput).forEach(p => {
+      splitPromptTags(p).forEach(tag => {
+        counts[tag] = (counts[tag] || 0) + 1;
+      });
+    });
+    return counts;
+  };
+
+  const rescanInputTags = async () => {
+    setScanningTags(true);
+    try {
+      setTagCounts(await scanInputTags());
+    } catch (e: any) {
+      showToast(e.toString(), "error");
+    } finally {
+      setScanningTags(false);
+    }
+  };
+
   const openRefiner = async () => {
     setLoading(true);
     try {
-      // Fetch counts from images
-      let counts: Record<string, number> = {};
-      if (targetPaths.length > 0) {
-        counts = await api.getTagCounts(targetPaths);
-      }
-
-      // Merge counts from text prompts
-      const prompts = splitLines(textInput);
-      prompts.forEach(p => {
-          splitPromptTags(p).forEach(tag => {
-              counts[tag] = (counts[tag] || 0) + 1;
-          });
-      });
-
-      setTagCounts(counts);
+      setTagCounts(await scanInputTags());
       setShowRefiner(true);
     } catch (e: any) {
       showToast(e.toString(), "error");
     } finally {
       setLoading(false);
     }
+  };
+
+  /** Pull the tag universe the first time the exclusion picker is revealed. */
+  const toggleFilters = () => {
+    const next = !showFilters;
+    setShowFilters(next);
+    if (next && Object.keys(tagCounts).length === 0 && !scanningTags) rescanInputTags();
   };
 
   const saveFilterList = async (key: keyof FilterState, filename: string) => {
@@ -351,129 +382,147 @@ export const WildcardTools = ({ onClose, images, currentIndex, batchRange }: Wil
 
   const clearPaths = () => setTargetPaths([]);
 
+  const textLineCount = splitLines(textInput).length;
+  const hasInput = targetPaths.length > 0 || textInput.trim() !== "";
+
+  // Sorted, lowercased tag universe for the exclusion picker. The filter lists are matched
+  // case-sensitively by the backend against tags that arrive lowercased, so folding here
+  // keeps the grid's membership checks aligned with what the run will actually do.
+  const inputTags = useMemo(
+    () => Array.from(new Set(Object.keys(tagCounts).map(t => t.toLowerCase()))).sort(),
+    [tagCounts]
+  );
+
   return (
-    <div className="fixed inset-0 z-50 bg-black/60 backdrop-blur-md flex items-center justify-center p-4 animate-in fade-in duration-200">
-      <div data-wildcard-modal className="bg-neutral-900 border border-white/10 rounded-3xl w-full max-w-6xl h-[90vh] shadow-2xl overflow-hidden flex flex-col">
-        {/* Header */}
-        <div className="p-6 border-b border-white/5 flex items-center justify-between shrink-0">
-          <div className="flex items-center gap-3">
-            <div className="w-10 h-10 bg-blue-600/20 rounded-xl flex items-center justify-center">
-              {activeTab === 'workshop' ? <Wand2 className="w-5 h-5 text-blue-500" /> : <GitMerge className="w-5 h-5 text-blue-500" />}
-            </div>
-            <div className="min-w-0">
-              <h2 className="text-sm font-black uppercase tracking-widest truncate">
-                {activeTab === 'workshop' ? 'Wildcard Workshop' : 'Auto Pipeline'}
-              </h2>
-              <p className="text-[10px] text-neutral-300 font-bold uppercase truncate">
-                {activeTab === 'workshop' ? 'Mixed Input Analysis (Images + Text)' : 'Extract → Clean → Classify → Save'}
-              </p>
-            </div>
-          </div>
-          <div className="flex items-center gap-2 shrink-0">
-            {/* Tab switcher */}
-            <div className="flex bg-neutral-800 rounded-xl p-1 border border-white/5">
-              <button
-                onClick={() => setActiveTab('workshop')}
-                className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-[10px] font-black uppercase tracking-widest transition-colors ${activeTab === 'workshop' ? 'bg-blue-600 text-white' : 'text-neutral-400 hover:text-white'}`}
-              >
-                <Wand2 className="w-3 h-3" /> Workshop
-              </button>
-              <button
-                onClick={() => setActiveTab('pipeline')}
-                className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-[10px] font-black uppercase tracking-widest transition-colors ${activeTab === 'pipeline' ? 'bg-blue-600 text-white' : 'text-neutral-400 hover:text-white'}`}
-              >
-                <GitMerge className="w-3 h-3" /> Pipeline
-              </button>
-            </div>
-            <button onClick={onClose} className="w-11 h-11 flex items-center justify-center hover:bg-white/5 rounded-full transition-colors">
-              <X className="w-5 h-5" />
-            </button>
-          </div>
-        </div>
+    <>
+    <ToolShell
+      onClose={onClose}
+      title="Wildcard Workshop"
+      icon={<Wand2 className="w-3.5 h-3.5 text-blue-500" />}
+      panelProps={{ "data-wildcard-modal": "" } as any}
+      headerActions={
+        <button
+          onClick={() => setIsResultsOpen(!isResultsOpen)}
+          className={`${ICON_BTN} hidden lg:flex ${isResultsOpen ? 'text-blue-400' : ''}`}
+          title={isResultsOpen ? "Hide results" : "Show results"}
+          aria-label={isResultsOpen ? "Hide results" : "Show results"}
+          aria-pressed={isResultsOpen}
+        >
+          <PanelRight className="w-3.5 h-3.5" />
+        </button>
+      }
+      status={
+        <>
+          <span className="tabular-nums whitespace-nowrap">
+            {targetPaths.length} images · {textLineCount} text lines · {results.length} results
+          </span>
+          <div className="flex-1" />
+          {loading && <span className="text-blue-400 tabular-nums shrink-0">Processing {progress.toFixed(0)}%</span>}
+        </>
+      }
+    >
+      {/* Desktop: three side-by-side rails. Below `lg` the same three regions stack into one
+          scrolling column — the rails are never duplicated, only re-flowed. */}
+      <div className="flex flex-1 min-h-0 overflow-hidden max-lg:flex-col max-lg:overflow-y-auto max-lg:scrollbar-thin">
+        {/* Left Rail: input sources (tabbed) */}
+        <aside className="w-full lg:w-[272px] shrink-0 flex flex-col min-h-0 max-lg:h-72 bg-solid-nested lg:border-r max-lg:border-b border-white/5">
+          <InputRail
+            activeTab={inputTab}
+            counts={{ images: targetPaths.length, text: textLineCount }}
+            onTabChange={setInputTab}
+            actions={
+              inputTab === 'images' ? (
+                <>
+                  <button onClick={handleImportFromViewer} className={`${BAR_BTN} bg-blue-600/10 hover:bg-blue-600/25 text-blue-400 border-blue-500/25`} title="Import the current viewer selection">
+                    <LayoutGrid className="w-3 h-3" /> Viewer
+                  </button>
+                  <button onClick={handleAddFiles} className={ICON_BTN} title="Add image files" aria-label="Add image files"><FilePlus className="w-3.5 h-3.5" /></button>
+                  <button onClick={handleAddFolder} className={ICON_BTN} title="Add a folder" aria-label="Add a folder"><FolderPlus className="w-3.5 h-3.5" /></button>
+                  {targetPaths.length > 0 && (
+                    <button onClick={clearPaths} className={ICON_BTN} title="Clear image list" aria-label="Clear image list"><Trash2 className="w-3.5 h-3.5" /></button>
+                  )}
+                </>
+              ) : (
+                <>
+                  <button onClick={handleLoadTextFile} className={ICON_BTN} title="Load prompts from a .txt file" aria-label="Load prompts from file"><FileUp className="w-3.5 h-3.5" /></button>
+                  {textInput !== "" && (
+                    <button onClick={() => setTextInput("")} className={ICON_BTN} title="Clear text prompts" aria-label="Clear text prompts"><Trash2 className="w-3.5 h-3.5" /></button>
+                  )}
+                </>
+              )
+            }
+          >
+            {inputTab === 'images'
+              ? <TargetImagesPanel paths={targetPaths} onRemove={removePath} />
+              : <TextPromptsPanel value={textInput} onChange={setTextInput} />}
+          </InputRail>
+        </aside>
 
-        {activeTab === 'pipeline' && (
-          <div className="flex-1 overflow-y-auto scrollbar-thin">
-            <PipelinePanel />
-          </div>
-        )}
-
-        <div className={`flex flex-col lg:flex-row flex-1 overflow-y-auto lg:overflow-hidden scrollbar-thin ${activeTab !== 'workshop' ? 'hidden' : ''}`}>
-          {/* Combined Sidebar */}
-          <div className="w-full lg:w-80 border-b lg:border-b-0 lg:border-r border-white/5 flex flex-col bg-solid-nested shrink-0">
-            <TargetImagesPanel
-              paths={targetPaths}
-              onClear={clearPaths}
-              onImportFromViewer={handleImportFromViewer}
-              onAddFiles={handleAddFiles}
-              onAddFolder={handleAddFolder}
-              onRemove={removePath}
+        {/* Center: run configuration */}
+        <section className="flex-1 min-w-0 flex flex-col bg-solid-surface-elevated max-lg:shrink-0">
+          <div className="flex-1 min-h-0 overflow-y-auto scrollbar-thin p-1.5 space-y-1.5 max-lg:overflow-visible">
+            <CleaningBaseCard
+              comparisonPath={comparisonPath}
+              onClearComparisonPath={() => setComparisonPath(null)}
+              comparisonText={comparisonText}
+              onComparisonTextChange={setComparisonText}
             />
-            <TextPromptsPanel
-              value={textInput}
-              onChange={setTextInput}
-              onImport={handleLoadTextFile}
-              onClear={() => setTextInput("")}
+
+            <WorkshopSettings
+              threshold={threshold}
+              onThresholdChange={setThreshold}
+              filter={filter}
+              onFilterChange={setFilter}
+            />
+
+            <ExclusionFiltersSection
+              open={showFilters}
+              onToggle={toggleFilters}
+              filter={filter}
+              onFilterChange={setFilter}
+              onMergeTarget={setMergeTarget}
+              onSaveFilterList={saveFilterList}
+              uniqueTags={inputTags}
+              onRescan={rescanInputTags}
+              scanning={scanningTags}
             />
           </div>
 
-          {/* Main Content Area */}
-          <div className="w-full lg:flex-1 flex flex-col lg:overflow-hidden bg-solid-surface-elevated">
-            <div className="p-6 flex-1 lg:overflow-y-auto space-y-6 scrollbar-thin">
-
-              {/* Progress Bar Area */}
-              {loading && (
-                <div className="space-y-2 animate-in fade-in duration-300">
-                    <div className="flex justify-between text-[10px] font-black uppercase text-blue-400">
-                        <span>Unified Processing...</span>
-                        <span>{progress.toFixed(0)}%</span>
-                    </div>
-                    <div className="w-full h-1.5 bg-neutral-950 rounded-full overflow-hidden border border-white/5">
-                        <div className="h-full bg-blue-600 transition-all duration-300 ease-out" style={{ width: `${progress}%` }} />
-                    </div>
-                </div>
-              )}
-
-              <CleaningBaseCard
-                comparisonPath={comparisonPath}
-                onClearComparisonPath={() => setComparisonPath(null)}
-                comparisonText={comparisonText}
-                onComparisonTextChange={setComparisonText}
-              />
-
-              <WorkshopSettings
-                threshold={threshold}
-                onThresholdChange={setThreshold}
-                filter={filter}
-                onFilterChange={setFilter}
-              />
-
-              {/* Action Button & Refiner */}
-              <div className="flex gap-3">
-                <button
-                    onClick={runWorkshop} disabled={loading || (targetPaths.length === 0 && textInput.trim() === "")}
-                    className="flex-1 py-4 bg-blue-600 hover:bg-blue-500 disabled:opacity-50 disabled:cursor-not-allowed rounded-2xl text-[11px] font-black uppercase tracking-widest transition-all shadow-xl active:scale-95 text-white"
-                >
-                    {loading ? "Processing..." : `Generate Wildcards (${targetPaths.length} Images + ${splitLines(textInput).length} Text)`}
-                </button>
-                <button onClick={openRefiner} disabled={targetPaths.length === 0 && textInput.trim() === ""} className="px-6 py-4 bg-neutral-800 hover:bg-neutral-700 disabled:opacity-50 rounded-2xl text-[11px] font-black uppercase tracking-widest transition-all text-neutral-300" title="Manage Exclusions">
-                    <ListFilter className="w-4 h-4" />
-                </button>
+          {/* Action bar */}
+          <div className="shrink-0 border-t border-white/5 bg-solid-panel p-1.5">
+            {loading && (
+              <div className="h-0.5 mb-1.5 bg-neutral-950 rounded-full overflow-hidden">
+                <div className="h-full bg-blue-600 transition-all duration-300 ease-out" style={{ width: `${progress}%` }} />
               </div>
-
-              <ExclusionFiltersSection
-                open={showFilters}
-                onToggle={() => setShowFilters(!showFilters)}
-                filter={filter}
-                onFilterChange={setFilter}
-                onMergeTarget={setMergeTarget}
-                onSaveFilterList={saveFilterList}
-              />
-
-              <WorkshopResults results={results} onCopy={copyToClipboard} onExport={handleExport} />
+            )}
+            <div className="flex items-center gap-1.5">
+              <button
+                onClick={runWorkshop}
+                disabled={loading || !hasInput}
+                className="flex-1 h-8 max-lg:h-12 flex items-center justify-center gap-1.5 bg-blue-600 hover:bg-blue-500 disabled:opacity-40 disabled:cursor-not-allowed rounded-md text-[10px] font-black uppercase tracking-wide text-white transition-colors active:scale-[0.99]"
+              >
+                {loading
+                  ? <><RefreshCw className="w-3.5 h-3.5 animate-spin" /> Processing…</>
+                  : <><Play className="w-3.5 h-3.5" /> Generate wildcards ({targetPaths.length} img + {textLineCount} text)</>}
+              </button>
+              <button
+                onClick={openRefiner}
+                disabled={!hasInput}
+                className={`${BAR_BTN} ${BAR_BTN_GHOST} h-8 max-lg:h-12 disabled:opacity-40`}
+                title="Refine exclusions from the tags present in the current input"
+              >
+                <ListFilter className="w-3.5 h-3.5" /> Refine
+              </button>
             </div>
           </div>
-        </div>
+        </section>
+
+        {/* Right Rail: results */}
+        <aside className={`shrink-0 min-h-0 flex-col bg-solid-nested overflow-hidden flex w-full max-lg:h-96 max-lg:border-t border-white/5 ${isResultsOpen ? 'lg:flex lg:w-[320px] lg:border-l' : 'lg:hidden'}`}>
+          <WorkshopResults results={results} onCopy={copyToClipboard} onExport={handleExport} />
+        </aside>
       </div>
+    </ToolShell>
 
       {showRefiner && (
         <TagRefiner
@@ -504,6 +553,6 @@ export const WildcardTools = ({ onClose, images, currentIndex, batchRange }: Wil
             onClose={() => setMergeTarget(null)}
         />
       )}
-    </div>
+    </>
   );
 };

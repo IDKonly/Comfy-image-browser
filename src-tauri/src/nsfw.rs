@@ -44,12 +44,17 @@ impl NsfwMatcher {
         self.regexes.is_empty()
     }
 
+    /// Match against text the caller has already lowercased — lets hot loops that
+    /// probe several matchers per line lowercase the line once instead of per probe.
+    pub fn matches_lowercase(&self, lower: &str) -> bool {
+        self.regexes.iter().any(|re| re.is_match(lower))
+    }
+
     fn matches_text(&self, text: &str) -> bool {
         if self.regexes.is_empty() {
             return false;
         }
-        let lower = text.to_lowercase();
-        self.regexes.iter().any(|re| re.is_match(&lower))
+        self.matches_lowercase(&text.to_lowercase())
     }
 
     /// NSFW is judged from the POSITIVE prompt and the filename only — never the negative
