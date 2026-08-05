@@ -2,6 +2,75 @@ use serde::{Deserialize, Serialize};
 use rayon::prelude::*;
 use regex::Regex;
 
+use crate::nsfw::NsfwMatcher;
+
+/// A whole-line scene register (see the TS `Register` type). Judged over the full
+/// cleaned prompt with the shared whole-word + plural matcher.
+#[derive(Debug, Serialize, Deserialize, Clone)]
+#[serde(rename_all = "camelCase")]
+pub struct RegisterDef {
+    pub id: u64,
+    pub name: String,
+    pub keywords: Vec<String>,
+    pub exclude_keywords: Vec<String>,
+    #[serde(default)]
+    pub is_fallback: bool,
+}
+
+struct PreparedRegister {
+    id: u64,
+    include: NsfwMatcher,
+    exclude: NsfwMatcher,
+    is_fallback: bool,
+}
+
+/// Assign each line to exactly one register id via a priority waterfall in the
+/// given order: the first register whose include keywords match and whose exclude
+/// keywords don't wins. When nothing matches, the first `is_fallback` register
+/// (or the last register) claims the line. Returns 0 if `registers` is empty.
+pub fn classify_registers(lines: Vec<String>, registers: Vec<RegisterDef>) -> Vec<u64> {
+    if registers.is_empty() {
+        return vec![0; lines.len()];
+    }
+
+    let prepared: Vec<PreparedRegister> = registers
+        .iter()
+        .map(|r| PreparedRegister {
+            id: r.id,
+            include: NsfwMatcher::new(&r.keywords),
+            exclude: NsfwMatcher::new(&r.exclude_keywords),
+            is_fallback: r.is_fallback,
+        })
+        .collect();
+
+    // `prepared` is non-empty here, so `last().unwrap()` is infallible.
+    let fallback_id = prepared
+        .iter()
+        .find(|p| p.is_fallback)
+        .unwrap_or_else(|| prepared.last().unwrap())
+        .id;
+
+    lines
+        .par_iter()
+        .map(|line| {
+            // Lowercase once per line; each register probe reuses the shared
+            // whole-word/plural matcher over the same lowered text.
+            let lower = line.to_lowercase();
+            for p in &prepared {
+                if p.is_fallback {
+                    continue;
+                }
+                let included = p.include.matches_lowercase(&lower);
+                let excluded = !p.exclude.is_empty() && p.exclude.matches_lowercase(&lower);
+                if included && !excluded {
+                    return p.id;
+                }
+            }
+            fallback_id
+        })
+        .collect()
+}
+
 #[derive(Debug, Serialize, Deserialize, Clone)]
 #[serde(rename_all = "camelCase")]
 pub struct ClassifierSubset {
@@ -182,6 +251,60 @@ mod tests {
         
         // Line 2: "multiple girls" should prevent "Solo Girls" (exclude_keywords)
         assert_eq!(results[1].data[0].matches.len(), 0); 
+    }
+
+    fn reg(id: u64, name: &str, kw: &[&str], excl: &[&str], fallback: bool) -> RegisterDef {
+        RegisterDef {
+            id,
+            name: name.to_string(),
+            keywords: kw.iter().map(|s| s.to_string()).collect(),
+            exclude_keywords: excl.iter().map(|s| s.to_string()).collect(),
+            is_fallback: fallback,
+        }
+    }
+
+    #[test]
+    fn registers_waterfall_priority_and_fallback() {
+        let registers = vec![
+            reg(1, "explicit", &["sex", "cum"], &[], false),
+            reg(2, "exposure", &["nude", "nipple"], &[], false),
+            reg(3, "daily", &[], &[], true),
+        ];
+        let lines = vec![
+            "after sex, cum in pussy, nipples".to_string(), // both explicit & exposure -> explicit wins (order)
+            "completely nude, nipples, blush".to_string(),  // exposure only
+            "1girl, blue dress, outdoors".to_string(),      // neither -> daily fallback
+        ];
+        let ids = classify_registers(lines, registers);
+        assert_eq!(ids, vec![1, 2, 3]);
+    }
+
+    #[test]
+    fn registers_exclude_vetoes_match() {
+        let registers = vec![
+            reg(1, "exposure", &["nude"], &["completely nude"], false),
+            reg(2, "daily", &[], &[], true),
+        ];
+        // "completely nude" contains "nude" but is vetoed -> falls through to daily.
+        let ids = classify_registers(vec!["completely nude, blush".to_string()], registers);
+        assert_eq!(ids, vec![2]);
+    }
+
+    #[test]
+    fn registers_empty_returns_zeros() {
+        let ids = classify_registers(vec!["anything".to_string()], vec![]);
+        assert_eq!(ids, vec![0]);
+    }
+
+    #[test]
+    fn registers_no_fallback_uses_last() {
+        let registers = vec![
+            reg(1, "explicit", &["sex"], &[], false),
+            reg(2, "exposure", &["nude"], &[], false),
+        ];
+        // No match, no fallback -> last register (id 2) claims it.
+        let ids = classify_registers(vec!["1girl, dress".to_string()], registers);
+        assert_eq!(ids, vec![2]);
     }
 
     #[test]

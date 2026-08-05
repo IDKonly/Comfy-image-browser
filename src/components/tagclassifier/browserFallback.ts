@@ -1,7 +1,7 @@
 import { invoke } from "@tauri-apps/api/core";
 import { open, save, confirm } from "@tauri-apps/plugin-dialog";
 import { LazyStore } from "@tauri-apps/plugin-store";
-import { mkdir, exists, readDir, remove, readTextFile, writeTextFile } from "@tauri-apps/plugin-fs";
+import { mkdir, exists, readDir, remove, readTextFile, writeTextFile, BaseDirectory } from "@tauri-apps/plugin-fs";
 import { settingsStore } from "../../api/settings";
 
 // Browser/Tauri compatibility layer for the Tag Classifier. When running inside the
@@ -10,8 +10,14 @@ import { settingsStore } from "../../api/settings";
 // NOTE: tauriInvokeMock intentionally calls raw `invoke` (rather than the typed api layer)
 // because it is a generic command dispatcher with a browser mock branch.
 
-// Check if we are running inside the native Tauri container
-export const isTauri = typeof window !== 'undefined' && (window as any).__TAURI__ !== undefined;
+// Check if we are running inside the native Tauri container.
+// NOTE: must probe `__TAURI_INTERNALS__`, NOT `__TAURI__`. The latter is only injected
+// when `app.withGlobalTauri` is enabled in tauri.conf.json (it is not), so probing it
+// made every wrapper below silently take the browser-mock branch inside the real app —
+// Direct/Filtered Import returned hardcoded sample prompts, Compile ran the JS port
+// instead of the Rust classifier, and config was written to localStorage instead of
+// `.settings.json`. `src/api/tauriMock.ts` already probes the correct global.
+export const isTauri = typeof window !== 'undefined' && (window as any).__TAURI_INTERNALS__ !== undefined;
 
 // Mock Store for standard web browser environment (auditing/testing fallback)
 class BrowserStore {
@@ -46,6 +52,56 @@ export const classifierStore = isTauri
 const legacyClassifierStore = isTauri
   ? new LazyStore(".tag_classifier.json")
   : new BrowserStore(".tag_classifier.json") as any;
+
+const PRESET_SUBDIR = "classifier_presets";
+const RESCUE_DONE_KEY = "classifier_localstorage_rescued";
+
+/**
+ * Rescues config that the broken `isTauri` probe stranded in localStorage.
+ *
+ * While `isTauri` wrongly evaluated to false inside the desktop app, `classifierStore`
+ * resolved to the BrowserStore fallback and `fsWriteTextFile` to the localStorage branch,
+ * so real user config was written to:
+ *   - `.settings.json:<key>`      (subsets / wordGroups / registers / last_preset)
+ *   - `browser_preset:<name>`     (saved presets)
+ * Now that the probe is fixed those reads go to the real store/AppData, which would look
+ * empty. This copies the stranded values across once. Non-destructive: existing file-backed
+ * values always win, and the localStorage entries are left in place.
+ */
+export async function rescueStrandedBrowserConfig(): Promise<void> {
+  if (!isTauri || typeof localStorage === "undefined") return;
+  try {
+    if (await settingsStore.get(RESCUE_DONE_KEY)) return;
+
+    // 1. Config keys -> shared .settings.json
+    for (const key of ["subsets", "wordGroups", "registers", "last_preset"]) {
+      const raw = localStorage.getItem(`.settings.json:${key}`);
+      if (raw == null) continue;
+      if ((await settingsStore.get(key)) != null) continue; // real store already wins
+      try { await settingsStore.set(key, JSON.parse(raw)); } catch { /* skip corrupt entry */ }
+    }
+
+    // 2. Saved presets -> AppData/classifier_presets/<name>.json
+    const presetKeys = Object.keys(localStorage).filter(k => k.startsWith("browser_preset:"));
+    if (presetKeys.length > 0) {
+      if (!(await exists(PRESET_SUBDIR, { baseDir: BaseDirectory.AppData }))) {
+        await mkdir(PRESET_SUBDIR, { baseDir: BaseDirectory.AppData, recursive: true });
+      }
+      for (const k of presetKeys) {
+        const name = k.slice("browser_preset:".length);
+        const target = `${PRESET_SUBDIR}/${name}.json`;
+        if (await exists(target, { baseDir: BaseDirectory.AppData })) continue;
+        const content = localStorage.getItem(k);
+        if (content) await writeTextFile(target, content, { baseDir: BaseDirectory.AppData });
+      }
+    }
+
+    await settingsStore.set(RESCUE_DONE_KEY, true);
+    await settingsStore.save();
+  } catch (e) {
+    console.error("[classifier] localStorage rescue failed", e);
+  }
+}
 
 /**
  * One-time, non-destructive migration of classifier config from the legacy
@@ -175,7 +231,12 @@ export const tauriInvokeMock = async (cmd: string, args?: Record<string, any>): 
     return await invoke(cmd, args);
   }
 
-  // Browser fallback mockup data
+  // Browser fallback mockup data — DEV-only. A production build that somehow reaches
+  // this branch must fail loudly rather than hand the caller sample prompts that look real.
+  if (!import.meta.env.DEV) {
+    throw new Error(`Not running inside Tauri — '${cmd}' is unavailable`);
+  }
+
   if (cmd === "get_all_prompts") {
     return [
       "1girl, masterpiece, cinematic lighting, purple eyes, long hair, beautiful face, standing, outdoors, sunset, glowing light, high detail",

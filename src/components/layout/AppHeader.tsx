@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { FolderOpen, Layers, Wand2, Dices, Settings, Database, LayoutGrid, Columns, Square, ChevronDown, Clock, Check, ShieldAlert, ArrowLeftRight } from "lucide-react";
+import { FolderOpen, Layers, Wand2, Dices, Settings, Database, LayoutGrid, Columns, Square, ChevronDown, Clock, Check, ShieldAlert, Wrench } from "lucide-react";
 import { ViewMode } from "../../store/useAppStore";
 
 interface AppHeaderProps {
@@ -7,7 +7,7 @@ interface AppHeaderProps {
   setViewMode: (v: ViewMode) => void;
   setShowWildcards: (v: boolean) => void;
   setShowTagClassifier: (v: boolean) => void;
-  setShowConverter: (v: boolean) => void;
+  setShowToolkit: (v: boolean) => void;
   recursive: boolean;
   setRecursive: (v: boolean) => void;
   handleRandom: () => void;
@@ -32,7 +32,7 @@ export const AppHeader = ({
   setViewMode,
   setShowWildcards,
   setShowTagClassifier,
-  setShowConverter,
+  setShowToolkit,
   recursive,
   setRecursive,
   handleRandom,
@@ -170,10 +170,11 @@ export const AppHeader = ({
             <Database className="w-3.5 h-3.5 text-indigo-400" /> Classifier
           </button>
           <button
-            onClick={() => setShowConverter(true)}
+            onClick={() => setShowToolkit(true)}
+            title="Pipeline · Prompt Generator · Image Converter"
             className="flex items-center gap-1.5 px-4 py-2 min-h-[44px] h-11 rounded-lg border border-transparent text-[9px] font-bold uppercase transition-all shrink-0 text-neutral-400 hover:bg-neutral-800 hover:border-white/5 hover:text-white"
           >
-            <ArrowLeftRight className="w-3.5 h-3.5 text-emerald-400" /> Convert
+            <Wrench className="w-3.5 h-3.5 text-emerald-400" /> Toolkit
           </button>
         </div>
  

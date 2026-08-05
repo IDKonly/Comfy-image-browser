@@ -3,6 +3,7 @@ import { api, assetSrc } from "./api";
 import { runWildcardPipeline } from "./api/wildcardPipeline";
 import { settingsStore } from "./api/settings";
 import type { WildcardPipelineSettings } from "./store/types";
+import { DEFAULT_PIPELINE_SETTINGS } from "./store/types";
 import { open, confirm, message } from "@tauri-apps/plugin-dialog";
 import { listen } from "@tauri-apps/api/event";
 import { Image as ImageIcon, ChevronLeft, ChevronRight, Filter } from "lucide-react";
@@ -16,7 +17,7 @@ import { TagRefiner } from "./components/TagRefiner";
 import { splitPromptTags } from "./components/wildcardtools/utils";
 import { BatchCropModule } from "./components/BatchCropModule";
 import { TagClassifier } from "./components/TagClassifier";
-import { ConvertPanel } from "./components/ConvertPanel";
+import { ToolkitPanel } from "./components/toolkit/ToolkitPanel";
 
 // New Modular Components
 import { Thumbnail, scheduleThumbnailGeneration } from "./components/Thumbnail";
@@ -273,7 +274,7 @@ function App() {
   const [showDebug, setShowDebug] = useState(false);
   const [showBatchCrop, setShowBatchCrop] = useState(false);
   const [showTagClassifier, setShowTagClassifier] = useState(false);
-  const [showConverter, setShowConverter] = useState(false);
+  const [showToolkit, setShowToolkit] = useState(false);
   const [activeFilters, setActiveFilters] = useState({ model: "", sampler: "" });
   const [reloadTimestamp, setReloadTimestamp] = useState<number>(0);
   const [showViewerRefiner, setShowViewerRefiner] = useState(false);
@@ -557,7 +558,15 @@ function App() {
           if (pipelineCfg?.autoRunOnScan && pipelineCfg.sourceFolder && pipelineCfg.outputFolder) {
             const state = useAppStore.getState();
             showToast('Auto Pipeline: starting...', 'info');
-            runWildcardPipeline({ ...pipelineCfg, workshopFilter: state.workshopFilter }, () => {})
+            runWildcardPipeline(
+              {
+                ...DEFAULT_PIPELINE_SETTINGS,
+                ...pipelineCfg,
+                workshopFilter: state.workshopFilter,
+                nsfwTags: state.mobileServerSettings.nsfwTags,
+              },
+              () => {}
+            )
               .then(r => showToast(`Auto Pipeline: ${r.savedFiles.length} file(s) saved`, 'success'))
               .catch(e => showToast(`Auto Pipeline failed: ${e?.message ?? e}`, 'error'));
           }
@@ -701,7 +710,7 @@ function App() {
   // Shortcuts
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
-      if (document.activeElement?.tagName === 'INPUT' || document.activeElement?.tagName === 'TEXTAREA' || showSettings || showWildcards || showBatchCrop || showViewerRefiner || showDebug || showTagClassifier || showConverter) return;
+      if (document.activeElement?.tagName === 'INPUT' || document.activeElement?.tagName === 'TEXTAREA' || showSettings || showWildcards || showBatchCrop || showViewerRefiner || showDebug || showTagClassifier || showToolkit) return;
       if (e.ctrlKey && e.altKey && e.key.toLowerCase() === 'd') { setShowDebug(prev => !prev); return; }
       if (e.ctrlKey && e.key.toLowerCase() === 'z') { e.preventDefault(); handleUndo(); return; }
       if (e.key.toLowerCase() === 'r') { handleReload(); return; }
@@ -752,7 +761,7 @@ function App() {
         handleKeep={handleKeep} handleDelete={handleDelete} isTrashFolder={isTrashFolder}
         setShowSettings={setShowSettings} handleOpenFolder={handleOpenFolder} shortcuts={shortcuts}
         setWorkshopTargetPaths={setWorkshopTargetPaths} setShowTagClassifier={setShowTagClassifier}
-        setShowConverter={setShowConverter}
+        setShowToolkit={setShowToolkit}
         recentFolders={recentFolders} folderPath={folderPath} handleOpenRecent={loadFolder}
       />
 
@@ -861,7 +870,7 @@ function App() {
       {showWildcards && <WildcardTools onClose={() => setShowWildcards(false)} images={images} currentIndex={currentIndex} batchRange={batchRange} />}
       
       {showTagClassifier && <TagClassifier onClose={() => setShowTagClassifier(false)} initialData="" />}
-      {showConverter && <ConvertPanel onClose={() => setShowConverter(false)} />}
+      {showToolkit && <ToolkitPanel onClose={() => setShowToolkit(false)} />}
 
       {showViewerRefiner && (
         <TagRefiner 

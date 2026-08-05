@@ -20,6 +20,23 @@ export const getMergedTag = (tag: string, groups: WordGroup[]) => {
 };
 
 /**
+ * Would `sub` claim `tag` at its stage of the waterfall?
+ *
+ * `tag` must already be lowercased and variable-merged — which is how `uniqueTags` is built,
+ * so the Library grid can call this directly. An exact include beats an exclude: that is the
+ * escape hatch for pulling one specific tag back out of a broad exclude.
+ *
+ * Extracted from `parseLine` so both share one definition of "claims"; `parseLine` still
+ * evaluates against the raw and merged forms separately, since prompt tags arrive unmerged.
+ */
+export const subsetClaims = (tag: string, sub: Subset) => {
+  const isInc = sub.keywords.some(k => tag.includes(k.toLowerCase()));
+  const isExactInc = sub.keywords.some(k => tag === k.toLowerCase());
+  const isExc = !isExactInc && sub.excludeKeywords.some(k => tag.includes(k.toLowerCase()));
+  return isInc && !isExc;
+};
+
+/**
  * Sequential "waterfall" classification of one comma-separated prompt line: each subset
  * claims its matching tags in order; the rest fall through to an "Unclassified" bucket.
  */

@@ -1,6 +1,6 @@
-import { Info } from "lucide-react";
 import { FilterState } from "../../store/useAppStore";
 import { splitCommaTrimNonEmpty } from "./utils";
+import { LABEL, FIELD } from "../ui/tokens";
 
 interface WorkshopSettingsProps {
   threshold: number;
@@ -9,129 +9,154 @@ interface WorkshopSettingsProps {
   onFilterChange: (next: FilterState) => void;
 }
 
-/** Similarity/word/tag/depth controls + Simple/Mix toggles + advanced Mix sliders. */
-export const WorkshopSettings = ({ threshold, onThresholdChange, filter, onFilterChange }: WorkshopSettingsProps) => (
-  <div className="space-y-3">
-      {/* Main Settings Row */}
-      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-3 lg:gap-4">
-        {!filter.simple_mode && (
-          <>
-            <div className="col-span-1 bg-neutral-950 p-3 rounded-2xl border border-white/5 flex flex-col justify-center">
-                <div className="flex items-center justify-between mb-2">
-                    <span className="text-[10px] font-black uppercase text-neutral-400 tracking-wider">Similarity</span>
-                    <span className="text-[11px] font-mono text-blue-400 font-bold">
-                        {filter.preserve_order ? '1.00' : threshold.toFixed(2)}
-                        {filter.preserve_order && <span className="text-[9px] text-neutral-600 ml-1">(locked)</span>}
-                    </span>
-                </div>
-                <input
-                    type="range" min="0" max="1" step="0.05"
-                    value={filter.preserve_order ? 1 : threshold}
-                    onChange={e => { if (!filter.preserve_order) onThresholdChange(parseFloat(e.target.value)); }}
-                    disabled={filter.preserve_order}
-                    aria-label="Similarity Threshold"
-                    className={`w-full accent-blue-600 ${filter.preserve_order ? 'opacity-40 cursor-not-allowed' : ''}`}
-                />
-            </div>
-            <div className="bg-neutral-950 p-3 rounded-2xl border border-white/5 flex flex-col justify-center">
-                <label className="text-[8px] font-black uppercase text-neutral-400 mb-1 block tracking-widest">Max Words/Tag</label>
-                <input type="number" value={filter.max_words} onChange={e => onFilterChange({...filter, max_words: parseInt(e.target.value)})} aria-label="Max Words Per Tag" className="bg-transparent text-[11px] font-bold text-neutral-300 w-full focus:outline-none" />
-            </div>
-            <div className="bg-neutral-950 p-3 rounded-2xl border border-white/5 flex flex-col justify-center">
-                <label className="text-[8px] font-black uppercase text-neutral-400 mb-1 block tracking-widest">Min Tags/Group</label>
-                <input type="number" value={filter.min_tags} onChange={e => onFilterChange({...filter, min_tags: parseInt(e.target.value)})} aria-label="Min Tags Per Group" className="bg-transparent text-[11px] font-bold text-neutral-300 w-full focus:outline-none" />
-            </div>
-            <div className="bg-neutral-950 p-3 rounded-2xl border border-white/5 flex flex-col justify-center relative group">
-                <div className="flex items-center justify-between mb-1">
-                    <label className="text-[8px] font-black uppercase text-neutral-400 block tracking-widest">Max Depth</label>
-                    <Info className="w-2.5 h-2.5 text-neutral-700 cursor-help" />
-                </div>
-                <input type="number" value={filter.max_depth} onChange={e => onFilterChange({...filter, max_depth: parseInt(e.target.value)})} aria-label="Max Recursive Depth" className="bg-transparent text-[11px] font-bold text-neutral-300 w-full focus:outline-none" />
-                <div className="absolute left-0 bottom-full mb-2 w-48 p-2 bg-neutral-900 border border-white/10 rounded-lg text-[8px] text-neutral-400 opacity-0 group-hover:opacity-100 transition-opacity pointer-events-none z-10 shadow-2xl leading-tight">
-                    Limits recursive pattern matching to prevent errors. Lower values result in flatter, simpler wildcards.
-                </div>
-            </div>
-          </>
-        )}
-        {filter.simple_mode && (
-          <div className="col-span-1 sm:col-span-2 md:col-span-4 bg-amber-600/5 border border-amber-500/20 rounded-2xl p-4 flex flex-col justify-center">
-            <div className="flex items-center justify-between mb-2">
-              <span className="text-[10px] font-black uppercase text-amber-500 tracking-wider">Simple Exclusions</span>
-              <span className="text-[8px] text-amber-600 font-bold uppercase">Only basic string removal logic is applied</span>
-            </div>
-            <textarea
-              value={filter.simple_exclusions.join(', ')}
-              onChange={e => onFilterChange({...filter, simple_exclusions: splitCommaTrimNonEmpty(e.target.value)})}
-              className="bg-neutral-950/50 border border-white/5 rounded-xl p-2 text-[10px] font-mono text-neutral-300 h-12 focus:outline-none focus:border-amber-500/30 resize-none scrollbar-thin"
-              placeholder="e.g. masterpiece, best quality, solo, rating:safe..."
-            />
-          </div>
-        )}
-        <div className="flex flex-col gap-2">
-          <button
-              onClick={() => onFilterChange({...filter, simple_mode: !filter.simple_mode})}
-              className={`flex-1 py-1 rounded-xl border flex flex-col items-center justify-center transition-all min-h-[44px] ${filter.simple_mode ? 'bg-amber-600 border-amber-500 text-white shadow-lg shadow-amber-600/20' : 'bg-neutral-950 border-white/5 text-neutral-400 hover:text-neutral-200'}`}
-          >
-              <label className={`text-[8px] font-black uppercase mb-0.5 block tracking-widest cursor-pointer ${filter.simple_mode ? 'text-amber-100' : 'text-neutral-400'}`}>Simple Mode</label>
-              <span className="text-[9px] font-black uppercase">{filter.simple_mode ? 'Enabled' : 'Disabled'}</span>
-          </button>
-          <button
-              onClick={() => onFilterChange({...filter, mix_mode: !filter.mix_mode})}
-              className={`flex-1 py-1 rounded-xl border flex flex-col items-center justify-center transition-all min-h-[44px] ${filter.mix_mode ? 'bg-indigo-600 border-indigo-500 text-white shadow-lg shadow-indigo-600/20' : 'bg-neutral-950 border-white/5 text-neutral-400 hover:text-neutral-200'}`}
-          >
-              <label className={`text-[8px] font-black uppercase mb-0.5 block tracking-widest cursor-pointer ${filter.mix_mode ? 'text-indigo-100' : 'text-neutral-400'}`}>Mix Mode</label>
-              <span className="text-[9px] font-black uppercase">{filter.mix_mode ? 'Enabled' : 'Disabled'}</span>
-          </button>
-          <button
-              onClick={() => onFilterChange({...filter, preserve_order: !filter.preserve_order})}
-              className={`flex-1 py-1 rounded-xl border flex flex-col items-center justify-center transition-all min-h-[44px] ${filter.preserve_order ? 'bg-emerald-700 border-emerald-500 text-white shadow-lg shadow-emerald-600/20' : 'bg-neutral-950 border-white/5 text-neutral-400 hover:text-neutral-200'}`}
-          >
-              <label className={`text-[8px] font-black uppercase mb-0.5 block tracking-widest cursor-pointer ${filter.preserve_order ? 'text-emerald-100' : 'text-neutral-400'}`}>Preserve Order</label>
-              <span className="text-[9px] font-black uppercase">{filter.preserve_order ? 'ON' : 'OFF'}</span>
-          </button>
-        </div>
-      </div>
+/** Inline label + control pair, sized to sit several-per-row. */
+const Cell = ({ label, title, children }: { label: string; title?: string; children: React.ReactNode }) => (
+  <label className="flex items-center gap-1.5 min-w-0" title={title}>
+    <span className={`${LABEL} shrink-0 whitespace-nowrap`}>{label}</span>
+    {children}
+  </label>
+);
 
-      {/* Advanced Mix Mode Settings Row */}
-      {!filter.simple_mode && filter.mix_mode && (
-          <div className="bg-indigo-900/10 border border-indigo-500/20 p-4 rounded-2xl grid grid-cols-3 gap-6 animate-in slide-in-from-top-2 duration-300">
-              <div className="space-y-2">
-                  <div className="flex items-center justify-between">
-                      <span className="text-[9px] font-black uppercase text-indigo-400 tracking-wider">Mix Depth (Start)</span>
-                      <span className="text-[10px] font-mono text-indigo-400 font-bold">{filter.mix_depth}</span>
-                  </div>
-                  <input
-                      type="range" min="0" max="10" step="1"
-                      value={filter.mix_depth}
-                      onChange={e => onFilterChange({...filter, mix_depth: parseInt(e.target.value)})}
-                      className="w-full accent-indigo-600"
-                  />
-              </div>
-              <div className="space-y-2">
-                  <div className="flex items-center justify-between">
-                      <span className="text-[9px] font-black uppercase text-indigo-400 tracking-wider">Min Branches</span>
-                      <span className="text-[10px] font-mono text-indigo-400 font-bold">{filter.mix_tandem_min_branches}</span>
-                  </div>
-                  <input
-                      type="range" min="1" max="10" step="1"
-                      value={filter.mix_tandem_min_branches}
-                      onChange={e => onFilterChange({...filter, mix_tandem_min_branches: parseInt(e.target.value)})}
-                      className="w-full accent-indigo-600"
-                  />
-              </div>
-              <div className="space-y-2">
-                  <div className="flex items-center justify-between">
-                      <span className="text-[9px] font-black uppercase text-indigo-400 tracking-wider">Tandem Ratio</span>
-                      <span className="text-[10px] font-mono text-indigo-400 font-bold">{((filter.mix_tandem_ratio || 0.51) * 100).toFixed(0)}%</span>
-                  </div>
-                  <input
-                      type="range" min="0.1" max="1.0" step="0.01"
-                      value={filter.mix_tandem_ratio}
-                      onChange={e => onFilterChange({...filter, mix_tandem_ratio: parseFloat(e.target.value)})}
-                      className="w-full accent-indigo-600"
-                  />
-              </div>
-          </div>
+/** Small on/off pill used for the three mode switches. */
+const ModeToggle = ({ label, active, onToggle, color, title }: {
+  label: string; active: boolean; onToggle: () => void; color: 'amber' | 'indigo' | 'emerald'; title: string;
+}) => {
+  const on = {
+    amber: 'bg-amber-600/25 border-amber-500/50 text-amber-300',
+    indigo: 'bg-indigo-600/25 border-indigo-500/50 text-indigo-300',
+    emerald: 'bg-emerald-600/25 border-emerald-500/50 text-emerald-300',
+  }[color];
+  return (
+    <button
+      onClick={onToggle}
+      title={title}
+      aria-pressed={active}
+      className={`h-6 max-lg:h-11 px-2 rounded-md border text-[9px] font-black uppercase tracking-wide transition-colors shrink-0 ${
+        active ? on : 'bg-neutral-950 border-white/10 text-neutral-500 hover:text-neutral-300'
+      }`}
+    >
+      {label}
+    </button>
+  );
+};
+
+/**
+ * Similarity / word / tag / depth controls, the Simple·Mix·Order mode switches, and the
+ * advanced Mix sliders. Laid out as wrapping inline rows rather than a 5-column grid of
+ * `p-3 rounded-2xl` cards, so the whole settings block costs two rows instead of five.
+ */
+export const WorkshopSettings = ({ threshold, onThresholdChange, filter, onFilterChange }: WorkshopSettingsProps) => (
+  <div className="space-y-1.5">
+    <div className="flex flex-wrap items-center gap-x-3 gap-y-1.5">
+      {!filter.simple_mode && (
+        <>
+          <Cell label="Similarity" title="How close two prompts must be to share a wildcard branch">
+            <input
+              type="range" min={0} max={1} step={0.05}
+              value={filter.preserve_order ? 1 : threshold}
+              disabled={filter.preserve_order}
+              onChange={e => { if (!filter.preserve_order) onThresholdChange(parseFloat(e.target.value)); }}
+              aria-label="Similarity threshold"
+              className="w-24 accent-blue-600 h-1 disabled:opacity-40 disabled:cursor-not-allowed cursor-pointer"
+            />
+            <span className="w-8 text-[10px] font-mono font-black text-blue-400 tabular-nums">
+              {filter.preserve_order ? '1.00' : threshold.toFixed(2)}
+            </span>
+          </Cell>
+
+          <Cell label="Max words" title="Maximum words allowed in a single tag">
+            <input
+              type="number" value={filter.max_words}
+              onChange={e => onFilterChange({ ...filter, max_words: parseInt(e.target.value) })}
+              aria-label="Max words per tag"
+              className={`${FIELD} w-12`}
+            />
+          </Cell>
+
+          <Cell label="Min tags" title="Minimum tags a group must have to be emitted">
+            <input
+              type="number" value={filter.min_tags}
+              onChange={e => onFilterChange({ ...filter, min_tags: parseInt(e.target.value) })}
+              aria-label="Min tags per group"
+              className={`${FIELD} w-12`}
+            />
+          </Cell>
+
+          <Cell label="Max depth" title="Limits recursive pattern matching. Lower values give flatter, simpler wildcards.">
+            <input
+              type="number" value={filter.max_depth}
+              onChange={e => onFilterChange({ ...filter, max_depth: parseInt(e.target.value) })}
+              aria-label="Max recursive depth"
+              className={`${FIELD} w-12`}
+            />
+          </Cell>
+        </>
       )}
+
+      <div className="flex items-center gap-1 shrink-0">
+        <ModeToggle
+          label="Simple" color="amber" active={filter.simple_mode}
+          title="Simple mode — plain string removal only, no similarity analysis"
+          onToggle={() => onFilterChange({ ...filter, simple_mode: !filter.simple_mode })}
+        />
+        <ModeToggle
+          label="Mix" color="indigo" active={filter.mix_mode}
+          title="Mix mode — recombine branches across prompts"
+          onToggle={() => onFilterChange({ ...filter, mix_mode: !filter.mix_mode })}
+        />
+        <ModeToggle
+          label="Order" color="emerald" active={filter.preserve_order}
+          title="Preserve order — keeps original tag order and locks similarity to 1.00"
+          onToggle={() => onFilterChange({ ...filter, preserve_order: !filter.preserve_order })}
+        />
+      </div>
+    </div>
+
+    {filter.simple_mode && (
+      <div className="flex items-start gap-2">
+        <span className={`${LABEL} w-[5rem] shrink-0 text-right leading-6 text-amber-400`}>Simple excl.</span>
+        <textarea
+          value={filter.simple_exclusions.join(', ')}
+          onChange={e => onFilterChange({ ...filter, simple_exclusions: splitCommaTrimNonEmpty(e.target.value) })}
+          aria-label="Simple mode exclusions"
+          className="flex-1 min-w-0 h-10 bg-neutral-950 border border-amber-900/50 focus:border-amber-500/40 rounded-md px-1.5 py-1 text-[10px] font-mono text-neutral-200 placeholder-neutral-600 outline-none resize-none scrollbar-thin transition-colors"
+          placeholder="masterpiece, best quality, solo, rating:safe…"
+        />
+      </div>
+    )}
+
+    {!filter.simple_mode && filter.mix_mode && (
+      <div className="flex flex-wrap items-center gap-x-3 gap-y-1.5 px-1.5 py-1 bg-indigo-950/25 border border-indigo-500/25 rounded-md">
+        <Cell label="Mix depth" title="Branch depth at which mixing starts">
+          <input
+            type="range" min={0} max={10} step={1} value={filter.mix_depth}
+            onChange={e => onFilterChange({ ...filter, mix_depth: parseInt(e.target.value) })}
+            aria-label="Mix depth"
+            className="w-20 accent-indigo-500 h-1 cursor-pointer"
+          />
+          <span className="w-5 text-[10px] font-mono font-black text-indigo-300 tabular-nums">{filter.mix_depth}</span>
+        </Cell>
+        <Cell label="Min branches" title="Minimum sibling branches required before mixing">
+          <input
+            type="range" min={1} max={10} step={1} value={filter.mix_tandem_min_branches}
+            onChange={e => onFilterChange({ ...filter, mix_tandem_min_branches: parseInt(e.target.value) })}
+            aria-label="Minimum branches"
+            className="w-20 accent-indigo-500 h-1 cursor-pointer"
+          />
+          <span className="w-5 text-[10px] font-mono font-black text-indigo-300 tabular-nums">{filter.mix_tandem_min_branches}</span>
+        </Cell>
+        <Cell label="Tandem" title="Share of branches that must move together">
+          <input
+            type="range" min={0.1} max={1} step={0.01} value={filter.mix_tandem_ratio}
+            onChange={e => onFilterChange({ ...filter, mix_tandem_ratio: parseFloat(e.target.value) })}
+            aria-label="Tandem ratio"
+            className="w-20 accent-indigo-500 h-1 cursor-pointer"
+          />
+          <span className="w-8 text-[10px] font-mono font-black text-indigo-300 tabular-nums">
+            {((filter.mix_tandem_ratio || 0.51) * 100).toFixed(0)}%
+          </span>
+        </Cell>
+      </div>
+    )}
   </div>
 );

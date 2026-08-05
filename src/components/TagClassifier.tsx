@@ -1,25 +1,29 @@
-import { useState, useMemo, useEffect } from 'react';
-import { Plus, ChevronRight, ChevronLeft, Database, X, Save, Filter } from 'lucide-react';
+import React, { useState, useMemo, useEffect } from 'react';
+import { Database, PanelRight } from 'lucide-react';
 import { BaseDirectory } from "@tauri-apps/plugin-fs";
 import { useToast } from "./Toast";
 import { useAppStore } from "../store/useAppStore";
 import { api } from "../api";
-import { Subset, WordGroup, TagClassifierProps } from "./tagclassifier/types";
+import { Subset, WordGroup, Register, DEFAULT_REGISTERS, TagClassifierProps } from "./tagclassifier/types";
 import { getMergedTag, parseLine } from "./tagclassifier/classify";
 import {
   isTauri, classifierStore, dialogOpen, dialogSave, dialogConfirm,
   fsExists, fsMkdir, fsReadDir, fsReadTextFile, fsWriteTextFile, fsRemove, tauriInvokeMock,
-  migrateClassifierSettings,
+  migrateClassifierSettings, rescueStrandedBrowserConfig,
 } from "./tagclassifier/browserFallback";
-import { PresetBar } from "./tagclassifier/PresetBar";
+import { ConfigBar } from "./tagclassifier/ConfigBar";
+import { RulesRail, RulesTab } from "./tagclassifier/RulesRail";
 import { SubsetCard } from "./tagclassifier/SubsetCard";
 import { WordGroupEditor } from "./tagclassifier/WordGroupEditor";
+import { RegisterEditor } from "./tagclassifier/RegisterEditor";
 import { WorkstationToolbar } from "./tagclassifier/WorkstationToolbar";
 import { SingleEditorView } from "./tagclassifier/SingleEditorView";
 import { BulkSourceView } from "./tagclassifier/BulkSourceView";
 import { LibraryView } from "./tagclassifier/LibraryView";
 import { OutputPanel } from "./tagclassifier/OutputPanel";
 import { MobileSectionNav } from "./tagclassifier/MobileSectionNav";
+import { TAG_SIZE_DEFAULT, clampTagSize } from "./tagclassifier/TagSizeControl";
+import { ToolShell, ICON_BTN } from "./ui";
 
 export const TagClassifier = ({ onClose, initialData = "" }: TagClassifierProps) => {
   const [activeMobileSection, setActiveMobileSection] = useState('editor' as 'rules' | 'editor' | 'output');
@@ -28,6 +32,8 @@ export const TagClassifier = ({ onClose, initialData = "" }: TagClassifierProps)
   const [currentIndex, setCurrentIndex] = useState(0);
   const [subsets, setSubsets] = useState([] as Subset[]);
   const [wordGroups, setWordGroups] = useState([] as WordGroup[]);
+  const [registers, setRegisters] = useState([] as Register[]);
+  const [previewRegisterId, setPreviewRegisterId] = useState(0 as number);
   const [fullResults, setFullResults] = useState([] as any[]);
   const [hasProcessed, setHasProcessed] = useState(false);
   const [expandedLines, setExpandedLines] = useState(new Set() as any);
@@ -41,6 +47,8 @@ export const TagClassifier = ({ onClose, initialData = "" }: TagClassifierProps)
   const [activePreset, setActivePreset] = useState("default" as string);
   
   // UI States
+  const [rulesTab, setRulesTab] = useState('groups' as RulesTab);
+  const [tagSize, setTagSize] = useState(TAG_SIZE_DEFAULT);
   const [isRightSidebarOpen, setIsRightSidebarOpen] = useState(true);
   const [collapsedSubsets, setCollapsedSubsets] = useState(new Set() as any);
   const [previewData, setPreviewData] = useState([] as any[]);
@@ -74,7 +82,7 @@ export const TagClassifier = ({ onClose, initialData = "" }: TagClassifierProps)
     if (!name || name === 'default') return;
     const fileName = `${getPresetSubDir()}/${name}.json`;
     try {
-      const data = { subsets, wordGroups };
+      const data = { subsets, wordGroups, registers };
       await fsWriteTextFile(fileName, JSON.stringify(data, null, 2), { baseDir: BaseDirectory.AppData });
       showToast(`Preset '${name}' saved`, "success");
       await refreshPresets();
@@ -95,10 +103,13 @@ export const TagClassifier = ({ onClose, initialData = "" }: TagClassifierProps)
         const config = JSON.parse(content);
         if (config.subsets) setSubsets(config.subsets);
         if (config.wordGroups) setWordGroups(config.wordGroups);
+        // Older presets have no registers key — treat as "none defined".
+        setRegisters(config.registers ?? []);
       } else {
         // Load clean default layout
         setSubsets([{ id: 1, name: 'Characters', keywords: [], excludeKeywords: [] }]);
         setWordGroups([]);
+        setRegisters([]);
       }
       setActivePreset(name);
       await classifierStore.set("last_preset", name);
@@ -132,6 +143,7 @@ export const TagClassifier = ({ onClose, initialData = "" }: TagClassifierProps)
       const config = JSON.parse(content);
       if (config.subsets) setSubsets(config.subsets);
       if (config.wordGroups) setWordGroups(config.wordGroups);
+      setRegisters(config.registers ?? []);
       showToast("Config imported successfully", "success");
     } catch (e: any) {
       showToast(`Import failed: ${e.message || e}`, "error");
@@ -142,7 +154,7 @@ export const TagClassifier = ({ onClose, initialData = "" }: TagClassifierProps)
     try {
       const path = await dialogSave({ filters: [{ name: 'JSON', extensions: ['json'] }], defaultPath: "tag_classifier_settings.json" });
       if (!path) return;
-      const data = { subsets, wordGroups };
+      const data = { subsets, wordGroups, registers };
       await fsWriteTextFile(path, JSON.stringify(data, null, 2));
       showToast("Config exported successfully", "success");
     } catch (e: any) {
@@ -153,13 +165,21 @@ export const TagClassifier = ({ onClose, initialData = "" }: TagClassifierProps)
   // --- Initialization ---
   useEffect(() => {
     const init = async () => {
+      // Recover config stranded in localStorage by the old broken isTauri probe, then
+      // fold in the legacy `.tag_classifier.json`. Order matters: the rescue must land
+      // before anything reads the store.
+      await rescueStrandedBrowserConfig();
       await migrateClassifierSettings();
       await refreshPresets();
       const lastPreset = (await classifierStore.get("last_preset")) as string | null;
       const s = (await classifierStore.get("subsets")) as Subset[] | null;
       const w = (await classifierStore.get("wordGroups")) as WordGroup[] | null;
+      const r = (await classifierStore.get("registers")) as Register[] | null;
+      const ts = (await classifierStore.get("tag_font_size")) as number | null;
       if (s) setSubsets(s); else setSubsets([{ id: 1, name: 'Characters', keywords: [], excludeKeywords: [] }]);
       if (w) setWordGroups(w); else setWordGroups([]);
+      if (r) setRegisters(r);
+      if (ts != null) setTagSize(clampTagSize(ts));
       if (lastPreset && lastPreset !== 'default') { 
         setActivePreset(lastPreset); 
         await loadPreset(lastPreset); 
@@ -173,10 +193,12 @@ export const TagClassifier = ({ onClose, initialData = "" }: TagClassifierProps)
     if (!isLoading) {
       classifierStore.set("subsets", subsets);
       classifierStore.set("wordGroups", wordGroups);
+      classifierStore.set("registers", registers);
+      classifierStore.set("tag_font_size", tagSize);
       classifierStore.save();
     }
     if (subsets.length > 0 && dictActiveSubsetId === null) setDictActiveSubsetId(subsets[0].id);
-  }, [subsets, wordGroups, isLoading]);
+  }, [subsets, wordGroups, registers, tagSize, isLoading]);
 
   const uniqueTags = useMemo(() => {
     const tags = new Set() as any;
@@ -192,16 +214,37 @@ export const TagClassifier = ({ onClose, initialData = "" }: TagClassifierProps)
   // audit fallback uses the JS port (kept in sync with the Rust logic).
   useEffect(() => {
     const line = lines[currentIndex] || "";
-    if (!line.trim()) { setPreviewData([]); return; }
+    if (!line.trim()) { setPreviewData([]); setPreviewRegisterId(0); return; }
     if (!isTauri) { setPreviewData(parseLine(line, subsets, wordGroups)); return; }
     let active = true;
     const timer = setTimeout(() => {
       api.classifyPromptsCommand([line], subsets, wordGroups)
         .then(res => { if (active) setPreviewData(res?.[0]?.data ?? []); })
         .catch(() => {});
+      if (registers.length > 0) {
+        api.classifyRegistersCommand([line], registers)
+          .then(ids => { if (active) setPreviewRegisterId(ids?.[0] ?? 0); })
+          .catch(() => {});
+      } else if (active) {
+        setPreviewRegisterId(0);
+      }
     }, 150);
     return () => { active = false; clearTimeout(timer); };
-  }, [lines, currentIndex, subsets, wordGroups]);
+  }, [lines, currentIndex, subsets, wordGroups, registers]);
+
+  const previewRegisterName = useMemo(
+    () => registers.find(r => r.id === previewRegisterId)?.name ?? null,
+    [registers, previewRegisterId]
+  );
+
+  const moveRegister = (id: number, delta: -1 | 1) => {
+    const i = registers.findIndex(r => r.id === id);
+    const j = i + delta;
+    if (i < 0 || j < 0 || j >= registers.length) return;
+    const ns = [...registers];
+    [ns[i], ns[j]] = [ns[j], ns[i]];
+    setRegisters(ns);
+  };
 
   // Import folder prompts
   const importDirect = async () => {
@@ -211,19 +254,26 @@ export const TagClassifier = ({ onClose, initialData = "" }: TagClassifierProps)
     }
     setIsRunning(true);
     try {
-        const results: string[] = isTauri
+        const raw: string[] = isTauri
           ? await api.getAllPrompts(folderPath ?? "", recursive)
           : await tauriInvokeMock("get_all_prompts", { folder: folderPath, recursive });
-        if (!results || results.length === 0) { 
-          showToast("No prompts found in selected directory", "info"); 
+        // The DB filters `prompt IS NOT NULL` but not empty strings — drop those here so
+        // blank lines don't pad the editor.
+        const results = (raw ?? []).filter(l => l.trim());
+        if (results.length === 0) {
+          showToast(
+            `No indexed prompts in this folder${recursive ? " (recursive)" : " — try enabling recursive"}`,
+            "info"
+          );
         } else {
-            setLines(results); 
+            setLines(results);
             setCurrentIndex(0);
             showToast(`Direct Import: Loaded ${results.length} prompts`, "success");
         }
-    } catch (e: any) { 
-        showToast(`Import failed: ${e.message || e}`, "error"); 
-    } finally { 
+    } catch (e: any) {
+        console.error("Direct Import Error:", e);
+        showToast(`Import failed: ${e.message || e}`, "error");
+    } finally {
       setIsRunning(false); 
     }
   };
@@ -239,14 +289,15 @@ export const TagClassifier = ({ onClose, initialData = "" }: TagClassifierProps)
         const targetPaths = rawImages.map(img => img.path);
         showToast(`Processing images through workshop engine...`, "info");
         
-        const results: string[] = isTauri
+        const raw: string[] = isTauri
           ? await api.generateWildcards({ paths: targetPaths, prompts: [], threshold: 0.95, filter: workshopFilter })
           : await tauriInvokeMock("generate_wildcards", { paths: targetPaths, prompts: [], threshold: 0.95, filter: workshopFilter });
-        
-        if (!results || results.length === 0) { 
-            showToast("No prompts match current workshop filters", "info"); 
+
+        const results = (raw ?? []).filter(l => l.trim());
+        if (results.length === 0) {
+            showToast("No prompts match current workshop filters", "info");
         } else {
-            setLines(results); 
+            setLines(results);
             setCurrentIndex(0);
             showToast(`Imported ${results.length} filtered prompts`, "success");
         }
@@ -291,55 +342,62 @@ export const TagClassifier = ({ onClose, initialData = "" }: TagClassifierProps)
   if (isLoading) return null;
 
   return (
-    <div className="fixed inset-0 z-50 bg-black/60 backdrop-blur-md flex items-center justify-center p-4 animate-in fade-in duration-200 font-sans text-neutral-100 select-none overflow-hidden">
-      <div className="bg-neutral-900 border border-white/10 rounded-3xl w-full max-w-6xl h-[90vh] shadow-2xl overflow-hidden flex flex-col">
-        {/* Header */}
-        <div className="p-6 border-b border-white/5 flex items-center justify-between shrink-0 bg-solid-panel">
-          <div className="flex items-center gap-3">
-            <div className="w-10 h-10 bg-blue-600/20 rounded-xl flex items-center justify-center">
-              <Database className="w-5 h-5 text-blue-500" />
-            </div>
-            <div className="min-w-0">
-              <h2 className="text-sm font-black uppercase tracking-widest truncate">Tag Classifier</h2>
-              <p className="text-[10px] text-neutral-350 font-bold uppercase truncate">Sequential Waterfall Analysis</p>
-            </div>
-          </div>
-          <button 
-            onClick={onClose} 
-            className="w-11 h-11 flex items-center justify-center hover:bg-white/5 rounded-full transition-colors shrink-0"
-            aria-label="Close Workstation"
-          >
-            <X className="w-5 h-5" />
-          </button>
-        </div>
-
+    <ToolShell
+      onClose={onClose}
+      title="Tag Classifier"
+      icon={<Database className="w-3.5 h-3.5 text-blue-500" />}
+      // Every tag chip in the panel sizes off this variable (see TAG_TEXT in ui/tokens).
+      panelProps={{ style: { "--tag-font-size": `${tagSize}px` } as React.CSSProperties }}
+      headerContent={
+        <ConfigBar
+          activePreset={activePreset}
+          presets={presets}
+          onLoad={loadPreset}
+          onSavePreset={() => { const name = prompt("Enter preset name:"); if (name) savePreset(name); }}
+          onDeletePreset={() => deletePreset(activePreset)}
+          onImportConfig={handleImportConfig}
+          onExportConfig={handleExportConfig}
+        />
+      }
+      headerActions={
+        <button
+          onClick={() => setIsRightSidebarOpen(!isRightSidebarOpen)}
+          className={`${ICON_BTN} hidden lg:flex ${isRightSidebarOpen ? 'text-blue-400' : ''}`}
+          title={isRightSidebarOpen ? "Hide output panel" : "Show output panel"}
+          aria-label={isRightSidebarOpen ? "Hide output panel" : "Show output panel"}
+          aria-pressed={isRightSidebarOpen}
+        >
+          <PanelRight className="w-3.5 h-3.5" />
+        </button>
+      }
+      status={
+        <>
+          <span className="truncate">Preset <span className="text-blue-400">{activePreset}</span></span>
+          <span className="tabular-nums whitespace-nowrap">{lines.length} lines · {uniqueTags.length} unique tags</span>
+          <div className="flex-1" />
+          <span className="flex items-center gap-1 shrink-0">
+            <span className="w-1.5 h-1.5 rounded-full bg-green-500" />
+            Live sync
+          </span>
+        </>
+      }
+    >
         {/* Main Column Containers */}
-        <div className="flex flex-col lg:flex-row flex-1 overflow-y-auto lg:overflow-hidden scrollbar-thin">
-          
-          {/* Left Sidebar: Pipeline Rules */}
-          <aside className={`w-full lg:w-80 border-b lg:border-b-0 lg:border-r border-white/5 flex flex-col bg-solid-nested shrink-0 min-h-0 ${activeMobileSection === 'rules' ? 'flex' : 'hidden lg:flex'}`}>
-            <div className="p-4 border-b border-white/5 bg-solid-panel flex items-center justify-between shrink-0">
-              <span className="text-[10px] font-black uppercase text-neutral-300 tracking-widest flex items-center gap-2"><Filter className="w-3.5 h-3.5 text-blue-400" /> Pipeline Rules</span>
-              <button 
-                onClick={() => setSubsets([...subsets, { id: Date.now(), name: 'New Group', keywords: [], excludeKeywords: [] }])} 
-                className="w-11 h-11 flex items-center justify-center text-neutral-400 hover:text-white hover:bg-white/5 rounded-xl transition-all"
-                aria-label="Add new subset group"
-              >
-                <Plus className="w-5 h-5" />
-              </button>
-            </div>
+        <div className="flex flex-1 min-h-0 overflow-hidden">
 
-            {/* Presets Control Sub-bar */}
-            <PresetBar
-              activePreset={activePreset}
-              presets={presets}
-              onLoad={loadPreset}
-              onSave={() => { const name = prompt("Enter preset name:"); if (name) savePreset(name); }}
-              onDelete={() => deletePreset(activePreset)}
-            />
-
-            <div className="flex-1 overflow-y-auto p-4 space-y-4 scrollbar-thin">
-              {subsets.map((sub, idx) => (
+          {/* Left Rail: Pipeline Rules / Tag Variables / Scene Registers (tabbed) */}
+          <aside className={`flex-col bg-solid-nested shrink-0 min-h-0 ${activeMobileSection === 'rules' ? 'flex w-full' : 'hidden'} lg:flex lg:w-[272px] lg:border-r lg:border-white/5`}>
+            <RulesRail
+              activeTab={rulesTab}
+              counts={{ groups: subsets.length, vars: wordGroups.length, regs: registers.length }}
+              onTabChange={setRulesTab}
+              onAdd={() => {
+                if (rulesTab === 'groups') setSubsets([...subsets, { id: Date.now(), name: 'New Group', keywords: [], excludeKeywords: [] }]);
+                else if (rulesTab === 'vars') setWordGroups([...wordGroups, { id: Date.now(), name: 'var', words: [] }]);
+                else setRegisters([...registers, { id: Date.now(), name: 'register', keywords: [], excludeKeywords: [] }]);
+              }}
+            >
+              {rulesTab === 'groups' && subsets.map((sub, idx) => (
                 <SubsetCard
                   key={sub.id}
                   sub={sub}
@@ -363,54 +421,63 @@ export const TagClassifier = ({ onClose, initialData = "" }: TagClassifierProps)
                   onExcludeChange={(tags) => setSubsets(subsets.map(s => s.id === sub.id ? {...s, excludeKeywords: tags} : s))}
                 />
               ))}
-              <div className="bg-solid-nested border border-dashed border-white/5 rounded-3xl p-6 text-center shrink-0">
-                <span className="text-[10px] font-black text-neutral-400 uppercase tracking-widest">Waterfall Stream End</span>
-              </div>
-            </div>
 
-            {/* Bottom Left: Tag Variables Panel */}
-            <WordGroupEditor
-              wordGroups={wordGroups}
-              uniqueTags={uniqueTags}
-              onAdd={() => setWordGroups([...wordGroups, { id: Date.now(), name: 'var', words: [] }])}
-              onRename={(id, name) => setWordGroups(wordGroups.map(w => w.id === id ? {...w, name} : w))}
-              onDelete={(id) => setWordGroups(wordGroups.filter(w => w.id !== id))}
-              onWordsChange={(id, words) => setWordGroups(wordGroups.map(w => w.id === id ? {...w, words} : w))}
-            />
+              {rulesTab === 'vars' && (
+                <WordGroupEditor
+                  wordGroups={wordGroups}
+                  uniqueTags={uniqueTags}
+                  onAdd={() => setWordGroups([...wordGroups, { id: Date.now(), name: 'var', words: [] }])}
+                  onRename={(id, name) => setWordGroups(wordGroups.map(w => w.id === id ? {...w, name} : w))}
+                  onDelete={(id) => setWordGroups(wordGroups.filter(w => w.id !== id))}
+                  onWordsChange={(id, words) => setWordGroups(wordGroups.map(w => w.id === id ? {...w, words} : w))}
+                />
+              )}
+
+              {rulesTab === 'regs' && (
+                <RegisterEditor
+                  registers={registers}
+                  uniqueTags={uniqueTags}
+                  onAdd={() => setRegisters([...registers, { id: Date.now(), name: 'register', keywords: [], excludeKeywords: [] }])}
+                  onAddDefaults={() => setRegisters(DEFAULT_REGISTERS.map(r => ({ ...r, id: Date.now() + r.id })))}
+                  onRename={(id, name) => setRegisters(registers.map(r => r.id === id ? {...r, name} : r))}
+                  onDelete={(id) => setRegisters(registers.filter(r => r.id !== id))}
+                  onIncludeChange={(id, tags) => setRegisters(registers.map(r => r.id === id ? {...r, keywords: tags} : r))}
+                  onExcludeChange={(id, tags) => setRegisters(registers.map(r => r.id === id ? {...r, excludeKeywords: tags} : r))}
+                  onToggleFallback={(id) => setRegisters(registers.map(r => r.id === id ? {...r, isFallback: !r.isFallback} : r))}
+                  onMoveUp={(id) => moveRegister(id, -1)}
+                  onMoveDown={(id) => moveRegister(id, 1)}
+                />
+              )}
+            </RulesRail>
           </aside>
 
           {/* Center Canvas: Active Workstation Area */}
-          <section className="flex-1 flex flex-col bg-solid-surface-elevated relative overflow-hidden min-w-0 transition-all duration-300">
-            {/* Toggle Sidebar handle */}
-            <button 
-              onClick={() => setIsRightSidebarOpen(!isRightSidebarOpen)}
-              className="absolute right-0 top-1/2 -translate-y-1/2 z-30 w-11 h-11 flex items-center justify-center bg-solid-panel border-l border-y border-white/5 rounded-l-xl text-neutral-400 hover:text-white transition-all shadow-2xl"
-              aria-label={isRightSidebarOpen ? "Hide right sidebar" : "Show right sidebar"}
-            >
-              {isRightSidebarOpen ? <ChevronRight className="w-5 h-5" /> : <ChevronLeft className="w-5 h-5" />}
-            </button>
-
+          <section className={`flex-1 flex-col bg-solid-surface-elevated overflow-hidden min-w-0 ${activeMobileSection === 'editor' ? 'flex' : 'hidden'} lg:flex`}>
             {/* Center Canvas Header / Toolbar */}
             <WorkstationToolbar
               viewMode={viewMode}
               isRunning={isRunning}
+              currentIndex={currentIndex}
+              lineCount={lines.length}
+              registerName={previewRegisterName}
+              tagSize={tagSize}
+              onTagSizeChange={setTagSize}
               onViewModeChange={setViewMode}
+              onPrev={() => setCurrentIndex(p => Math.max(0, p - 1))}
+              onNext={() => setCurrentIndex(p => Math.min(lines.length - 1, p + 1))}
+              onInsertLine={() => { const nl = [...lines]; nl.splice(currentIndex+1, 0, ""); setLines(nl); setCurrentIndex(currentIndex+1); }}
+              onDeleteLine={() => { if (lines.length <= 1) return; setLines(lines.filter((_, i) => i !== currentIndex)); setCurrentIndex(Math.max(0, currentIndex-1)); }}
               onImportDirect={importDirect}
               onImportFiltered={importFiltered}
-              onImportConfig={handleImportConfig}
               onRunAnalysis={runAnalysis}
             />
 
-            <div className="flex-1 p-4 sm:p-6 lg:p-8 flex flex-col gap-6 overflow-hidden">
+            <div className="flex-1 min-h-0 p-1.5 flex flex-col overflow-hidden">
               {viewMode === 'single' && (
                 <SingleEditorView
                   lines={lines}
                   currentIndex={currentIndex}
                   previewData={previewData}
-                  onPrev={() => setCurrentIndex(p => Math.max(0, p - 1))}
-                  onNext={() => setCurrentIndex(p => Math.min(lines.length - 1, p + 1))}
-                  onInsertLine={() => { const nl = [...lines]; nl.splice(currentIndex+1, 0, ""); setLines(nl); setCurrentIndex(currentIndex+1); }}
-                  onDeleteLine={() => { if (lines.length <= 1) return; setLines(lines.filter((_, i) => i !== currentIndex)); setCurrentIndex(Math.max(0, currentIndex-1)); }}
                   onActiveLineChange={(value) => { const nl = [...lines]; nl[currentIndex] = value; setLines(nl); }}
                 />
               )}
@@ -453,8 +520,8 @@ export const TagClassifier = ({ onClose, initialData = "" }: TagClassifierProps)
             </div>
           </section>
 
-          {/* Right Sidebar: Output Streams */}
-          <aside className={`border-l border-white/5 flex flex-col bg-solid-nested shrink-0 min-h-0 transition-all duration-300 overflow-hidden ${isRightSidebarOpen ? (activeMobileSection === 'output' ? 'w-full flex' : 'w-0 border-none md:w-80 lg:w-80 md:flex hidden') : 'w-0 border-none'}`}>
+          {/* Right Rail: Output Streams. Collapsible on desktop via the header toggle. */}
+          <aside className={`flex-col bg-solid-nested shrink-0 min-h-0 overflow-hidden ${activeMobileSection === 'output' ? 'flex w-full' : 'hidden'} ${isRightSidebarOpen ? 'lg:flex lg:w-[290px] lg:border-l lg:border-white/5' : 'lg:hidden'}`}>
             <OutputPanel
               hasProcessed={hasProcessed}
               fullResults={fullResults}
@@ -500,26 +567,6 @@ export const TagClassifier = ({ onClose, initialData = "" }: TagClassifierProps)
 
         {/* Responsive Mobile Bottom Navigation Bar */}
         <MobileSectionNav activeMobileSection={activeMobileSection} onChange={setActiveMobileSection} />
-
-        {/* Cyberdeck System Footer */}
-        <footer className="h-auto md:h-14 py-3 md:py-0 border-t border-white/5 bg-solid-panel px-4 md:px-8 flex flex-col md:flex-row items-center justify-between shrink-0 text-white gap-3 md:gap-0 z-25 relative">
-          <div className="flex items-center gap-6">
-            <span className="text-[10px] font-black text-neutral-450 tracking-widest uppercase">Preset Active: <span className="text-blue-400">{activePreset}</span></span>
-            <div className="flex items-center gap-2">
-              <span className="w-2 h-2 rounded-full bg-green-500 shadow-[0_0_10px_rgba(34,197,94,0.5)] animate-pulse" />
-              <span className="text-[10px] font-black text-neutral-450 uppercase tracking-widest">Live Sync Active</span>
-            </div>
-          </div>
-          <div className="flex items-center">
-            <button 
-              onClick={handleExportConfig} 
-              className="flex items-center gap-2 px-4 py-3 min-h-[44px] bg-neutral-800 hover:bg-neutral-700 rounded-xl text-[10px] font-extrabold text-neutral-300 hover:text-white uppercase transition-all shrink-0 border border-white/5"
-            >
-              <Save className="w-3.5 h-3.5" /> Backup Config
-            </button>
-          </div>
-        </footer>
-      </div>
-    </div>
+    </ToolShell>
   );
 };
