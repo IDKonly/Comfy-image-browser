@@ -874,7 +874,7 @@ function App() {
 
       {showViewerRefiner && (
         <TagRefiner 
-            tagCounts={viewerTagCounts} initialExcluded={workshopFilter.exact_match || []} 
+            tagCounts={viewerTagCounts} filter={workshopFilter}
             onClose={() => setShowViewerRefiner(false)}
             onApply={async (excluded) => {
                 setWorkshopFilter({...workshopFilter, exact_match: excluded});

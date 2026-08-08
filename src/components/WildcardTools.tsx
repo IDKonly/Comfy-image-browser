@@ -527,8 +527,7 @@ export const WildcardTools = ({ onClose, images, currentIndex, batchRange }: Wil
       {showRefiner && (
         <TagRefiner
             tagCounts={tagCounts}
-            initialExcluded={filter.exact_match}
-            partialMatch={filter.partial_match}
+            filter={filter}
             onClose={() => setShowRefiner(false)}
             onApply={async (excluded) => {
                 const newFilter = {...filter, exact_match: excluded};
