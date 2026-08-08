@@ -14,30 +14,22 @@ interface TagRefinerProps {
   onClose: () => void;
 }
 
-/** Tags already in `exact_match` but absent from the scope get this count. */
-const NOT_IN_SCOPE = 0;
-
 export const TagRefiner = ({ tagCounts, filter, onApply, onClose }: TagRefinerProps) => {
   const [searchTerm, setSearchTerm] = useState("");
   const [excludedTags, setExcludedTags] = useState<Set<string>>(new Set(filter.exact_match ?? []));
   const [hideChecked, setHideChecked] = useState(false);
 
   /**
-   * Every tag worth showing, most frequent first.
+   * The tags in scope, most frequent first — nothing else.
    *
-   * Tags already in `exact_match` are folded in even when the current scope does not
-   * contain them — the viewer opens this dialog with only the current image's tags, so
-   * without this the exclusions you set earlier are invisible and cannot be undone, while
-   * Apply silently keeps them. They sort last, marked with a 0 count.
+   * Exclusions set on other images stay in `excludedTags` and survive Apply, but they are
+   * deliberately not listed: the viewer opens this dialog for one image, so the list is
+   * that image's tags.
    */
-  const sortedTags = useMemo(() => {
-    const rows = Object.entries(tagCounts);
-    const inScope = new Set(rows.map(([tag]) => tag));
-    for (const tag of filter.exact_match ?? []) {
-      if (!inScope.has(tag)) rows.push([tag, NOT_IN_SCOPE]);
-    }
-    return rows.sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]));
-  }, [tagCounts, filter.exact_match]);
+  const sortedTags = useMemo(
+    () => Object.entries(tagCounts).sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0])),
+    [tagCounts]
+  );
 
   /**
    * What the *saved* filter does to each tag, with this dialog's pending `exact_match`
@@ -203,9 +195,9 @@ export const TagRefiner = ({ tagCounts, filter, onApply, onClose }: TagRefinerPr
                 </div>
                 <span
                   className={`text-[10px] font-mono px-2 py-0.5 rounded-md shrink-0 ${isChecked ? 'bg-blue-600/20' : 'bg-neutral-800'}`}
-                  title={count === NOT_IN_SCOPE ? 'Not present in the current selection' : `${count} occurrence(s)`}
+                  title={`${count} occurrence(s)`}
                 >
-                  {count === NOT_IN_SCOPE ? '—' : count}
+                  {count}
                 </span>
               </button>
             );
